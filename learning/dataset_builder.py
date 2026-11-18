@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
+from sqlalchemy import select
 
 from config import WALK_FORWARD_MIN_SAMPLES
 from database.connection import get_session_maker
@@ -84,7 +85,7 @@ class DatasetBuilder:
                         CandleModel.symbol == symbol,
                         CandleModel.market == market,
                         CandleModel.timeframe == tf,
-                        CandleModel.open_time <= timestamp_ms,
+                        CandleModel.close_time <= timestamp_ms,
                     )
                     .order_by(CandleModel.open_time.desc())
                     .limit(lookback_candles)
