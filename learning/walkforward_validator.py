@@ -56,8 +56,14 @@ class WalkForwardValidator:
 
             X_train, X_test = X[train_idx], X[test_idx]
             y_train, y_test = y[train_idx], y[test_idx]
+            # Every fold must learn the complete target vocabulary; otherwise
+            # the XGBoost/RF class probability columns cannot be aligned.
+            if set(np.unique(y_train).tolist()) != {0, 1, 2}:
+                logger.warning("Skipping fold %d: training fold lacks one or more target classes", fold)
+                continue
 
-            # Train model
+            # Train model. A broken fold invalidates this validation run rather
+            # than silently turning a partially evaluated model into a pass.
             model = model_factory()
             model.fit(X_train, y_train)
 
@@ -70,9 +76,9 @@ class WalkForwardValidator:
                 "train_size": len(train_idx),
                 "test_size": len(test_idx),
                 "accuracy": float(accuracy_score(y_test, y_pred)),
-                "precision_macro": float(precision_score(y_test, y_pred, average="macro", zero_division=0)),
-                "recall_macro": float(recall_score(y_test, y_pred, average="macro", zero_division=0)),
-                "f1_macro": float(f1_score(y_test, y_pred, average="macro", zero_division=0)),
+                "precision_macro": float(precision_score(y_test, y_pred, labels=[0, 1, 2], average="macro", zero_division=0)),
+                "recall_macro": float(recall_score(y_test, y_pred, labels=[0, 1, 2], average="macro", zero_division=0)),
+                "f1_macro": float(f1_score(y_test, y_pred, labels=[0, 1, 2], average="macro", zero_division=0)),
             }
             fold_metrics.append(fold_result)
             logger.debug("Fold %d: acc=%.4f, f1=%.4f", fold, fold_result["accuracy"], fold_result["f1_macro"])
@@ -121,7 +127,7 @@ class WalkForwardValidator:
     def validate_ensemble(self, X: np.ndarray, y: np.ndarray,
                           rf_params: dict | None = None, xgb_params: dict | None = None) -> dict[str, Any]:
         """Validate both RF and XGBoost, return combined results."""
-        rf_params = rf_params or {"n_estimators": 200, "max_depth": 10, "random_state": 42, "n_jobs": -1}
+        rf_params = rf_params or {"n_estimators": 200, "max_depth": 10, "random_state": 42, "n_jobs": 2}
         xgb_params = xgb_params or {"n_estimators": 200, "max_depth": 6, "learning_rate": 0.05,
                                     "random_state": 42, "n_jobs": -1, "eval_metric": "mlogloss"}
 
