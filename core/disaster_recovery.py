@@ -264,19 +264,20 @@ class IdempotentEventProcessor:
         Returns:
             (was_processed, result) - was_processed=True means event was already handled
         """
-        if self.is_processed(event_id):
-            logger.debug(f"Event {event_id} already processed, skipping")
-            return True, None
+        with self._cache_lock:
+            if self.is_processed(event_id):
+                logger.debug("Event %s already processed, skipping", event_id)
+                return True, None
 
-        # Process the event
-        result = handler()
+            # Keep the in-process claim lock through the handler to prevent two
+            # local consumers from executing the same event concurrently.
+            result = handler()
 
-        # Persist completion before acknowledging success to the caller.
-        from database.repositories import Repository
-        Repository(self.db.session_maker()).mark_event_processed(event_id)
-        self.mark_processed(event_id)
-
-        return False, result
+            # Persist completion before acknowledging success to the caller.
+            from database.repositories import Repository
+            Repository(self.db.session_maker()).mark_event_processed(event_id)
+            self._processed_cache.add(event_id)
+            return False, result
 
 
 class PersistentEventQueue:
