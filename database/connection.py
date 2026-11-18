@@ -70,7 +70,7 @@ class Database:
         try:
             insp = inspect(self.engine)
             tables = insp.get_table_names()
-            return {"status": "ok", "tables": len(tables), "url": self.url}
+            return {"status": "ok", "tables": len(tables), "url": make_url(self.url).render_as_string(hide_password=True)}
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
 
