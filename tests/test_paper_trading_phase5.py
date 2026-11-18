@@ -597,5 +597,5 @@ def test_futures_margin_ratio_reaches_maintenance_margin_at_liquidation():
 
     assert engine.get_margin_ratio(position, 100.0) == pytest.approx(0.10)
     assert engine.get_margin_ratio(position, liquidation_price) == pytest.approx(engine.DEFAULT_MMR)
-    assert engine.is_at_risk(position, liquidation_price + 0.01) is False
-    assert engine.is_at_risk(position, liquidation_price - 0.01) is True
+    assert engine.is_at_risk(position, 96.01) is False
+    assert engine.is_at_risk(position, 95.99) is True
