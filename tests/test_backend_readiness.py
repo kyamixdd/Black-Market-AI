@@ -134,3 +134,39 @@ async def test_backend_startup_failure_closes_database(monkeypatch):
 
     assert fake_db.closed is True
     assert main.db is None
+
+
+def test_persisted_settings_are_applied_before_service_construction(monkeypatch):
+    from src_tauri.backend import main
+    import config
+    from core import orchestrator as orchestrator_module
+    from intelligence import intelligence_core as intelligence_module
+    from market import scanner as scanner_module
+    from paper_trading import simulator as simulator_module
+
+    persisted = {
+        "spot_enabled": False,
+        "futures_enabled": True,
+        "timeframes": ["1m", "5m", "1h"],
+        "risk_per_trade_pct": 0.8,
+        "spot_initial_balance": 300.0,
+    }
+    class FakeRepository:
+        def __init__(self, _session_maker):
+            pass
+
+        @staticmethod
+        def get_app_settings():
+            return persisted
+
+    monkeypatch.setattr(main, "Repository", FakeRepository)
+    main._apply_persisted_settings(SimpleNamespace(session_maker=lambda: object()))
+
+    assert config.SPOT_ENABLED is False
+    assert orchestrator_module.SPOT_ENABLED is False
+    assert scanner_module.SPOT_ENABLED is False
+    assert config.TIMEFRAMES == ["1m", "5m", "1h"]
+    assert orchestrator_module.TIMEFRAMES == ["1m", "5m", "1h"]
+    assert intelligence_module.TIMEFRAMES == ["1m", "5m", "1h"]
+    assert simulator_module.RISK_PER_TRADE_PCT == 0.8
+    assert simulator_module.SPOT_INITIAL_BALANCE == 300.0
