@@ -4,14 +4,22 @@ services:
     runtime: node
     plan: free
     rootDir: blackmarket-web
-    buildCommand: npm install --include=dev && npm run build
-    startCommand: npm run start
+    buildCommand: python3 --version && python3 -m pip install --user -r ../src_tauri/backend/requirements.txt && npm install --include=dev && npm run build
+    startCommand: node server.mjs
     healthCheckPath: /login
     envVars:
       - key: NODE_ENV
         value: production
-      - key: BLACKMARKET_BACKEND_URL
+      - key: APP_ENV
+        value: production
+      - key: BLACKMARKET_REMOTE_API_ENABLED
+        value: "1"
+      - key: BLACKMARKET_API_HOST
+        value: 127.0.0.1
+      - key: DATABASE_URL
         sync: false
+      - key: BLACKMARKET_BACKEND_URL
+        value: http://127.0.0.1:8765
       - key: BLACKMARKET_API_TOKEN
         sync: false
       - key: BLACKMARKET_WEB_PASSWORD
