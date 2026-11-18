@@ -531,3 +531,19 @@ async def test_realized_trade_pnl_includes_entry_and_exit_fees():
     assert trade["fee"] == 0.2
     assert sim.spot_balance == pytest.approx(500.0 + trade["pnl"])
     assert sim.daily_pnl == pytest.approx(trade["pnl"])
+
+def test_simulator_rejects_short_positions_on_spot_market():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-SPOT-SHORT-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "SELL",
+        "entry": 50000.0,
+        "stop_loss": 51000.0,
+        "take_profit": [48000.0],
+        "leverage": 1.0,
+    }
+    valid, reason = simulator.validate_new_position(signal)
+    assert valid is False
+    assert "does not support short" in reason
