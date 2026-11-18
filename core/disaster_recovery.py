@@ -910,8 +910,13 @@ class DisasterRecoveryOrchestrator:
     ):
         self.db = db
 
-        # Components
-        self.backup_manager = DatabaseBackupManager(BackupConfig(), db)
+        # PostgreSQL backups are managed by the database provider. The local
+        # SQLite backup manager is enabled only for desktop SQLite databases.
+        self.backup_manager = (
+            DatabaseBackupManager(BackupConfig(), db)
+            if db.engine.dialect.name == "sqlite"
+            else None
+        )
         self.event_processor = IdempotentEventProcessor(db)
         self.position_recovery = PositionRecoveryManager(db, simulator)
         self.model_recovery = ModelCheckpointRecovery()
@@ -970,11 +975,13 @@ class DisasterRecoveryOrchestrator:
         if self._persist_state:
             self.shutdown_manager.register_handler(self._persist_state, priority=60)
 
-        # Priority 50: Create final backup
-        self.shutdown_manager.register_handler(
-            lambda: self.backup_manager.create_backup("shutdown"),
-            priority=50
-        )
+        # Priority 50: Create final local SQLite backup. Hosted PostgreSQL
+        # uses provider-managed point-in-time backups instead.
+        if self.backup_manager is not None:
+            self.shutdown_manager.register_handler(
+                lambda: self.backup_manager.create_backup("shutdown"),
+                priority=50
+            )
 
     async def start(self) -> None:
         """Start all recovery and monitoring components."""
@@ -988,7 +995,8 @@ class DisasterRecoveryOrchestrator:
         try:
             await self.watchdog.start()
             await self.ws_reconnection.start()
-            self._auto_backup_task = asyncio.create_task(self._auto_backup_loop())
+            if self.backup_manager is not None:
+                self._auto_backup_task = asyncio.create_task(self._auto_backup_loop())
             if self.telegram_retry:
                 self._telegram_retry_task = asyncio.create_task(self.telegram_retry.process_queue())
         except Exception:
@@ -1020,6 +1028,8 @@ class DisasterRecoveryOrchestrator:
     async def _auto_backup_loop(self) -> None:
         """Periodic automatic backup."""
         while self._running:
+            if self.backup_manager is None:
+                return
             await asyncio.sleep(self.backup_manager.config.backup_interval_hours * 3600)
             if self._running:
                 try:
