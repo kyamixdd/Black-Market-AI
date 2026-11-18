@@ -356,7 +356,7 @@ async def health_check():
             "status": "starting",
             "backend_ready": False,
             "websocket_connected": False,
-            "database_connected": db is not None,
+            "database_connected": bool(db and db.health().get("status") == "ok"),
             "market_data_active": False,
             "learning_active": False,
             "paper_trading_active": False,
@@ -365,6 +365,7 @@ async def health_check():
         }
     health = orchestrator.health_monitor.get_status()
     from config import AUTO_MODEL_TRAINING, PAPER_TRADING_ENABLED
+    database_connected = bool(db and db.health().get("status") == "ok")
     market_data_active = bool(
         orchestrator.scanner._running and orchestrator.has_fresh_market_data()
     )
@@ -375,12 +376,12 @@ async def health_check():
     )
     return {
         "status": health.get("status", "unknown"),
-        "backend_ready": bool(db is not None and market_data_active),
+        "backend_ready": bool(database_connected and market_data_active),
         # This is the local dashboard WebSocket service. Exchange market
         # stream health is reported separately so REST-only fallback stays usable.
         "websocket_connected": bool(ws_manager and ws_manager.get_stats().get("running")),
         "exchange_websocket_connected": exchange_ws_connected,
-        "database_connected": db is not None,
+        "database_connected": database_connected,
         "market_data_active": market_data_active,
         "learning_active": bool(AUTO_MODEL_TRAINING and any(
             task.get_name() == "blackmarket-learning" and not task.done()
