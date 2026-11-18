@@ -1010,7 +1010,7 @@ class DisasterRecoveryOrchestrator:
         self.rest_resync = RESTResynchronizationManager(
             spot_client, futures_client, symbol_registry, candle_manager
         )
-        self.telegram_retry = TelegramRetryManager(telegram_client) if telegram_client else None
+        self.telegram_retry = TelegramRetryManager(telegram_client, db=db) if telegram_client else None
 
         # Watchdog
         self.watchdog = WatchdogMonitor(
@@ -1081,7 +1081,7 @@ class DisasterRecoveryOrchestrator:
             if self.backup_manager is not None:
                 self._auto_backup_task = asyncio.create_task(self._auto_backup_loop())
             if self.telegram_retry:
-                self._telegram_retry_task = asyncio.create_task(self.telegram_retry.process_queue())
+                self._telegram_retry_task = asyncio.create_task(self.telegram_retry.run_worker())
         except Exception:
             self._running = False
             await self.watchdog.stop()
@@ -1102,7 +1102,7 @@ class DisasterRecoveryOrchestrator:
             await asyncio.gather(self._auto_backup_task, return_exceptions=True)
             self._auto_backup_task = None
         if self._telegram_retry_task and not self._telegram_retry_task.done():
-            self._telegram_retry_task.cancel()
+            self.telegram_retry.stop_worker()
             await asyncio.gather(self._telegram_retry_task, return_exceptions=True)
         self._telegram_retry_task = None
         await self.shutdown_manager.shutdown("manual")
