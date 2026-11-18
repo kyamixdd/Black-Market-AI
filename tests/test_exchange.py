@@ -77,3 +77,54 @@ async def test_market_discovery_registers_spot_and_futures_symbols(monkeypatch):
     assert result == {"spot": 1, "futures": 1}
     assert registry.is_eligible("BTCUSDT", "SPOT")
     assert registry.is_eligible("ETHUSDT", "FUTURES")
+
+
+
+@pytest.mark.asyncio
+async def test_live_kline_websocket_updates_candles_and_persists_closed_bar():
+    from core.orchestrator import Orchestrator
+    from market.candle_manager import CandleManager
+
+    class FakeRepo:
+        def __init__(self):
+            self.saved = []
+
+        def save_candles(self, candles):
+            self.saved.extend(candles)
+
+    class FakeEventBus:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            self.events.append(event)
+
+    orchestrator = Orchestrator.__new__(Orchestrator)
+    orchestrator._analysis_timeframes = ("1m", "5m")
+    orchestrator._ws_connected = False
+    orchestrator._last_ws_message_at = None
+    orchestrator.candle_manager = CandleManager()
+    orchestrator.repo = FakeRepo()
+    orchestrator.event_bus = FakeEventBus()
+
+    base = {
+        "e": "kline",
+        "s": "BTCUSDT",
+        "k": {
+            "i": "1m", "t": 1_800_000_000_000, "T": 1_800_000_059_999,
+            "o": "100", "h": "105", "l": "99", "c": "103", "v": "12",
+            "x": False,
+        },
+    }
+    await orchestrator._on_exchange_ws_message({"_market": "SPOT", "data": base})
+    current = orchestrator.candle_manager.get_series("SPOT", "BTCUSDT", "1m")
+    assert len(current) == 1
+    assert current[-1]["close"] == 103
+    assert orchestrator.repo.saved == []
+
+    closed = {**base, "k": {**base["k"], "x": True}}
+    await orchestrator._on_exchange_ws_message({"_market": "SPOT", "data": closed})
+    assert len(orchestrator.repo.saved) == 1
+    assert orchestrator.repo.saved[0]["symbol"] == "BTCUSDT"
+    assert orchestrator.repo.saved[0]["timeframe"] == "1m"
+    assert orchestrator.event_bus.events[-1].payload["candle"]["closed"] is True
