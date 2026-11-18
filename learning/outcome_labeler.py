@@ -104,14 +104,11 @@ class OutcomeLabeler:
 
     def _get_price_at_time(self, symbol: str, market: str, timestamp_ms: int) -> float | None:
         """Get price for symbol at specific timestamp from candles."""
-        # Try to get from 1m candles
-        from database.connection import get_session_maker
-        session_maker = get_session_maker()
+        # Query the same database configured for this orchestrator instance.
         from sqlalchemy import select
-
         from database.models import CandleModel
 
-        with session_maker() as session:
+        with self.repo._get_session() as session:
             stmt = (
                 select(CandleModel.close)
                 .where(
