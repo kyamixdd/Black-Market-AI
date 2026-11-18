@@ -388,9 +388,10 @@ class Simulator:
         market = position["market"]
         # Get realistic fill price with spread and slippage on exit
         volume_24h = self._get_volume_24h(market, position["symbol"])
-        order_type = position.get("order_type", "MARKET")
+        # Stop-loss/take-profit exits are market executions even when entry
+        # was a limit order; they must still pay spread and slippage.
         fill_price = self.fee_calc.get_fill_price(
-            market, position["side"], order_type, exit_price,
+            market, position["side"], "MARKET", exit_price,
             position["amount"], position["leverage"], volume_24h
         )
 
