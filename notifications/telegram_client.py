@@ -32,8 +32,10 @@ class TelegramClient:
                 await self._bot.get_me()
                 logger.info("Telegram bot connected successfully")
             except Exception as exc:
-                logger.error("Failed to init Telegram bot: %s", exc)
-                self._enabled = False
+                # Keep the client enabled so transient network/API failures can retry
+                # on the next notification instead of permanently disabling Telegram.
+                logger.error("Failed to initialize Telegram bot: %s", exc)
+                self._bot = None
                 return False
         return self._enabled and self._bot is not None
 
@@ -71,6 +73,20 @@ class TelegramClient:
             return True
         except Exception as exc:
             logger.error("Telegram send failed: %s", exc)
+            return False
+
+    async def test_connection(self) -> bool:
+        """Verify bot credentials and Telegram API connectivity without sending a message."""
+        if not self._enabled:
+            return False
+        if not await self._ensure_bot():
+            return False
+        try:
+            await self._bot.get_me()
+            return True
+        except Exception as exc:
+            logger.error("Telegram connection test failed: %s", exc)
+            self._bot = None
             return False
 
     # ===== Notification Methods =====
