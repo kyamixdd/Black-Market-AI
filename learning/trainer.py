@@ -104,9 +104,7 @@ class ModelTrainer:
         # Train the online River model as the incremental-learning leg of the hybrid.
         self.train_river_online(X, y, version=version)
 
-        # Update portable "latest" model copies after all artifacts are written.
-        self._update_latest_symlinks(version)
-
+        # Keep this versioned candidate inactive until economic promotion validation.
         # Calculate training metrics
         rf_pred = rf.predict(X)
         xgb_pred = xgb_model.predict(X)
@@ -133,6 +131,17 @@ class ModelTrainer:
     def _generate_version(self) -> str:
         """Generate timestamp-based version."""
         return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+    def activate_version(self, version: str) -> None:
+        """Activate a trained version only after an approved promotion decision."""
+        required = (
+            self.model_dir / f"rf_{version}.pkl",
+            self.model_dir / f"xgb_{version}.json",
+            self.model_dir / f"scaler_{version}.pkl",
+        )
+        if not all(path.is_file() for path in required):
+            raise FileNotFoundError(f"Model version {version} is missing required artifacts")
+        self._update_latest_symlinks(version)
 
     def _update_latest_symlinks(self, version: str) -> None:
         """Update portable latest-model copies (works without Windows symlink privileges)."""
@@ -286,21 +295,17 @@ class LearningOrchestrator:
             retrain_result = {"status": "disabled"}
         results["retrain"] = retrain_result
 
-        # 3. If new model trained and validated, promote it
+        # Classifier validation is not an economic promotion test. Keep every
+        # new version inactive until cost-aware champion/challenger evaluation
+        # proves positive expectancy after fees, spread, slippage, and funding.
         if retrain_result.get("status") == "trained":
-            version = retrain_result.get("version")
-            validation = retrain_result.get("validation", {})
-            if validation.get("ensemble_passes", False):
-                await self._promote_model(version)
-                results["promoted"] = version
+            results["promotion"] = {
+                "status": "deferred",
+                "reason": (
+                    "Economic champion/challenger evaluation is not yet integrated "
+                    "into the scheduled learning cycle."
+                ),
+                "active_model_unchanged": True,
+            }
 
         return results
-
-    async def _promote_model(self, version: str) -> None:
-        """Promote newly validated model."""
-        self.repo.promote_model(f"random_forest_{version}")
-        self.repo.promote_model(f"xgboost_{version}")
-        logger.info("Promoted model version %s", version)
-
-        # Reload predictor
-        self.predictor._load_latest()
