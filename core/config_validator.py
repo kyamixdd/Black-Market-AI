@@ -93,9 +93,12 @@ def validate_config() -> dict[str, Any]:
     if FUTURES_INITIAL_BALANCE <= 0:
         errors.append(f"FUTURES_INITIAL_BALANCE must be positive, got: {FUTURES_INITIAL_BALANCE}")
 
-    # Validate trading mode
-    if PAPER_TRADING_ENABLED and REAL_TRADING_ENABLED:
-        errors.append("PAPER_TRADING_ENABLED and REAL_TRADING_ENABLED cannot both be true")
+    # This application is intentionally paper-trading only. Public exchange
+    # clients do not expose order endpoints, so never accept a real-trading flag.
+    if REAL_TRADING_ENABLED:
+        errors.append("REAL_TRADING_ENABLED is unsupported; BlackMarket AI is paper-trading only")
+    if not PAPER_TRADING_ENABLED:
+        warnings.append("PAPER_TRADING_ENABLED is false - no simulated trades will be executed")
     if not PAPER_TRADING_ENABLED and not REAL_TRADING_ENABLED:
         warnings.append("Both PAPER_TRADING_ENABLED and REAL_TRADING_ENABLED are false - no trading will occur")
 
