@@ -13,7 +13,7 @@ from config import (
 )
 from core.event_bus import EventBus
 from core.disaster_recovery import create_disaster_recovery_orchestrator
-from core.event_models import EventType
+from core.event_models import EventType, make_event
 from database.connection import Database
 from database.repositories import Repository
 from exchange.futures_client import FuturesClient
