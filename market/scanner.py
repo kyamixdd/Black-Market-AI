@@ -38,7 +38,20 @@ class Scanner:
                     price = float(t.get("lastPrice", 0))
                     volume = float(t.get("quoteVolume", 0))
                     change = float(t.get("priceChangePercent", 0))
+                    if price <= 0:
+                        continue
                     self.cache.update_ticker(market, symbol, price, volume, change)
+                    # Publish a per-symbol price event so paper positions, pending
+                    # limit orders, and subscribed dashboard clients receive updates.
+                    await self.event_bus.publish(make_event(
+                        EventType.MARKET_DATA,
+                        "scanner",
+                        symbol=symbol,
+                        market=market,
+                        price=price,
+                        volume_24h=volume,
+                        price_change_24h=change,
+                    ))
                 await self.event_bus.publish(make_event(
                     EventType.MARKET_SNAPSHOT, "scanner", market=market,
                     count=len(tickers)
@@ -56,9 +69,18 @@ class Scanner:
                     symbol = m.get("symbol")
                     if not self.registry.is_eligible(symbol, "FUTURES"):
                         continue
-                    self.cache.update_mark("FUTURES", symbol,
-                                           float(m.get("markPrice", 0)),
-                                           float(m.get("lastFundingRate", 0)))
+                    mark_price = float(m.get("markPrice", 0))
+                    funding_rate = float(m.get("lastFundingRate", 0))
+                    self.cache.update_mark("FUTURES", symbol, mark_price, funding_rate)
+                    if mark_price > 0:
+                        await self.event_bus.publish(make_event(
+                            EventType.MARKET_DATA,
+                            "scanner",
+                            symbol=symbol,
+                            market="FUTURES",
+                            mark_price=mark_price,
+                            funding_rate=funding_rate,
+                        ))
             except Exception as exc:
                 logger.error("Futures extra scan failed: %s", exc)
             await asyncio.sleep(60)
