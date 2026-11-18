@@ -430,7 +430,9 @@ class Orchestrator:
         """Persist critical events to SQLite for state recovery after interruptions."""
         # High-volume ticker events are transient and must not grow the SQLite
         # event journal without bound. Persist decisions, fills, risk, and lifecycle events.
-        if event.event_type in {EventType.MARKET_DATA, EventType.MARKET_SNAPSHOT}:
+        if event.event_type in {
+            EventType.MARKET_DATA, EventType.MARKET_SNAPSHOT, EventType.PREDICTION
+        }:
             return
         try:
             event_dict = {
