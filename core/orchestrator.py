@@ -148,12 +148,28 @@ class Orchestrator:
         self._setup_subscriptions()
         # Recover positions once, then start backups, watchdog, and reconnect management.
         await self.disaster_recovery.start()
-        # Prefer the exact simulator snapshot (balances, margin, pending orders,
-        # and daily P&L) over reconstructing account state from trades alone.
-        saved_state = self.repo.get_simulator_state()
-        if saved_state:
-            self.simulator.restore_state(saved_state)
-            logger.info("Restored persisted simulator snapshot")
+        # Restore the account snapshot only when it is at least as recent as
+        # the latest durable position/order event. Otherwise DB recovery wins,
+        # preventing an old snapshot from resurrecting a position closed just
+        # before an unexpected process exit.
+        snapshot_record = self.repo.get_simulator_state_record()
+        latest_account_event = self.repo.get_latest_account_event_timestamp()
+        if snapshot_record:
+            saved_state, snapshot_updated_at = snapshot_record
+            if snapshot_updated_at and snapshot_updated_at.tzinfo is None:
+                snapshot_updated_at = snapshot_updated_at.replace(tzinfo=timezone.utc)
+            if latest_account_event and latest_account_event.tzinfo is None:
+                latest_account_event = latest_account_event.replace(tzinfo=timezone.utc)
+            if (
+                latest_account_event is None
+                or (snapshot_updated_at is not None and snapshot_updated_at >= latest_account_event)
+            ):
+                self.simulator.restore_state(saved_state)
+                logger.info("Restored current persisted simulator snapshot")
+            else:
+                logger.warning(
+                    "Skipped stale simulator snapshot; durable account events are newer"
+                )
         logger.info("Initialization complete")
 
     def _setup_subscriptions(self) -> None:
