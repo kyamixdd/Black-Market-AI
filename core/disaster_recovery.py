@@ -193,6 +193,7 @@ class DatabaseBackupManager:
                 # file (required on Windows and avoids stale pooled page caches).
                 if reopen_database:
                     self.db.close()
+                target_path.parent.mkdir(parents=True, exist_ok=True)
                 if self.config.compress:
                     import tempfile
                     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
