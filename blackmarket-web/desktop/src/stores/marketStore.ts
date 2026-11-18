@@ -1,6 +1,5 @@
 // Market data store using Zustand.
 import { create } from 'zustand';
-import { MarketSnapshot, MarketHeatmap, MarketBreadth, VolumeStats, LongShortStats } from '../services/api';
 
 interface MarketState {
   // Market data
