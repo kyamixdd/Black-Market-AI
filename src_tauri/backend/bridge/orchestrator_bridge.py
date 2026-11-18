@@ -496,7 +496,7 @@ class OrchestratorBridge:
         """Get learning engine status."""
         predictor = self.intelligence.predictor
         from database.repositories import Repository
-        preds = self.repo.get_predictions_history(100)
+        preds = self.repo.get_predictions_history(10000)
         resolved = [p for p in preds if p.is_correct is not None]
         correct = [p for p in resolved if p.is_correct]
         accuracy = len(correct) / len(resolved) * 100 if resolved else 0
@@ -506,8 +506,8 @@ class OrchestratorBridge:
             "version": predictor.version if predictor.is_trained else None,
             "rf_loaded": predictor.rf_model is not None,
             "xgb_loaded": predictor.xgb_model is not None,
-            "river_available": True,
-            "predictions_total": len(preds),
+            "river_available": predictor.river_model is not None,
+            "predictions_total": self.repo.count_predictions(),
             "predictions_resolved": len(resolved),
             "accuracy": accuracy,
             "recent_predictions": self.get_recent_predictions(10),
