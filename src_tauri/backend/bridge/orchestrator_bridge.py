@@ -159,17 +159,28 @@ class OrchestratorBridge:
     # ===== Signals =====
 
     def get_all_signals(self) -> list[dict]:
-        """Get persisted signal decisions from the local event history."""
-        signals = []
+        """Return the latest persisted decision state for each signal."""
+        latest: dict[str, dict] = {}
         for event in self.repo.get_system_events(limit=1000):
-            if event.event_type not in {"SIGNAL_PROPOSED", "SIGNAL_VALIDATED", "SIGNAL_REJECTED", "SIGNAL_EXPIRED"}:
+            if event.event_type not in {
+                "SIGNAL_PROPOSED", "SIGNAL_VALIDATED", "SIGNAL_REJECTED", "SIGNAL_EXPIRED"
+            }:
                 continue
             try:
                 payload = json.loads(event.payload) if isinstance(event.payload, str) else event.payload
-            except json.JSONDecodeError:
+            except (TypeError, json.JSONDecodeError):
                 logger.warning("Skipping malformed signal event %s", event.event_id)
                 continue
-            if not isinstance(payload, dict) or not payload.get("symbol"):
+            if not isinstance(payload, dict):
+                continue
+            # make_event stores envelope symbol/market outside the JSON payload.
+            payload = {
+                **payload,
+                "symbol": event.symbol or payload.get("symbol"),
+                "market": event.market or payload.get("market"),
+            }
+            signal_id = payload.get("signal_id") or event.event_id
+            if signal_id in latest or not payload.get("symbol") or not payload.get("market"):
                 continue
             signal = self._format_signal(payload)
             signal["status"] = event.event_type.removeprefix("SIGNAL_")
@@ -183,8 +194,8 @@ class OrchestratorBridge:
                 )
             else:
                 signal["data_freshness"] = "UNKNOWN"
-            signals.append(signal)
-        return signals
+            latest[signal_id] = signal
+        return list(latest.values())
 
     def get_signals_by_market(self, market: str) -> list[dict]:
         """Get signals filtered by market."""
@@ -236,8 +247,16 @@ class OrchestratorBridge:
         sim = self.simulator
         spot_unrealized = sum(p.get("unrealized_pnl", 0) for p in sim.spot_positions.values())
         futures_unrealized = sum(p.get("unrealized_pnl", 0) for p in sim.futures_positions.values())
-        spot_equity = sim.get_balance("SPOT") + spot_unrealized
-        futures_equity = sim.get_balance("FUTURES") + futures_unrealized
+        spot_margin = sum(
+            p.get("margin", p.get("entry_price", 0.0) * p.get("amount", 0.0))
+            for p in sim.spot_positions.values()
+        )
+        futures_margin = sum(
+            p.get("margin", p.get("entry_price", 0.0) * p.get("amount", 0.0))
+            for p in sim.futures_positions.values()
+        )
+        spot_equity = sim.get_balance("SPOT") + spot_margin + spot_unrealized
+        futures_equity = sim.get_balance("FUTURES") + futures_margin + futures_unrealized
         total = spot_equity + futures_equity
         now = datetime.now(timezone.utc)
         today = now.date()
