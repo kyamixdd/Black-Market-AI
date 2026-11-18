@@ -210,6 +210,7 @@ class Orchestrator:
         if not symbol or not all(math.isfinite(value) for value in (price, volume, change)) or price <= 0:
             return
         self._ws_connected = True
+        self._last_ws_message_at = asyncio.get_running_loop().time()
         self.cache.update_ticker(market, symbol, price, volume, change)
         await self.event_bus.publish(make_event(
             EventType.MARKET_DATA,
