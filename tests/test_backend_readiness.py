@@ -65,3 +65,34 @@ def test_dataset_builder_uses_stored_features_in_oldest_first_order():
 
     assert X.tolist() == [[0.0, 10.0], [1.0, 11.0], [2.0, 12.0]]
     assert y.tolist() == [2, 0, 1]
+
+
+def test_health_endpoint_is_safe_before_first_exchange_websocket_message(monkeypatch):
+    import asyncio
+
+    from src_tauri.backend import main
+
+    class FakeHealthMonitor:
+        @staticmethod
+        def get_status():
+            return {"status": "OK", "metrics": {"uptime_seconds": 1.0}}
+
+    class FakeOrchestrator:
+        health_monitor = FakeHealthMonitor()
+        scanner = SimpleNamespace(_running=True)
+
+        @staticmethod
+        def has_fresh_market_data():
+            return True
+
+    monkeypatch.setattr(main, "orchestrator", FakeOrchestrator())
+    monkeypatch.setattr(main, "db", object())
+    monkeypatch.setattr(main, "ws_manager", SimpleNamespace(
+        get_stats=lambda: {"running": True}
+    ))
+
+    response = asyncio.run(main.health_check())
+
+    assert response["backend_ready"] is True
+    assert response["market_data_active"] is True
+    assert response["exchange_websocket_connected"] is False
