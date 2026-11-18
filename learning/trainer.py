@@ -137,6 +137,7 @@ class ModelTrainer:
             if not source.is_file():
                 continue
             shutil.copy2(source, self.model_dir / alias)
+        (self.model_dir / "latest_version.txt").write_text(version, encoding="utf-8")
 
     def _register_model(self, version: str, model_type: str, metrics: dict, file_path: str) -> None:
         """Register model in database."""
