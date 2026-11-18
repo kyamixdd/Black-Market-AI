@@ -16,6 +16,24 @@ class SignalValidator:
             if field not in signal:
                 return False, f"Missing field: {field}"
 
+        for field in ("signal_id", "symbol", "strategy", "timeframe"):
+            value = signal.get(field)
+            if not isinstance(value, str) or not value.strip():
+                return False, f"Invalid {field}"
+
+        from config import TIMEFRAMES
+        if signal["timeframe"] not in TIMEFRAMES:
+            return False, "Unsupported timeframe"
+
+        raw_score = signal.get("raw_score", 50.0)
+        if (
+            isinstance(raw_score, bool)
+            or not isinstance(raw_score, (int, float))
+            or not math.isfinite(raw_score)
+            or not 0 <= raw_score <= 100
+        ):
+            return False, "Invalid raw confidence score"
+
         direction = signal.get("direction")
         if direction not in ("LONG", "BUY", "SHORT", "SELL"):
             return False, "Unsupported direction"
