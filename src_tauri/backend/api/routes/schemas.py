@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class MarketType(str, Enum):
@@ -505,6 +505,7 @@ class SettingsRequest(BaseModel):
     max_futures_positions: int | None = Field(default=None, ge=1, le=100)
     telegram_enabled: bool | None = None
 
+    @field_validator('timeframes')
     @classmethod
     def validate_timeframes(cls, value):
         allowed = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
