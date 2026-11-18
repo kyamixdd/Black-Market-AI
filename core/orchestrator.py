@@ -482,6 +482,7 @@ class Orchestrator:
                 ]
                 self._analysis_cursors[market] = (cursor + len(batch)) % len(tickers)
                 await asyncio.gather(*(analyze_one(market, symbol) for symbol in batch))
+                self.disaster_recovery.watchdog.heartbeat()
             await asyncio.sleep(60)
 
     async def _record_prediction(self, symbol: str, market: str, signals: list[dict[str, Any]]) -> None:
