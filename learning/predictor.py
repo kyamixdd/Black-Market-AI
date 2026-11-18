@@ -14,6 +14,7 @@ from sklearn.preprocessing import StandardScaler
 from config import ML_ENABLED
 
 logger = logging.getLogger(__name__)
+CLASS_NAMES = {0: "DOWN", 1: "FLAT", 2: "UP"}
 
 
 class Predictor:
@@ -22,6 +23,8 @@ class Predictor:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.rf_model: RandomForestClassifier | None = None
         self.xgb_model: xgb.XGBClassifier | None = None
+        # Retained for compatibility with older model bundles. Current RF/XGB
+        # training and validation use raw features, so inference must too.
         self.scaler = StandardScaler()
         self.is_trained = False
         self.version = "0001"
@@ -32,16 +35,33 @@ class Predictor:
         rf_path = self.model_dir / "rf_model.pkl"
         xgb_path = self.model_dir / "xgb_model.json"
         scaler_path = self.model_dir / "scaler.pkl"
-        if rf_path.exists() and xgb_path.exists() and scaler_path.exists():
+        if rf_path.exists() and xgb_path.exists():
             try:
                 self.rf_model = joblib.load(rf_path)
                 self.xgb_model = xgb.XGBClassifier()
-                self.xgb_model.load_model(xgb_path)
-                self.scaler = joblib.load(scaler_path)
+                self.xgb_model.load_model(str(xgb_path))
+                if scaler_path.exists():
+                    self.scaler = joblib.load(scaler_path)
                 self.is_trained = True
                 logger.info("Loaded existing models")
             except Exception as exc:
+                self.is_trained = False
                 logger.warning("Failed to load models: %s", exc)
+
+    @staticmethod
+    def _class_probabilities(model: Any, features: np.ndarray) -> np.ndarray:
+        """Return probabilities in the stable DOWN/FLAT/UP class order."""
+        raw = model.predict_proba(features)[0]
+        classes = getattr(model, "classes_", np.arange(len(raw)))
+        aligned = np.zeros(3, dtype=np.float64)
+        for class_value, probability in zip(classes, raw):
+            try:
+                class_index = int(class_value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if class_index in CLASS_NAMES:
+                aligned[class_index] = float(probability)
+        return aligned
 
     def predict(self, features: np.ndarray) -> dict[str, Any]:
         if not self.is_trained or self.rf_model is None or self.xgb_model is None:
@@ -50,20 +70,31 @@ class Predictor:
                 "predicted_class": "FLAT", "confidence": 0.0,
                 "model_version": self.version,
             }
-        X = features.reshape(1, -1)
-        Xs = self.scaler.transform(X)
-        rf_probs = self.rf_model.predict_proba(Xs)[0]
-        xgb_probs = self.xgb_model.predict_proba(Xs)[0]
-        # Average ensemble
+
+        X = np.asarray(features, dtype=np.float64).reshape(1, -1)
+        if X.shape[1] == 0 or not np.isfinite(X).all():
+            raise ValueError("Prediction features must be a non-empty finite vector")
+        expected_features = getattr(self.rf_model, "n_features_in_", X.shape[1])
+        if X.shape[1] != expected_features:
+            raise ValueError(
+                f"Expected {expected_features} features, received {X.shape[1]}"
+            )
+
+        # The trainer and walk-forward validator fit on raw feature values.
+        # Applying StandardScaler only at inference creates train/serve skew.
+        rf_probs = self._class_probabilities(self.rf_model, X)
+        xgb_probs = self._class_probabilities(self.xgb_model, X)
         probs = (rf_probs + xgb_probs) / 2.0
+        total = float(probs.sum())
+        if not np.isfinite(probs).all() or total <= 0:
+            raise ValueError("Models returned invalid class probabilities")
+        probs /= total
         class_idx = int(np.argmax(probs))
-        classes = ["DOWN", "FLAT", "UP"] if len(probs) == 3 else ["FLAT", "UP"]
-        pred_class = classes[class_idx] if class_idx < len(classes) else "FLAT"
         return {
-            "prob_up": float(probs[2] if len(probs) == 3 else probs[1]),
+            "prob_up": float(probs[2]),
             "prob_down": float(probs[0]),
-            "prob_flat": float(probs[1] if len(probs) == 3 else 0.0),
-            "predicted_class": pred_class,
+            "prob_flat": float(probs[1]),
+            "predicted_class": CLASS_NAMES[class_idx],
             "confidence": float(probs[class_idx]),
             "model_version": self.version,
         }
