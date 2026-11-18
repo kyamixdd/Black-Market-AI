@@ -24,8 +24,22 @@ class ApiService {
 
     this.client.interceptors.response.use(
       (response) => response.data,
-      (error: AxiosError) => {
-        const message = error.response?.data?.detail || error.message || 'Unknown error';
+      (error: AxiosError<unknown>) => {
+        const responseData: unknown = error.response?.data;
+        let detail: string | undefined;
+
+        if (typeof responseData === 'string') {
+          detail = responseData;
+        } else if (
+          responseData !== null &&
+          typeof responseData === 'object' &&
+          'detail' in responseData &&
+          typeof responseData.detail === 'string'
+        ) {
+          detail = responseData.detail;
+        }
+
+        const message = detail || error.message || 'Unknown error';
         return Promise.reject(new Error(message));
       }
     );
