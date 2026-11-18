@@ -27,7 +27,7 @@ class LiquidationEngine:
             return False
 
         liq_price = self.calculate_liquidation_price(position)
-        if position["side"] == "LONG":
+        if position["side"] in ("LONG", "BUY"):
             return mark_price <= liq_price
         else:
             return mark_price >= liq_price
