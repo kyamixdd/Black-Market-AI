@@ -640,6 +640,8 @@ class Orchestrator:
             await asyncio.gather(self._event_bus_task, return_exceptions=True)
             self._event_bus_task = None
         await self.disaster_recovery.stop()
+        if self.telegram:
+            await self.telegram.close()
         logger.info("Shutdown complete")
 
     async def handle_signal(self, sig: int, frame) -> None:
