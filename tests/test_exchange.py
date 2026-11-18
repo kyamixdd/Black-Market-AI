@@ -6,6 +6,7 @@ from exchange.futures_client import FuturesClient
 from exchange.market_discovery import MarketDiscovery
 from exchange.rate_limiter import RateLimiter
 from exchange.spot_client import SpotClient
+from exchange.websocket_manager import WebSocketManager
 from exchange.symbol_registry import SymbolRegistry
 
 
@@ -128,3 +129,49 @@ async def test_live_kline_websocket_updates_candles_and_persists_closed_bar():
     assert orchestrator.repo.saved[0]["symbol"] == "BTCUSDT"
     assert orchestrator.repo.saved[0]["timeframe"] == "1m"
     assert orchestrator.event_bus.events[-1].payload["candle"]["closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_combined_binance_stream_uses_correct_stream_endpoint(monkeypatch):
+    from unittest.mock import AsyncMock
+    import exchange.websocket_manager as websocket_module
+
+    manager = WebSocketManager(RateLimiter())
+    manager.rate_limiter.acquire = AsyncMock()
+    received = []
+    manager.add_handler(lambda message: _capture_message(received, message))
+    manager._running = True
+    urls = []
+
+    class FakeSocket:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def recv(self):
+            manager._running = False
+            return '{"data":{"e":"24hrTicker","s":"BTCUSDT"}}'
+
+    def fake_connect(url, **_kwargs):
+        urls.append(url)
+        return FakeSocket()
+
+    async def capture(message):
+        received.append(message)
+
+    async def _capture_message(target, message):
+        target.append(message)
+
+    monkeypatch.setattr(websocket_module.websockets, "connect", fake_connect)
+    await manager._run_stream(
+        websocket_module.SPOT_WS_URL,
+        ["btcusdt@ticker", "btcusdt@kline_1m"],
+        "SPOT",
+    )
+
+    assert urls == [
+        "wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/btcusdt@kline_1m"
+    ]
+    assert received[0]["_market"] == "SPOT"
