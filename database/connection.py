@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine, event, inspect
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
@@ -59,10 +59,11 @@ class Database:
         logger.info("Database initialized at %s", self.url)
 
     def integrity_check(self) -> str:
-        if self.engine.dialect.name != "sqlite":
-            raise RuntimeError("Database integrity checks require SQLite.")
         with self.engine.connect() as connection:
-            return str(connection.exec_driver_sql("PRAGMA integrity_check").scalar_one())
+            if self.engine.dialect.name == "sqlite":
+                return str(connection.exec_driver_sql("PRAGMA integrity_check").scalar_one())
+            connection.execute(text("SELECT 1"))
+            return "ok"
 
     def health(self) -> dict:
         try:
