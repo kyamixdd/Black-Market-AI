@@ -262,6 +262,16 @@ class SystemEventModel(Base):
     payload = Column(Text, nullable=False)
 
 
+class AppSettingModel(Base):
+    """Persistent application settings, stored as JSON values by key."""
+
+    __tablename__ = "app_settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc)
+
+
 class SimulatorStateModel(Base):
     __tablename__ = "simulator_state"
 
