@@ -562,6 +562,10 @@ class Orchestrator:
 
     async def _record_prediction(self, symbol: str, market: str, signals: list[dict[str, Any]]) -> None:
         """Persist one leakage-safe prediction per newly closed 15m candle."""
+        # Strategy analysis can return no candidates for either a valid market
+        # state or an integrity failure; never train on the latter.
+        if not self.integrity.is_symbol_valid(market, symbol):
+            return
         # Exchange candle timestamps are wall-clock epoch milliseconds.
         from datetime import datetime, timezone
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
