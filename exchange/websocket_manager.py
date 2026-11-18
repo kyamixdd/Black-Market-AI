@@ -35,7 +35,7 @@ class WebSocketManager:
     def add_handler(self, handler: Callable[[dict], Awaitable[None]]) -> None:
         self._handlers.append(handler)
 
-    async def _run_stream(self, base_url: str, streams: list[str]) -> None:
+    async def _run_stream(self, base_url: str, streams: list[str], market: str) -> None:
         if not streams:
             return
         stream_path = "/".join(streams)
@@ -53,6 +53,8 @@ class WebSocketManager:
                             data = json.loads(msg)
                         except Exception:
                             continue
+                        if isinstance(data, dict):
+                            data["_market"] = market
                         for handler in self._handlers:
                             try:
                                 await handler(data)
@@ -78,13 +80,13 @@ class WebSocketManager:
         for i in range(0, len(self._spot_streams), self.max_streams_per_conn):
             chunk = self._spot_streams[i : i + self.max_streams_per_conn]
             if chunk:
-                t = asyncio.create_task(self._run_stream(SPOT_WS_URL, chunk))
+                t = asyncio.create_task(self._run_stream(SPOT_WS_URL, chunk, "SPOT"))
                 self._tasks.append(t)
         # Chunk futures streams
         for i in range(0, len(self._futures_streams), self.max_streams_per_conn):
             chunk = self._futures_streams[i : i + self.max_streams_per_conn]
             if chunk:
-                t = asyncio.create_task(self._run_stream(FUTURES_WS_URL, chunk))
+                t = asyncio.create_task(self._run_stream(FUTURES_WS_URL, chunk, "FUTURES"))
                 self._tasks.append(t)
 
     async def restart(self) -> None:
