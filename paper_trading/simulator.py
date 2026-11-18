@@ -322,13 +322,11 @@ class Simulator:
             await self.event_bus.publish(make_event(
                 EventType.RISK_ALERT, "simulator",
                 symbol=position["symbol"], market=position["market"],
-                payload={
-                    "alert_type": "MARGIN_RISK",
-                    "message": f"Position {position['symbol']} near liquidation",
-                    "margin_ratio": margin_ratio,
-                    "mark_price": mark_price,
-                    "liquidation_price": self.liquidation.calculate_liquidation_price(position),
-                }
+                alert_type="MARGIN_RISK",
+                message=f"Position {position['symbol']} near liquidation",
+                margin_ratio=margin_ratio,
+                mark_price=mark_price,
+                liquidation_price=self.liquidation.calculate_liquidation_price(position),
             ))
 
         if self.liquidation.check_liquidation(position, mark_price):
@@ -339,12 +337,10 @@ class Simulator:
             await self.event_bus.publish(make_event(
                 EventType.RISK_ALERT, "simulator",
                 symbol=position["symbol"], market=position["market"],
-                payload={
-                    "alert_type": "LIQUIDATION",
-                    "message": f"Position {position['symbol']} liquidated",
-                    "liquidation_price": liq_price,
-                    "mark_price": mark_price,
-                }
+                alert_type="LIQUIDATION",
+                message=f"Position {position['symbol']} liquidated",
+                liquidation_price=liq_price,
+                mark_price=mark_price,
             ))
 
     async def _apply_funding(self, position: dict, funding_rate: float) -> None:
