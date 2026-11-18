@@ -50,10 +50,17 @@ class TelegramClient:
         if h in self._sent_hashes:
             if now - self._sent_hashes[h] < self._dedup_ttl_seconds:
                 return True
-        self._sent_hashes[h] = now
-        # Clean old entries
-        self._sent_hashes = {k: v for k, v in self._sent_hashes.items() if now - v < self._dedup_ttl_seconds}
         return False
+
+    def _remember_sent(self, text: str) -> None:
+        """Remember a message only after Telegram confirms it was sent."""
+        now = time.time()
+        self._sent_hashes[self._make_hash(text)] = now
+        self._sent_hashes = {
+            key: sent_at
+            for key, sent_at in self._sent_hashes.items()
+            if now - sent_at < self._dedup_ttl_seconds
+        }
 
     async def send_message(self, text: str, parse_mode: str = "HTML", force: bool = False) -> bool:
         """Send a message with deduplication."""
@@ -70,6 +77,7 @@ class TelegramClient:
 
         try:
             await self._bot.send_message(chat_id=self.chat_id, text=text, parse_mode=parse_mode)
+            self._remember_sent(text)
             return True
         except Exception as exc:
             logger.error("Telegram send failed: %s", exc)
