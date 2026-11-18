@@ -110,7 +110,7 @@ class OutcomeLabeler:
 
         with self.repo._get_session() as session:
             stmt = (
-                select(CandleModel.close)
+                select(CandleModel.close, CandleModel.close_time)
                 .where(
                     CandleModel.symbol == symbol,
                     CandleModel.market == market,
@@ -120,8 +120,15 @@ class OutcomeLabeler:
                 .order_by(CandleModel.open_time.desc())
                 .limit(1)
             )
-            result = session.execute(stmt).scalar()
-            return float(result) if result else None
+            result = session.execute(stmt).first()
+            if not result:
+                return None
+            price, close_time = result
+            # Do not label against an old candle when the symbol has not been
+            # refreshed around the prediction horizon. Wait for fresh history.
+            if timestamp_ms - int(close_time) > 2 * 60 * 1000:
+                return None
+            return float(price) if price and float(price) > 0 else None
 
     def _calculate_costs(self, market: str, direction: str, entry: float, exit: float) -> float:
         """Calculate transaction costs for round trip."""
