@@ -148,3 +148,24 @@ def test_repository_persists_simulator_records_with_runtime_only_fields(tmp_path
     assert repo.get_open_positions("FUTURES")[0].position_id == "POS-RUNTIME-1"
     assert repo.get_open_orders("FUTURES")[0].order_id == "ORD-RUNTIME-1"
     db.close()
+
+
+def test_app_settings_repository_upserts_and_decodes_values(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'settings.db'}")
+    db.init_db()
+    repo = Repository(db.session_maker())
+
+    repo.save_app_settings({
+        "risk_per_trade_pct": 0.75,
+        "timeframes": ["1m", "5m", "1h"],
+        "telegram_enabled": False,
+    })
+    repo.save_app_settings({"risk_per_trade_pct": 1.0})
+
+    settings = repo.get_app_settings()
+    assert settings == {
+        "risk_per_trade_pct": 1.0,
+        "timeframes": ["1m", "5m", "1h"],
+        "telegram_enabled": False,
+    }
+    db.close()
