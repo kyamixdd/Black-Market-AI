@@ -52,7 +52,7 @@ class OutcomeLabeler:
         """Evaluate a single prediction's outcome."""
         # Check if enough time has passed
         created_ms = int(pred.created_at.timestamp() * 1000)
-        horizon_ms = self.horizon_minutes * 60 * 1000
+        horizon_ms = int(pred.horizon_minutes or self.horizon_minutes) * 60 * 1000
         current_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         if current_ms - created_ms < horizon_ms:
