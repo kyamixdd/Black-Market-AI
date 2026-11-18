@@ -40,7 +40,7 @@ class LiquidationEngine:
         leverage = position.get("leverage", 1.0)
         entry_price = position["entry_price"]
 
-        if position["side"] == "LONG":
+        if position["side"] in ("LONG", "BUY"):
             pnl_pct = (mark_price - entry_price) / entry_price
         else:
             pnl_pct = (entry_price - mark_price) / entry_price
