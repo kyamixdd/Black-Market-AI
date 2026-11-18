@@ -19,8 +19,19 @@ async function proxy(request: NextRequest, context: Context) {
   if (request.method !== "GET" && request.method !== "HEAD") init.body = await request.text();
   try {
     const upstream = await fetch(target, init);
+    const contentType = upstream.headers.get("content-type") || "application/json";
+    if (path[0] === "events" && upstream.ok && upstream.body) {
+      return new NextResponse(upstream.body, {
+        status: upstream.status,
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+        },
+      });
+    }
     const text = await upstream.text();
-    return new NextResponse(text, { status: upstream.status, headers: { "Content-Type": upstream.headers.get("content-type") || "application/json", "Cache-Control": "no-store" } });
+    return new NextResponse(text, { status: upstream.status, headers: { "Content-Type": contentType, "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json({ error: "Backend is unreachable" }, { status: 502 });
   }
