@@ -15,7 +15,7 @@ class FundingCalculator:
         if position["market"] != "FUTURES":
             return 0.0
         notional = position["amount"] * position["entry_price"] * position["leverage"]
-        if position["side"] == "LONG":
+        if position["side"] in ("LONG", "BUY"):
             return notional * funding_rate
         else:
             return -notional * funding_rate  # Shorts receive when rate is positive
