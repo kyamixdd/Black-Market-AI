@@ -14,7 +14,7 @@ from typing import Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.websockets import WebSocketState
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -234,6 +234,52 @@ for router in (
     settings.router,
 ):
     app.include_router(router, prefix="/api")
+
+
+@app.get("/api/events/stream")
+async def event_stream():
+    """Authenticated Server-Sent Events stream for browser clients."""
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Backend is starting")
+    queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+
+    async def on_event(event):
+        try:
+            queue.put_nowait(event.to_dict())
+        except asyncio.QueueFull:
+            # Drop the oldest dashboard update rather than blocking trading.
+            try:
+                queue.get_nowait()
+                queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                queue.put_nowait(event.to_dict())
+            except asyncio.QueueFull:
+                logger.warning("Dropping dashboard SSE event because its queue is full")
+
+    orchestrator.event_bus.subscribe_all(on_event)
+
+    async def stream():
+        try:
+            yield "retry: 3000\\n\\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield "data: " + json.dumps(event, default=str, separators=(",", ":")) + "\\n\\n"
+                    queue.task_done()
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\\n\\n"
+        finally:
+            subscribers = orchestrator.event_bus._subscribers.get("*", [])
+            if on_event in subscribers:
+                subscribers.remove(on_event)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.websocket("/ws")
