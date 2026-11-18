@@ -39,6 +39,16 @@ class ModelTrainer:
         X, y = self.dataset_builder.build_dataset()
         if len(X) == 0:
             return {"status": "insufficient_data", "samples": 0}
+        if X.ndim != 2 or not np.isfinite(X).all():
+            return {"status": "invalid_dataset", "samples": int(len(X))}
+        class_counts = {int(label): int(count) for label, count in zip(*np.unique(y, return_counts=True))}
+        if set(class_counts) != {0, 1, 2}:
+            return {
+                "status": "insufficient_class_diversity",
+                "samples": int(len(X)),
+                "class_counts": class_counts,
+                "required_classes": [0, 1, 2],
+            }
 
         # 2. Walk-forward validation
         validation = self.validator.validate_ensemble(X, y)
