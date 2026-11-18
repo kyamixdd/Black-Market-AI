@@ -4,7 +4,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from config import SIGNAL_DEDUP_WINDOW_SECONDS
 from core.event_bus import EventBus
+from core.event_models import EventType, make_event
 from intelligence.decision_engine import DecisionEngine
 from intelligence.feature_engine import FeatureEngine
 from intelligence.strategy_selector import StrategySelector
@@ -50,7 +52,7 @@ class IntelligenceCore:
 
         # State
         self._last_signals: dict[str, list] = {}
-        self._signal_ttl_seconds = 300  # 5 minutes
+        self._signal_ttl_seconds = SIGNAL_DEDUP_WINDOW_SECONDS
 
     def get_strategies(self) -> list:
         return self.strategies
@@ -100,8 +102,15 @@ class IntelligenceCore:
             # Store for deduplication
             self._store_signal(signal)
 
-            # Submit to decision engine
-            await self.decision_engine.evaluate_signal(signal)
+            # Publish the proposal so the orchestrator's single event pipeline
+            # can persist it and make the validated/rejected decision.
+            await self.event_bus.publish(make_event(
+                EventType.SIGNAL_PROPOSED,
+                "intelligence",
+                symbol=signal["symbol"],
+                market=signal["market"],
+                **{k: v for k, v in signal.items() if k not in {"symbol", "market"}},
+            ))
 
     def _is_duplicate(self, signal: dict[str, Any]) -> bool:
         key = f"{signal['symbol']}:{signal['market']}:{signal['strategy']}:{signal['direction']}"
