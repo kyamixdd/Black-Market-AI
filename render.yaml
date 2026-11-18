@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: blackmarket-ai-web
+    runtime: node
+    plan: free
+    rootDir: blackmarket-web
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BLACKMARKET_BACKEND_URL
+        sync: false
+      - key: BLACKMARKET_API_TOKEN
+        sync: false
+      - key: BLACKMARKET_WEB_PASSWORD
+        sync: false
+      - key: BLACKMARKET_SESSION_SECRET
+        generateValue: true
