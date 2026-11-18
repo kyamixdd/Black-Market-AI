@@ -563,3 +563,21 @@ def test_limit_order_fill_never_worsens_limit_price():
     assert buy_fill == 100.0
     assert sell_fill == 100.0
     assert market_buy_fill > 100.0
+
+
+def test_futures_liquidation_treats_buy_as_long():
+    from paper_trading.liquidation_engine import LiquidationEngine
+
+    engine = LiquidationEngine()
+    position = {
+        "market": "FUTURES",
+        "side": "BUY",
+        "entry_price": 100.0,
+        "leverage": 10.0,
+    }
+    liquidation_price = engine.calculate_liquidation_price(position)
+
+    assert liquidation_price < 100.0
+    assert engine.check_liquidation(position, liquidation_price - 0.01) is True
+    assert engine.check_liquidation(position, liquidation_price + 0.01) is False
+    assert engine.get_margin_ratio(position, 90.0) < engine.get_margin_ratio(position, 110.0)
