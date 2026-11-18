@@ -135,8 +135,8 @@ class TestLiquidationEngine:
         pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
         # At entry price, margin-to-notional ratio equals 1 / leverage.
         assert abs(le.get_margin_ratio(pos, 50000.0) - (1.0 / 3.0)) < 0.01
-        # At 45000, pnl = -10%, margin ratio = 0.9 * 3 = 2.7
-        assert abs(le.get_margin_ratio(pos, 45000.0) - 2.7) < 0.01
+        # At 45000, pnl is -10%, so ratio is 1/3 - 0.10.
+        assert abs(le.get_margin_ratio(pos, 45000.0) - (1.0 / 3.0 - 0.10)) < 0.01
 
     def test_margin_risk_detection(self):
         le = LiquidationEngine()
