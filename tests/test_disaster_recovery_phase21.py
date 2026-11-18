@@ -709,3 +709,15 @@ class TestPersistentEventQueue:
         queue = PersistentEventQueue(temp_db, "test_empty")
         queue.enqueue("NOOP", {})
         assert queue.dequeue(limit=0) == []
+
+    def test_dequeue_claims_highest_priority_first(self, temp_db):
+        from core.disaster_recovery import PersistentEventQueue
+
+        queue = PersistentEventQueue(temp_db, "test_priority")
+        low_id = queue.enqueue("LOW", {"level": "low"}, priority=1)
+        high_id = queue.enqueue("HIGH", {"level": "high"}, priority=10)
+
+        first = queue.dequeue(limit=1)
+        assert len(first) == 1
+        assert first[0]["event_id"] == high_id
+        assert first[0]["event_id"] != low_id
