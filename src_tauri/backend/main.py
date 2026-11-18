@@ -79,7 +79,25 @@ def _apply_persisted_settings(database: Database) -> None:
     from intelligence import intelligence_core as intelligence_module
     from paper_trading import simulator as simulator_module
 
-    settings = Repository(database.session_maker()).get_app_settings()
+    from src_tauri.backend.api.routes.schemas import SettingsRequest
+
+    stored_settings = Repository(database.session_maker()).get_app_settings()
+    try:
+        settings = SettingsRequest.model_validate(stored_settings).model_dump(exclude_none=True)
+    except Exception as exc:
+        raise RuntimeError("Persisted application settings failed validation; refusing unsafe startup.") from exc
+    if settings.get("spot_enabled", config.SPOT_ENABLED) is False and settings.get(
+        "futures_enabled", config.USDM_FUTURES_ENABLED
+    ) is False:
+        raise RuntimeError("Persisted settings disable both markets; refusing startup.")
+    if settings.get("risk_per_trade_pct", config.RISK_PER_TRADE_PCT) > settings.get(
+        "risk_max_total_open_pct", config.RISK_MAX_TOTAL_OPEN_PCT
+    ):
+        raise RuntimeError("Persisted risk settings are inconsistent; refusing startup.")
+    if settings.get("telegram_enabled", config.TELEGRAM_ENABLED) and not (
+        config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID
+    ):
+        raise RuntimeError("Persisted settings enable Telegram without configured credentials.")
     targets = {
         "spot_enabled": ("SPOT_ENABLED", bool, (config, orchestrator_module, scanner_module)),
         "futures_enabled": ("USDM_FUTURES_ENABLED", bool, (config, orchestrator_module, scanner_module)),
