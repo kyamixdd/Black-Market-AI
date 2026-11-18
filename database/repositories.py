@@ -504,6 +504,26 @@ class Repository:
             session.commit()
             return ev.event_id
 
+    def update_system_event_status(self, event_id: str, status: str) -> bool:
+        """Update a persisted queue event's status without losing its payload."""
+        with self._get_session() as session:
+            event = session.get(SystemEventModel, event_id)
+            if event is None:
+                return False
+            try:
+                payload = json.loads(event.payload)
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+            except (TypeError, json.JSONDecodeError):
+                logger.exception("Cannot update malformed system event payload %s", event_id)
+                return False
+            if not isinstance(payload, dict):
+                return False
+            payload["status"] = status
+            event.payload = json.dumps(payload, default=str, separators=(",", ":"))
+            session.commit()
+            return True
+
     def save_notification(self, notif: dict[str, Any]) -> int:
         with self._get_session() as session:
             obj = NotificationModel(**notif)
