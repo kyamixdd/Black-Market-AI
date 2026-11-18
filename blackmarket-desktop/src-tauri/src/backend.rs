@@ -834,7 +834,7 @@ fn hide_console(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_health_response, Probe};
+    use super::{parse_health_response, validate_api_token, Probe};
 
     #[test]
     fn health_check_requires_backend_database_and_websocket_readiness() {
@@ -857,3 +857,16 @@ mod tests {
         ));
     }
 }
+    #[test]
+    fn accepts_local_and_shared_hex_api_tokens() {
+        assert!(validate_api_token(&"a".repeat(32)).is_ok());
+        assert!(validate_api_token(&"b".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn rejects_weak_or_non_hex_api_tokens() {
+        assert!(validate_api_token("short").is_err());
+        assert!(validate_api_token(&"g".repeat(64)).is_err());
+        assert!(validate_api_token(&"a".repeat(129)).is_err());
+    }
+
