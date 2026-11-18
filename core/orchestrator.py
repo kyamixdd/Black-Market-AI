@@ -516,7 +516,7 @@ class Orchestrator:
                 )
                 if candle["close_time"] <= now_ms
             ]
-            if len(closed) >= 20:
+            if len(closed) >= 50:
                 ohlc_data[timeframe] = {
                     "open": np.asarray([c["open"] for c in closed], dtype=np.float32),
                     "high": np.asarray([c["high"] for c in closed], dtype=np.float32),
