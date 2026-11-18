@@ -19,25 +19,36 @@ class DecisionEngine:
         self.confidence_engine = ConfidenceEngine()
 
     async def evaluate_signal(self, signal: dict[str, Any]) -> None:
-        """Validate a proposed signal and publish if high quality."""
-        # Check basic rules
+        """Validate a proposed signal and publish a terminal decision event."""
+        signal = dict(signal)
+        signal_id = signal.get("signal_id", "unknown")
+
         is_valid, reason = self.validator.validate(signal)
         if not is_valid:
-            logger.debug("Signal %s rejected: %s", signal["signal_id"], reason)
+            signal["reject_reason"] = reason
+            await self.event_bus.publish(make_event(
+                EventType.SIGNAL_REJECTED,
+                "decision_engine",
+                **signal,
+            ))
+            logger.info("Signal %s rejected: %s", signal_id, reason)
             return
-        # Evaluate confidence
+
         confidence = self.confidence_engine.calculate(signal)
         signal["confidence"] = confidence
-        # High confidence threshold
         if confidence >= 0.65:
             await self.event_bus.publish(make_event(
-                EventType.SIGNAL_VALIDATED, "decision_engine",
-                symbol=signal["symbol"], market=signal["market"],
-                **signal
+                EventType.SIGNAL_VALIDATED,
+                "decision_engine",
+                **signal,
             ))
-            logger.info("Signal %s validated (conf: %.2f)", signal["signal_id"], confidence)
-        else:
-            await self.event_bus.publish(make_event(
-                EventType.SIGNAL_REJECTED, "decision_engine",
-                reason="Low confidence", **signal
-            ))
+            logger.info("Signal %s validated (confidence %.2f)", signal_id, confidence)
+            return
+
+        signal["reject_reason"] = "Low confidence"
+        await self.event_bus.publish(make_event(
+            EventType.SIGNAL_REJECTED,
+            "decision_engine",
+            **signal,
+        ))
+        logger.info("Signal %s rejected: low confidence %.2f", signal_id, confidence)
