@@ -280,57 +280,139 @@ class IdempotentEventProcessor:
 
 
 class PersistentEventQueue:
-    """Persistent queue for critical events that must not be lost."""
+    """SQLite-backed queue for critical events that must not be lost."""
 
     def __init__(self, db: Database, queue_name: str = "critical_events"):
         self.db = db
         self.queue_name = queue_name
+        self._event_type_prefix = f"QUEUE_{queue_name}_"
         self._lock = threading.RLock()
         self._ensure_table()
 
     def _ensure_table(self) -> None:
-        """Ensure queue table exists."""
-        from database.connection import Database
-        # Table creation handled by database migrations
-        pass
+        """Ensure the shared system-events table exists before enqueueing."""
+        self.db.init_db()
+
+    @staticmethod
+    def _decode_payload(raw_payload: str) -> dict:
+        """Decode current and legacy double-encoded queue payloads safely."""
+        try:
+            payload = json.loads(raw_payload)
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            return payload if isinstance(payload, dict) else {}
+        except (TypeError, json.JSONDecodeError):
+            logger.exception("Ignoring malformed persistent queue payload")
+            return {}
 
     def enqueue(self, event_type: str, payload: dict, priority: int = 0) -> str:
-        """Add event to persistent queue."""
+        """Persist a pending queue item and return its unique event ID."""
         import uuid
-        event_id = str(uuid.uuid4())[:8]
+
+        if not isinstance(payload, dict):
+            raise TypeError("Persistent queue payload must be a dictionary")
+        event_id = str(uuid.uuid4())
+        queued_payload = {
+            "queue": self.queue_name,
+            "type": event_type,
+            "payload": payload,
+            "priority": int(priority),
+            "status": "PENDING",
+            "attempts": 0,
+            "enqueued_at": datetime.now(timezone.utc).isoformat(),
+        }
         with self._lock:
-            # Store in database
             from database.repositories import Repository
-            repo = Repository(self.db.session_maker())
-            repo.save_system_event({
+
+            Repository(self.db.session_maker()).save_system_event({
                 "event_id": event_id,
-                "event_type": f"QUEUE_{self.queue_name}_{event_type}",
+                "event_type": f"{self._event_type_prefix}{event_type}",
                 "source": "PersistentEventQueue",
                 "symbol": None,
                 "market": None,
-                "payload": json.dumps({
-                    "queue": self.queue_name,
-                    "type": event_type,
-                    "payload": payload,
-                    "priority": priority,
-                    "enqueued_at": datetime.now(timezone.utc).isoformat(),
-                }),
+                "payload": queued_payload,
             })
         return event_id
 
-    def dequeue(self, limit: int = 100) -> list[dict]:
-        """Dequeue events for processing."""
-        with self._lock:
-            # This would need a proper queue table implementation
-            # For now, return empty - full implementation needs queue table
+    def dequeue(self, limit: int = 100, visibility_timeout_seconds: int = 300) -> list[dict]:
+        """Atomically claim pending items, or items whose prior claim timed out."""
+        if limit < 1:
             return []
+        from sqlalchemy import select
+        from database.models import SystemEventModel
+
+        now = datetime.now(timezone.utc)
+        claimed: list[dict] = []
+        with self._lock:
+            with self.db.session_maker() as session:
+                rows = session.scalars(
+                    select(SystemEventModel)
+                    .where(SystemEventModel.event_type.like(f"{self._event_type_prefix}%"))
+                    .order_by(SystemEventModel.timestamp.asc())
+                ).all()
+
+                for row in rows:
+                    if len(claimed) >= limit:
+                        break
+                    payload = self._decode_payload(row.payload)
+                    if payload.get("queue") != self.queue_name:
+                        continue
+                    status = payload.get("status", "PENDING")
+                    if status == "COMPLETED":
+                        continue
+                    if status == "PROCESSING":
+                        claimed_at_raw = payload.get("claimed_at")
+                        try:
+                            claimed_at = datetime.fromisoformat(claimed_at_raw)
+                            if claimed_at.tzinfo is None:
+                                claimed_at = claimed_at.replace(tzinfo=timezone.utc)
+                        except (TypeError, ValueError):
+                            claimed_at = None
+                        if claimed_at is not None and (
+                            now - claimed_at
+                        ).total_seconds() < max(1, visibility_timeout_seconds):
+                            continue
+
+                    previous_payload = row.payload
+                    payload["status"] = "PROCESSING"
+                    payload["attempts"] = int(payload.get("attempts", 0)) + 1
+                    payload["claimed_at"] = now.isoformat()
+                    updated_payload = json.dumps(payload, default=str)
+                    # Compare-and-swap prevents two processes from claiming the
+                    # same item based on the same previously-read payload.
+                    result = session.query(SystemEventModel).filter(
+                        SystemEventModel.event_id == row.event_id,
+                        SystemEventModel.payload == previous_payload,
+                    ).update(
+                        {SystemEventModel.payload: updated_payload},
+                        synchronize_session=False,
+                    )
+                    if result != 1:
+                        continue
+                    claimed.append({
+                        "event_id": row.event_id,
+                        "event_type": payload.get("type", ""),
+                        "payload": payload.get("payload", {}),
+                        "priority": int(payload.get("priority", 0)),
+                        "attempts": payload["attempts"],
+                        "enqueued_at": payload.get("enqueued_at"),
+                        "claimed_at": payload["claimed_at"],
+                    })
+                session.commit()
+
+        # Higher-priority items should be handled first within this claimed batch.
+        claimed.sort(key=lambda item: (-item["priority"], item["enqueued_at"] or ""))
+        return claimed
 
     def mark_completed(self, event_id: str) -> None:
-        """Mark queue event as completed."""
+        """Mark a claimed queue item completed; repeated calls are harmless."""
+        from database.repositories import Repository
+
         with self._lock:
-            from database.repositories import Repository
-            repo = Repository(self.db.session_maker())
-            repo.update_system_event_status(event_id, "COMPLETED")
+            Repository(self.db.session_maker()).update_system_event_status(
+                event_id, "COMPLETED"
+            )
+
 
 
 class PositionRecoveryManager:
