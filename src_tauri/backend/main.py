@@ -269,11 +269,7 @@ async def health_check():
     health = orchestrator.health_monitor.get_status()
     from config import AUTO_MODEL_TRAINING, PAPER_TRADING_ENABLED, SPOT_ENABLED, USDM_FUTURES_ENABLED
     market_data_active = bool(
-        orchestrator.scanner._running
-        and (
-            (SPOT_ENABLED and orchestrator.cache.get_market_tickers("SPOT"))
-            or (USDM_FUTURES_ENABLED and orchestrator.cache.get_market_tickers("FUTURES"))
-        )
+        orchestrator.scanner._running and orchestrator.has_fresh_market_data()
     )
     return {
         "status": health.get("status", "unknown"),
