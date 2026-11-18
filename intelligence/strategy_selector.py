@@ -30,6 +30,7 @@ class StrategySelector:
         return w
 
     def update_performance(self, strategy: str, win: bool, pnl_pct: float) -> None:
+        self.weights.setdefault(strategy, 1.0)
         if win:
             self.weights[strategy] = min(2.0, self.weights[strategy] * 1.02)
         else:
