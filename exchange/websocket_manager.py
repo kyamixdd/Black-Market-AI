@@ -31,6 +31,7 @@ class WebSocketManager:
         self._subscribed_streams: set[str] = set()
         self._spot_streams: list[str] = []
         self._futures_streams: list[str] = []
+        self._connected_streams: set[tuple[str, tuple[str, ...]]] = set()
 
     def add_handler(self, handler: Callable[[dict], Awaitable[None]]) -> None:
         self._handlers.append(handler)
@@ -46,20 +47,25 @@ class WebSocketManager:
                 await self.rate_limiter.acquire("websocket_conn", 1.0, timeout=30.0)
                 logger.info("Connecting WS to %s (%d streams)", base_url, len(streams))
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+                    connection_key = (market, tuple(streams))
+                    self._connected_streams.add(connection_key)
                     backoff = 1.0
-                    while self._running:
-                        msg = await ws.recv()
-                        try:
-                            data = json.loads(msg)
-                        except Exception:
-                            continue
-                        if isinstance(data, dict):
-                            data["_market"] = market
-                        for handler in self._handlers:
+                    try:
+                        while self._running:
+                            msg = await ws.recv()
                             try:
-                                await handler(data)
+                                data = json.loads(msg)
                             except Exception:
-                                logger.exception("WS handler failed")
+                                continue
+                            if isinstance(data, dict):
+                                data["_market"] = market
+                            for handler in self._handlers:
+                                try:
+                                    await handler(data)
+                                except Exception:
+                                    logger.exception("WS handler failed")
+                    finally:
+                        self._connected_streams.discard(connection_key)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -88,6 +94,11 @@ class WebSocketManager:
             if chunk:
                 t = asyncio.create_task(self._run_stream(FUTURES_WS_URL, chunk, "FUTURES"))
                 self._tasks.append(t)
+
+    @property
+    def connected(self) -> bool:
+        """Whether at least one exchange stream is currently connected."""
+        return bool(self._connected_streams)
 
     async def restart(self) -> None:
         """Restart active streams without leaving duplicate stream tasks behind."""
