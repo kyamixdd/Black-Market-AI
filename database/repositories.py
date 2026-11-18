@@ -192,13 +192,15 @@ class Repository:
     # --- Paper Orders & Positions ---
     def save_order(self, order: dict[str, Any]) -> str:
         with self._get_session() as session:
+            allowed = {column.key for column in PaperOrderModel.__table__.columns}
+            values = {key: value for key, value in order.items() if key in allowed}
             existing = session.get(PaperOrderModel, order["order_id"])
             if existing:
-                for k, v in order.items():
-                    setattr(existing, k, v)
+                for key, value in values.items():
+                    setattr(existing, key, value)
                 existing.updated_at = datetime.now(timezone.utc)
             else:
-                session.add(PaperOrderModel(**order))
+                session.add(PaperOrderModel(**values))
             session.commit()
             return order["order_id"]
 
@@ -211,12 +213,14 @@ class Repository:
 
     def save_position(self, pos: dict[str, Any]) -> str:
         with self._get_session() as session:
+            allowed = {column.key for column in PaperPositionModel.__table__.columns}
+            values = {key: value for key, value in pos.items() if key in allowed}
             existing = session.get(PaperPositionModel, pos["position_id"])
             if existing:
-                for k, v in pos.items():
-                    setattr(existing, k, v)
+                for key, value in values.items():
+                    setattr(existing, key, value)
             else:
-                session.add(PaperPositionModel(**pos))
+                session.add(PaperPositionModel(**values))
             session.commit()
             return pos["position_id"]
 
