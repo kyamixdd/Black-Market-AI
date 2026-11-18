@@ -229,6 +229,7 @@ def test_main_api_registers_requested_read_routes():
         "/api/learning",
         "/api/risk/status",
         "/api/activity",
+        "/api/events/stream",
         "/ws",
     }.issubset(paths)
 
