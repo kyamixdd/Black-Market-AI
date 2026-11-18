@@ -931,9 +931,12 @@ class DisasterRecoveryOrchestrator:
             result = await self.rest_resync.resync_all()
             logger.warning("Emergency REST resynchronization result: %s", result)
             await self.ws_reconnection.handle_disconnect()
-            self.watchdog.heartbeat()
         except Exception:
             logger.exception("Emergency recovery attempt failed")
+        finally:
+            # Re-arm the watchdog so a failed recovery is retried after another
+            # stall interval rather than permanently suppressing future attempts.
+            self.watchdog.heartbeat()
 
 
 def create_disaster_recovery_orchestrator(
