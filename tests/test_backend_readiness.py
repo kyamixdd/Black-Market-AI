@@ -144,6 +144,16 @@ def test_persisted_settings_are_applied_before_service_construction(monkeypatch)
     from market import scanner as scanner_module
     from paper_trading import simulator as simulator_module
 
+    for module, names in (
+        (config, ("SPOT_ENABLED", "USDM_FUTURES_ENABLED", "TIMEFRAMES", "SPOT_INITIAL_BALANCE", "RISK_PER_TRADE_PCT")),
+        (orchestrator_module, ("SPOT_ENABLED", "USDM_FUTURES_ENABLED", "TIMEFRAMES")),
+        (scanner_module, ("SPOT_ENABLED", "USDM_FUTURES_ENABLED")),
+        (intelligence_module, ("TIMEFRAMES",)),
+        (simulator_module, ("SPOT_INITIAL_BALANCE", "RISK_PER_TRADE_PCT")),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, getattr(module, name))
+
     persisted = {
         "spot_enabled": False,
         "futures_enabled": True,
