@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 
 import numpy as np
@@ -20,8 +21,19 @@ class CandleManager:
 
     def __init__(self):
         self._candles: dict[tuple, list[dict]] = defaultdict(list)
-        self._max_per_series = 500
+        self._max_per_series = 250
+        # Keep a bounded in-memory working set on low-memory desktop machines.
+        self._max_series = 1800
+        self._last_access: dict[tuple, float] = {}
         self._last_open_time: dict[tuple, int] = {}
+
+    def _touch_series(self, key: tuple) -> None:
+        if key not in self._candles and len(self._candles) >= self._max_series:
+            oldest = min(self._last_access, key=self._last_access.get)
+            self._candles.pop(oldest, None)
+            self._last_access.pop(oldest, None)
+            self._last_open_time.pop(oldest, None)
+        self._last_access[key] = time.monotonic()
 
     def add_candle(self, market: str, symbol: str, timeframe: str,
                    open_time: int, open_: float, high: float, low: float,
@@ -34,6 +46,7 @@ class CandleManager:
             "low": low, "close": close, "volume": volume,
             "close_time": close_time or open_time + TIMEFRAME_SECONDS.get(timeframe, 60) * 1000 - 1,
         }
+        self._touch_series(key)
         series = self._candles[key]
         # REST refreshes overlap hundreds of previously fetched candles. Replace
         # matching timestamps instead of appending the same history repeatedly.
@@ -66,6 +79,7 @@ class CandleManager:
         series = self._candles.get(key, [])
         if not series or series[-1]["open_time"] != open_time:
             return False
+        self._last_access[key] = time.monotonic()
         series[-1] = {
             "open_time": open_time,
             "open": open_,
@@ -103,6 +117,8 @@ class CandleManager:
     def get_series(self, market: str, symbol: str, timeframe: str, limit: int = 200) -> list[dict]:
         key = (market, symbol, timeframe)
         series = self._candles.get(key, [])
+        if series:
+            self._last_access[key] = time.monotonic()
         return series[-limit:] if series else []
 
     def get_closes(self, market: str, symbol: str, timeframe: str, limit: int = 200) -> np.ndarray:
@@ -147,6 +163,7 @@ class CandleManager:
 
     def clear(self) -> None:
         self._candles.clear()
+        self._last_access.clear()
         self._last_open_time.clear()
 
     async def collect_historical(self, spot_client, futures_client, market: str, symbol: str,
