@@ -532,7 +532,7 @@ async def test_realized_trade_pnl_includes_entry_and_exit_fees():
 
     trade = sim.closed_trades[0]
     assert trade["fee"] == 0.2
-    assert sim.spot_balance == pytest.approx(500.0 + trade["pnl"])
+    assert sim.spot_balance == pytest.approx(sim.initial_spot_balance + trade["pnl"])
     assert sim.daily_pnl == pytest.approx(trade["pnl"])
 
 def test_simulator_rejects_short_positions_on_spot_market():
