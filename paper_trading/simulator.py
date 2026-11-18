@@ -390,8 +390,13 @@ class Simulator:
         volume_24h = self._get_volume_24h(market, position["symbol"])
         # Stop-loss/take-profit exits are market executions even when entry
         # was a limit order; they must still pay spread and slippage.
+        # Closing a long is a sell; closing a short is a buy. Use the
+        # closing transaction side so spread/slippage always work against us.
+        exit_direction = (
+            "SELL" if position["side"] in ("LONG", "BUY") else "BUY"
+        )
         fill_price = self.fee_calc.get_fill_price(
-            market, position["side"], "MARKET", exit_price,
+            market, exit_direction, "MARKET", exit_price,
             position["amount"], position["leverage"], volume_24h
         )
 
