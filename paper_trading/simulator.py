@@ -69,6 +69,22 @@ class Simulator:
     def _get_positions(self, market: str) -> dict[str, dict]:
         return self.spot_positions if market == "SPOT" else self.futures_positions
 
+    def _get_total_equity(self) -> float:
+        """Free cash plus reserved margin and current unrealized P&L."""
+        spot_margin = sum(
+            p.get("margin", p.get("entry_price", 0.0) * p.get("amount", 0.0))
+            for p in self.spot_positions.values()
+        )
+        futures_margin = sum(
+            p.get("margin", p.get("entry_price", 0.0) * p.get("amount", 0.0))
+            for p in self.futures_positions.values()
+        )
+        unrealized = sum(
+            p.get("unrealized_pnl", 0.0)
+            for p in list(self.spot_positions.values()) + list(self.futures_positions.values())
+        )
+        return max(0.0, self.spot_balance + self.futures_balance + spot_margin + futures_margin + unrealized)
+
     def _get_total_risk(self) -> float:
         total = 0.0
         for pos in self.spot_positions.values():
