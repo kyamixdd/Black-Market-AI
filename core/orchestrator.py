@@ -154,15 +154,22 @@ class Orchestrator:
         # before an unexpected process exit.
         snapshot_record = self.repo.get_simulator_state_record()
         latest_account_event = self.repo.get_latest_account_event_timestamp()
+        latest_account_record = self.repo.get_latest_account_record_timestamp()
         if snapshot_record:
             saved_state, snapshot_updated_at = snapshot_record
             if snapshot_updated_at and snapshot_updated_at.tzinfo is None:
                 snapshot_updated_at = snapshot_updated_at.replace(tzinfo=timezone.utc)
             if latest_account_event and latest_account_event.tzinfo is None:
                 latest_account_event = latest_account_event.replace(tzinfo=timezone.utc)
+            if latest_account_record and latest_account_record.tzinfo is None:
+                latest_account_record = latest_account_record.replace(tzinfo=timezone.utc)
+            latest_account_change = max(
+                (value for value in (latest_account_event, latest_account_record) if value is not None),
+                default=None,
+            )
             if (
-                latest_account_event is None
-                or (snapshot_updated_at is not None and snapshot_updated_at >= latest_account_event)
+                latest_account_change is None
+                or (snapshot_updated_at is not None and snapshot_updated_at >= latest_account_change)
             ):
                 self.simulator.restore_state(saved_state)
                 logger.info("Restored current persisted simulator snapshot")
@@ -434,9 +441,9 @@ class Orchestrator:
                 "market": event.market,
                 "payload": event.payload,
             }
-            self.repo.save_system_event(event_dict)
-            # Persist account-changing records in the same event-pipeline step,
-            # before downstream handlers or a process crash can lose the state.
+            # Persist account records before the event journal entry. Startup
+            # compares both timestamps to avoid restoring a stale snapshot if
+            # the process exits between this write and the next snapshot.
             if event.event_type == EventType.POSITION_OPENED:
                 position = event.payload.get("position")
                 if position:
@@ -449,6 +456,7 @@ class Orchestrator:
                 EventType.ORDER_PLACED, EventType.ORDER_FILLED, EventType.TRADE_REJECTED
             }:
                 self._persist_paper_order(event.payload.get("order"))
+            self.repo.save_system_event(event_dict)
         except Exception as exc:
             logger.error("Failed to persist event %s: %s", event.event_id, exc)
 
