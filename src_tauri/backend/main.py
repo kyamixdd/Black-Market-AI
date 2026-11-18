@@ -100,49 +100,61 @@ def _api_host() -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager."""
+    """Application lifespan manager with cleanup for partial startup failures."""
     global orchestrator, db, bridge, ws_manager
     orchestrator_task: asyncio.Task | None = None
 
     logger.info("Starting BlackMarket AI Backend Adapter...")
-
-    # Validate configuration
-    validate_config_or_exit()
-
-    # Initialize database
-    db = Database(DATABASE_URL)
-    db.init_db()
-    integrity = db.integrity_check()
-    if integrity.lower() != "ok":
-        raise RuntimeError(f"SQLite database integrity check failed: {integrity}")
-
-    # Create orchestrator
-    orchestrator = Orchestrator(db)
-    await orchestrator.initialize()
-
-    # Create bridge
-    bridge = get_bridge(orchestrator)
-
-    # Create WebSocket manager
-    ws_manager = WebSocketManager(orchestrator.event_bus)
-    await ws_manager.start()
-    orchestrator_task = asyncio.create_task(orchestrator.run(), name="blackmarket-orchestrator")
-
-    logger.info("BlackMarket AI Backend Adapter started")
-
     try:
+        # Validate configuration before opening external resources.
+        validate_config_or_exit()
+
+        # Initialize and verify the database before constructing services.
+        db = Database(DATABASE_URL)
+        db.init_db()
+        integrity = db.integrity_check()
+        if integrity.lower() != "ok":
+            raise RuntimeError(f"SQLite database integrity check failed: {integrity}")
+
+        # Initialize the trading engine and local API adapters.
+        orchestrator = Orchestrator(db)
+        await orchestrator.initialize()
+        bridge = get_bridge(orchestrator)
+
+        ws_manager = WebSocketManager(orchestrator.event_bus)
+        await ws_manager.start()
+        orchestrator_task = asyncio.create_task(
+            orchestrator.run(), name="blackmarket-orchestrator"
+        )
+
+        logger.info("BlackMarket AI Backend Adapter started")
         yield
     finally:
         logger.info("Shutting down BlackMarket AI Backend Adapter...")
-        if orchestrator:
-            await orchestrator.stop()
-        if orchestrator_task and not orchestrator_task.done():
+        # Each cleanup stage is isolated so a failure cannot prevent the
+        # remaining clients and the database from being released.
+        if orchestrator is not None:
+            try:
+                await orchestrator.stop()
+            except Exception:
+                logger.exception("Orchestrator shutdown failed")
+        if orchestrator_task is not None and not orchestrator_task.done():
             orchestrator_task.cancel()
             await asyncio.gather(orchestrator_task, return_exceptions=True)
-        if ws_manager:
-            await ws_manager.shutdown()
-        if db:
-            db.close()
+        if ws_manager is not None:
+            try:
+                await ws_manager.shutdown()
+            except Exception:
+                logger.exception("Dashboard WebSocket shutdown failed")
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                logger.exception("Database shutdown failed")
+        orchestrator = None
+        bridge = None
+        ws_manager = None
+        db = None
         logger.info("BlackMarket AI Backend Adapter stopped")
 
 
