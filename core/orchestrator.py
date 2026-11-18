@@ -156,35 +156,37 @@ class Orchestrator:
         self.event_bus.subscribe(EventType.MODEL_PROMOTED, self._on_model_promoted)
         self.event_bus.subscribe(EventType.MODEL_ROLLED_BACK, self._on_model_rolled_back)
 
+    def _event_signal(self, event) -> dict[str, Any]:
+        """Rehydrate event envelope fields consumed by make_event()."""
+        return {**event.payload, "symbol": event.symbol, "market": event.market}
+
     async def _on_signal_proposed(self, event) -> None:
-        await self.decision_engine.evaluate_signal(event.payload)
+        await self.decision_engine.evaluate_signal(self._event_signal(event))
 
     async def _on_signal_validated(self, event) -> None:
         if not PAPER_TRADING_ENABLED:
             return
-        # Add strategy weight
-        strategy = event.payload.get("strategy")
-        regime = event.payload.get("regime")
-        weight = self.strategy_selector.get_weight(strategy, regime)
-        event.payload["_weight"] = weight
-        await self.simulator.execute_signal(event.payload)
+        signal = self._event_signal(event)
+        strategy = signal.get("strategy")
+        regime = signal.get("regime")
+        signal["_weight"] = self.strategy_selector.get_weight(strategy, regime)
+        await self.simulator.execute_signal(signal)
 
-        # Send Telegram notification for strong setups (high confidence)
-        if self.telegram and event.payload.get("confidence", 0) >= 0.75:
-            await self.telegram.send_strong_setup(event.payload)
+        if self.telegram and signal.get("confidence", 0) >= 0.75:
+            await self.telegram.send_strong_setup(signal)
 
     async def _on_signal_rejected(self, event) -> None:
         if self.telegram:
-            await self.telegram.send_signal_update(event.payload, "rejected")
+            await self.telegram.send_signal_update(self._event_signal(event), "rejected")
 
     async def _on_signal_expired(self, event) -> None:
         if self.telegram:
-            await self.telegram.send_signal_update(event.payload, "expired")
+            await self.telegram.send_signal_update(self._event_signal(event), "expired")
 
     async def _on_market_data(self, event) -> None:
         payload = event.payload
-        market = payload.get("market", "SPOT")
-        symbol = payload.get("symbol")
+        market = event.market or payload.get("market", "SPOT")
+        symbol = event.symbol or payload.get("symbol")
         price = payload.get("price")
         if price is None and symbol:
             price = self.cache.get_price(market, symbol)
