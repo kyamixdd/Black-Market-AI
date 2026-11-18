@@ -567,15 +567,3 @@ class Repository:
             from database.models import SystemEventModel
             return session.get(SystemEventModel, event_id) is not None
 
-    def update_system_event_status(self, event_id: str, status: str) -> None:
-        """Update system event status."""
-        with self._get_session() as session:
-            from database.models import SystemEventModel
-            ev = session.get(SystemEventModel, event_id)
-            if ev:
-                # Update payload with status
-                import json
-                payload = json.loads(ev.payload)
-                payload["status"] = status
-                ev.payload = json.dumps(payload)
-                session.commit()
