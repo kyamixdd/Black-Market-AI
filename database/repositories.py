@@ -21,6 +21,7 @@ from .models import (
     StrategyMetricsModel,
     SymbolModel,
     SystemEventModel,
+    SimulatorStateModel,
     TradeHistoryModel,
 )
 
@@ -371,6 +372,30 @@ class Repository:
             return None
 
     # --- System Events & Notifications ---
+    def save_simulator_state(self, state: dict[str, Any]) -> None:
+        """Upsert the latest paper-account state for crash recovery."""
+        with self._get_session() as session:
+            record = session.get(SimulatorStateModel, "default")
+            payload = json.dumps(state, default=lambda value: value.isoformat() if hasattr(value, "isoformat") else str(value))
+            if record:
+                record.payload = payload
+                record.updated_at = datetime.now(timezone.utc)
+            else:
+                session.add(SimulatorStateModel(state_id="default", payload=payload))
+            session.commit()
+
+    def get_simulator_state(self) -> dict[str, Any] | None:
+        with self._get_session() as session:
+            record = session.get(SimulatorStateModel, "default")
+            if not record:
+                return None
+            try:
+                state = json.loads(record.payload)
+            except (TypeError, json.JSONDecodeError):
+                logger.exception("Stored simulator state is malformed")
+                return None
+            return state if isinstance(state, dict) else None
+
     def save_system_event(self, event_dict: dict[str, Any]) -> str:
         with self._get_session() as session:
             ev = SystemEventModel(
