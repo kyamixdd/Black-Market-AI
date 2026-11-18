@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import uuid
 from typing import Any
+
+import numpy as np
 
 from config import (
     PAPER_TRADING_ENABLED,
     SPOT_ENABLED,
     TELEGRAM_ENABLED,
     USDM_FUTURES_ENABLED,
+    PREDICTION_HORIZON_MINUTES,
 )
 from core.event_bus import EventBus
 from core.disaster_recovery import create_disaster_recovery_orchestrator
@@ -29,6 +34,7 @@ from intelligence.strategy_selector import StrategySelector
 from learning.predictor import Predictor
 from learning.performance_analyzer import PerformanceAnalyzer
 from learning.outcome_labeler import OutcomeLabeler
+from learning.trainer import LearningOrchestrator
 from market.candle_manager import CandleManager
 from market.data_integrity import DataIntegrityGuardian
 from market.market_cache import MarketCache
@@ -64,6 +70,11 @@ class Orchestrator:
         self.integrity: DataIntegrityGuardian = DataIntegrityGuardian(self.candle_manager)
         # Intelligence core
         self.intelligence: IntelligenceCore = IntelligenceCore(self.event_bus, self.candle_manager, self.integrity)
+        # Keep one shared model/feature engine for inference and scheduled training.
+        self.intelligence.predictor = self.predictor
+        self.intelligence.feature_engine = self.feature_engine
+        self.learning_orchestrator = LearningOrchestrator(self.repo, self.predictor)
+        self._last_prediction_candle: dict[str, int] = {}
         # Learning accountability
         self.outcome_labeler = OutcomeLabeler(self.repo, self.simulator)
         self.performance_analyzer = PerformanceAnalyzer(self.repo)
@@ -302,6 +313,7 @@ class Orchestrator:
         self._event_bus_task = asyncio.create_task(self.event_bus.run(), name="blackmarket-event-bus")
         await self.scanner.start()
         self._tasks.append(asyncio.create_task(self._analysis_loop(), name="blackmarket-analysis"))
+        self._tasks.append(asyncio.create_task(self._learning_loop(), name="blackmarket-learning"))
         logger.info("BlackMarket AI running")
         # Main loop - keep running until stopped
         while self._running:
@@ -353,6 +365,7 @@ class Orchestrator:
                                 for candle in candles_to_save
                             ])
                     signals = await self.intelligence.analyze_symbol(symbol, market)
+                    await self._record_prediction(symbol, market, signals)
                     for signal in signals:
                         await self.event_bus.publish(make_event(
                             EventType.SIGNAL_PROPOSED,
@@ -383,6 +396,126 @@ class Orchestrator:
                 self._analysis_cursors[market] = (cursor + len(batch)) % len(tickers)
                 await asyncio.gather(*(analyze_one(market, symbol) for symbol in batch))
             await asyncio.sleep(60)
+
+    async def _record_prediction(self, symbol: str, market: str, signals: list[dict[str, Any]]) -> None:
+        """Persist one leakage-safe prediction per newly closed 15m candle."""
+        now_ms = int(asyncio.get_running_loop().time() * 1000)
+        # Exchange candle timestamps are wall-clock epoch milliseconds.
+        from datetime import datetime, timezone
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+        ohlc_data: dict[str, dict[str, np.ndarray]] = {}
+        for timeframe in ("15m", "1h", "4h", "1d"):
+            closed = [
+                candle for candle in self.candle_manager.get_series(
+                    market, symbol, timeframe, limit=200
+                )
+                if candle["close_time"] <= now_ms
+            ]
+            if len(closed) >= 20:
+                ohlc_data[timeframe] = {
+                    "open": np.asarray([c["open"] for c in closed], dtype=np.float32),
+                    "high": np.asarray([c["high"] for c in closed], dtype=np.float32),
+                    "low": np.asarray([c["low"] for c in closed], dtype=np.float32),
+                    "close": np.asarray([c["close"] for c in closed], dtype=np.float32),
+                    "volume": np.asarray([c["volume"] for c in closed], dtype=np.float32),
+                }
+
+        primary = ohlc_data.get("15m")
+        if primary is None or len(primary["close"]) < 50:
+            return
+        candle_open_time = int(self.candle_manager.get_series(
+            market, symbol, "15m", limit=1
+        )[-1]["open_time"])
+        key = f"{market}:{symbol}"
+        if self._last_prediction_candle.get(key) == candle_open_time:
+            return
+
+        features = self.feature_engine.build_features(symbol, market, ohlc_data)
+        if features.size == 0 or not np.isfinite(features).all():
+            return
+
+        prediction = self.predictor.predict(features)
+        linked_signal = max(
+            signals,
+            key=lambda item: float(item.get("raw_score", 0.0)),
+            default=None,
+        )
+        if not self.predictor.is_trained:
+            # Bootstrap labels from actual strategy signals until the first ML
+            # model exists; do not manufacture predictions when no strategy fires.
+            if linked_signal is None:
+                return
+            predicted_class = (
+                "UP" if linked_signal["direction"] in ("LONG", "BUY") else "DOWN"
+            )
+            confidence = max(0.5, min(0.95, float(linked_signal.get("raw_score", 50.0)) / 100.0))
+            residual = (1.0 - confidence) / 2.0
+            probabilities = (
+                (confidence, residual, residual) if predicted_class == "UP"
+                else (residual, residual, confidence)
+            )
+            prob_up, prob_flat, prob_down = probabilities
+        else:
+            predicted_class = prediction["predicted_class"]
+            confidence = float(prediction["confidence"])
+            prob_up = float(prediction["prob_up"])
+            prob_down = float(prediction["prob_down"])
+            prob_flat = float(prediction["prob_flat"])
+
+        prediction_id = f"PRED-{uuid.uuid4().hex}"
+        self.repo.save_prediction({
+            "prediction_id": prediction_id,
+            "signal_id": linked_signal.get("signal_id") if linked_signal else None,
+            "symbol": symbol,
+            "market": market,
+            "timeframe": "15m",
+            "model_version": str(prediction.get("model_version", self.predictor.version)),
+            "strategy_version": "hybrid-v1",
+            "regime": linked_signal.get("regime", "UNKNOWN") if linked_signal else "UNKNOWN",
+            "horizon_minutes": PREDICTION_HORIZON_MINUTES,
+            "prob_up": prob_up,
+            "prob_down": prob_down,
+            "prob_flat": prob_flat,
+            "predicted_class": predicted_class,
+            "confidence": confidence,
+            "feature_values": json.dumps(features.tolist()),
+        })
+        self._last_prediction_candle[key] = candle_open_time
+        await self.event_bus.publish(make_event(
+            EventType.PREDICTION,
+            "learning",
+            symbol=symbol,
+            market=market,
+            prediction_id=prediction_id,
+            predicted_class=predicted_class,
+            confidence=confidence,
+        ))
+
+    async def _learning_loop(self) -> None:
+        """Run the outcome-labeling and hybrid retraining cycle once per hour."""
+        while self._running:
+            try:
+                def run_cycle():
+                    return asyncio.run(self.learning_orchestrator.run_learning_cycle())
+
+                report = await asyncio.to_thread(run_cycle)
+                await self.event_bus.publish(make_event(
+                    EventType.LEARNING_UPDATE,
+                    "learning",
+                    report=report,
+                ))
+                if report.get("promoted"):
+                    await self.event_bus.publish(make_event(
+                        EventType.MODEL_PROMOTED,
+                        "learning",
+                        version=report["promoted"],
+                    ))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Scheduled learning cycle failed")
+            await asyncio.sleep(3600)
 
     async def _persist_state(self) -> None:
         try:
