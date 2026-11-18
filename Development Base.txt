@@ -1,0 +1,986 @@
+# BLACKMARKET AI — Final Development Blueprint
+
+SPECIFICATIONS FINALIZED
+
+LOCAL-FIRST
+
+PAPER TRADING ONLY
+
+We're building BlackMarket AI, a local Python-based Binance market intelligence and self-learning paper-trading system.
+
+Its purpose is to continuously observe the entire eligible Binance Spot and USDⓈ-M Futures market, identify opportunities, test its own predictions, learn from outcomes, and send structured trade proposals to Telegram.
+
+The system will not need
+
+- Binance API keys.
+- Binance account access.
+- OpenAI or other cloud AI APIs.
+- Paid AI subscriptions.
+- Cloud-hosted machine-learning services.
+- Real-money trading permissions.
+
+It will need an internet connection for public Binance market data and a Telegram bot token for notifications.
+
+## 1. Finalized configuration
+
+# BLACKMARKET AI
+
+CONFIG LOCKED
+
+LEARNING ENGINE
+
+Hybrid ML + Adaptive
+
+MARKET COVERAGE
+
+All eligible pairs
+
+SPOT CAPITAL
+
+# 500 USDT
+
+FUTURES CAPITAL
+
+# 500 USDT
+
+Analysis timeframes
+
+1m
+
+3m
+
+5m
+
+15m
+
+30m
+
+1h
+
+4h
+
+1d
+
+1w
+
+ Configuration        Decision             
+ -------------------  -------------------- 
+ Market data          Public Binance feeds 
+ Learning             Hybrid               
+ Paper trading        Local simulator      
+ Database             SQLite               
+ Notifications        Telegram             
+ Terminal             Rich + Textual       
+ AI inference         Local Python models  
+ Real trading         Disabled             
+ Binance credentials  None                 
+ Cloud AI             None                 
+
+Capital allocation 500 USDT for Spot and 500 USDT for Futures, tracked independently. Total virtual starting capital is 1,000 USDT.
+
+The nine timeframes are used for multi-timeframe analysis, not nine separate independent trades.
+
+## 2. System architecture
+
+The system will use an event-driven architecture. This means that market data, analysis, learning, and paper execution operate independently and communicate through internal events.
+
+BINANCE PUBLIC DATA
+
+Spot REST + Spot WebSocket + USDⓈ-M REST + Futures WebSocket
+
+MARKET DATA ENGINE
+
+Discovery · Normalization · Validation · Candle aggregation · Cache
+
+Spot Intelligence
+
+Buy  Sell  Wait
+
+Futures Intelligence
+
+Long  Short  Wait
+
+HYBRID INTELLIGENCE CORE
+
+Technical strategies + ML prediction + adaptive strategy selection + confidence evaluation
+
+Paper Execution
+
+Simulated orders, positions and P&L
+
+Learning Engine
+
+Outcome evaluation and model updates
+
+OUTPUT & PERSISTENCE
+
+Terminal Dashboard · Telegram Alerts · SQLite · Model Registry
+
+The orchestrator coordinates these services, but no single component should be responsible for everything.
+
+A failure in Telegram must not stop market analysis. A temporary WebSocket disconnect must not corrupt the paper-trading database. A model-training failure must not stop the scanner.
+
+## 3. Binance market data implementation
+
+The market scanner must be designed for full-market coverage without exhausting your PC or Binance rate limits.
+
+### Spot data
+
+Public endpoints and streams
+
+ Data                      Purpose                            
+ ------------------------  ---------------------------------- 
+ Exchange Information      Discover eligible symbols          
+ All Market Mini Tickers   Monitor broad price movements      
+ Individual Kline Streams  Monitor prioritized candle updates 
+ Aggregate Trades          Track trading activity             
+ Partial Order Book        Observe liquidity                  
+ REST Klines               Historical training data           
+
+### USDⓈ-M Futures data
+
+ Data                          Purpose                            
+ ----------------------------  ---------------------------------- 
+ Futures Exchange Information  Discover contracts                 
+ All Market Tickers            Monitor contract prices            
+ Mark Price Stream             Monitor mark prices and funding    
+ Kline Streams                 Multi-timeframe technical analysis 
+ Open Interest                 Evaluate position buildup          
+ Funding Rate History          Evaluate funding conditions        
+ Order Book Streams            Monitor liquidity and imbalance    
+
+Official references
+
+- [Binance Spot REST API documentation](httpsdevelopers.binance.comendocsproductsspotrest-apiutm_source=chatgpt.com)
+- [Binance WebSocket market streams](httpsdevelopers.binance.comendocsproductsderivatives-trading-coin-futureswebsocket-market-streamsConnectutm_source=chatgpt.com)
+- [Binance USDⓈ-M Futures documentation](httpsdevelopers.binance.comendocsproductsderivatives-trading-usds-futuresIntroductionutm_source=chatgpt.com)
+
+### Market discovery rules
+
+The discovery engine will
+
+1. Retrieve exchange information on startup.
+2. Select actively trading Spot symbols.
+3. Select actively trading USDⓈ-M contracts.
+4. Record symbol precision, tick size, lot size and minimum notional.
+5. Detect newly listed and delisted instruments.
+6. Refresh the market universe periodically.
+
+We will monitor all eligible symbols, including non-USDT Spot pairs, but the initial paper-trading engine will prioritize USDT-quoted instruments. Other quote currencies can be supported through locally calculated conversion prices.
+
+### Efficient scanning strategy
+
+Instead of subscribing to nine candle streams for every symbol, use a tiered approach.
+
+Tier 1 — Entire market
+
+Continuous
+
+Broad ticker streams, price changes, volume and market-wide statistics.
+
+Tier 2 — Potential opportunities
+
+Frequent
+
+Analyze indicators and candle data on all nine timeframes for symbols showing meaningful activity.
+
+Tier 3 — High-priority opportunities
+
+Deep analysis
+
+Order book, funding, open interest, multi-timeframe confirmation and ML prediction.
+
+This is how we get broad market coverage without overwhelming a modest computer.
+
+WebSocket connections must be rotated and reconnected safely. Binance documents stream-count and message-rate limits, so the connection manager will enforce limits rather than blindly subscribing to everything.&#x20;
+
+[image](httpswww.google.coms2faviconsdomain=httpsdevelopers.binance.com&sz=32)
+
+Binance Developer Docs+2
+
+
+
+## 4. Market intelligence and strategy system
+
+The strategy engine will have five initial strategy families.
+
+ Strategy         Primary purpose                       
+ ---------------  ------------------------------------- 
+ Momentum         Identify accelerating price movement  
+ Trend following  Identify sustained directional trends 
+ Breakout         Detect price escaping consolidation   
+ Mean reversion   Identify unusually extended prices    
+ Reversal         Detect potential trend exhaustion     
+
+Each strategy returns a standardized result
+
+```
+{    symbol BTCUSDT,    market FUTURES,    strategy momentum,    direction LONG,    timeframe 15m,    entry 87250.0,    stop_loss 86700.0,    take_profit [88100.0, 89000.0],    raw_score 82,    reasons [        Bullish momentum,        Volume expansion,        Higher timeframe confirmation    ]}
+```
+
+These values are an example schema, not a real signal.
+
+### Multi-timeframe intelligence
+
+The nine timeframes have different responsibilities.
+
+ Timeframe  Role                            
+ ---------  ------------------------------- 
+ 1m         Entry timing and micro momentum 
+ 3m         Short-term confirmation         
+ 5m         Intraday momentum               
+ 15m        Primary setup detection         
+ 30m        Intraday trend confirmation     
+ 1h         Directional bias                
+ 4h         Major trend                     
+ 1d         Daily market structure          
+ 1w         Long-term market regime         
+
+The decision engine should not require all nine timeframes to agree. Instead, it should assign different weights to each timeframe and recognize conflicting conditions.
+
+For example, a bullish 5m breakout against a bearish 4h trend may receive a lower score or be classified as a countertrend setup.
+
+### Signal decision rules
+
+BUY  SELL
+
+SPOT
+
+- BUY favorable bullish setup.
+- SELL exit or reduce an existing simulated Spot position.
+- WAIT no validated opportunity.
+
+  LONG  SHORT
+
+  FUTURES
+- LONG favorable bullish futures setup.
+- SHORT favorable bearish futures setup.
+- WAIT no validated opportunity.
+
+The engine should distinguish between a signal to enter, a signal to exit, and a signal to hold. A SELL signal should not automatically mean opening a short position.
+
+## 5. Hybrid self-learning architecture
+
+This is where BlackMarket AI becomes more than an ordinary trading scanner.
+
+I recommend three connected learning systems.
+
+### A. Adaptive strategy selector
+
+This system evaluates strategy performance under different market regimes.
+
+For example
+
+- Breakout strategies in trending markets.
+- Mean-reversion strategies in sideways markets.
+- Momentum strategies in high-volume markets.
+- Reversal strategies near exhaustion conditions.
+
+It updates strategy weights using rolling performance and risk-adjusted results.
+
+### B. Local machine-learning models
+
+The initial models will be
+
+ Model                   Responsibility                  
+ ----------------------  ------------------------------- 
+ Random Forest           Initial predictive baseline     
+ XGBoost                 Nonlinear signal classification 
+ River model             Optional incremental learning   
+ Probability calibrator  Improve probability reliability 
+
+The models will predict outcomes such as
+
+- Upward movement.
+- Downward movement.
+- No meaningful movement.
+
+They should predict probabilities for a defined future horizon, not pretend to know the exact future price.
+
+Each prediction should include a forecast horizon, model version, training cutoff, and calibration status.
+
+### C. Learning feedback loop
+
+1. Collect historical market features.
+2. Generate a strategy proposal.
+3. Record the prediction and its reasoning.
+4. Wait for the defined outcome horizon.
+5. Calculate the actual outcome after simulated costs.
+6. Compare prediction with actual performance.
+7. Update strategy weights and training datasets.
+8. Validate the new model before promotion.
+
+Important learning safeguards
+
+- No training on unfinished future information.
+- No random traintest splitting of time-series data.
+- Use walk-forward validation.
+- Maintain an untouched out-of-sample evaluation period.
+- Keep previous model versions.
+- Roll back a model if its performance deteriorates.
+- Don't treat every paper-trade win as proof of predictive accuracy.
+
+The system can learn autonomously, but it must not be allowed to rewrite its own source code or risk controls.
+
+## 6. Paper-trading engine specification
+
+Virtual portfolios
+
+SPOT WALLET
+
+# 500
+
+USDT
+
+FUTURES WALLET
+
+# 500
+
+USDT
+
+Execution features
+
+- Simulated market orders.
+- Simulated limit orders.
+- Partial fills.
+- Spread and slippage simulation.
+- Trading fee calculation.
+- Stop-loss and take-profit execution.
+- Futures leverage simulation.
+- Funding payments.
+- Liquidation simulation.
+- Position sizing and risk management.
+- Realized and unrealized P&L.
+
+  Suggested initial simulation safeguards
+   Parameter  Initial value 
+  ------
+   Risk per trade  0.5% 
+   Maximum daily loss  2% 
+   Maximum aggregate open risk  3% 
+   Futures leverage ceiling  3x 
+   Maximum concurrent positions  5 per market 
+
+These are conservative starting parameters for simulation, not proven optimal settings. They should be configurable and tested.
+
+For example, 0.5% risk on a 500 USDT account equals 2.50 USDT of planned loss at the stop, before gaps and execution differences.
+
+The simulator must calculate risk based on stop distance and position size, not simply multiply account balance by leverage.
+
+### Trade lifecycle
+
+Every paper trade will follow this process
+
+`PROPOSED → VALIDATED → OPEN → PARTIALLY FILLED → CLOSED`
+
+It can also transition to
+
+`REJECTED`, `EXPIRED`, or `CANCELLED`.
+
+Every transition must be persisted. This is important for recovery if the PC shuts down unexpectedly.
+
+## 7. Intelligence communication system
+
+You specifically said you want the bot to communicate with its own intelligence.
+
+I recommend implementing an internal communication protocol called the BlackMarket Intelligence Bus.
+
+It will allow individual components to exchange structured messages without depending on one another directly.
+
+For example
+
+```
+[MARKET SCANNER]
+    
+     BTCUSDT momentum detected
+    v
+[FEATURE ENGINE]
+    
+     Bullish momentum + volume expansion
+    v
+[STRATEGY ENGINE]
+    
+     Breakout strategy activated
+    v
+[ML PREDICTOR]
+    
+     Estimated outcome probabilities
+    v
+[DECISION ENGINE]
+    
+     Validate risk and signal quality
+    v
+[PAPER TRADING ENGINE]
+    
+     Simulated execution and outcome
+    v
+[LEARNING ENGINE]
+    
+     Evaluate and update strategy performance
+    v
+[INTELLIGENCE MEMORY]
+```
+
+### Internal message format
+
+Every internal message should follow a common structure
+
+```
+{    event_id unique-id,    event_type SIGNAL_PROPOSED,    timestamp 2026-11-16T163000Z,    source decision_engine,    symbol BTCUSDT,    market FUTURES,    payload {        direction LONG,        confidence 0.78,        strategy breakout    }}
+```
+
+The event bus will support
+
+- Market data events.
+- Strategy events.
+- Prediction events.
+- Trade proposal events.
+- Paper execution events.
+- Learning events.
+- Risk alerts.
+- System health events.
+
+Use `asyncio.Queue` for the initial implementation. Add persistent event logging in SQLite so that critical events can be replayed after a restart.
+
+The intelligence engine will also have access to its own historical performance database. It can query questions such as
+
+- Which strategy has performed best in this market regime
+- Which timeframes have generated the most reliable signals
+- How often did a particular setup reach its first target
+- Which conditions produce the most false breakouts
+- How has the model performed over its last 100 predictions
+
+This is structured quantitative self-analysis, not an LLM pretending to reason.
+
+## 8. Telegram notification architecture
+
+Telegram will receive only validated proposals and meaningful system alerts.
+
+The bot should support these alert types
+
+ Alert            Trigger                                
+ ---------------  -------------------------------------- 
+ STRONG SETUP     High-quality validated signal          
+ EARLY WARNING    Developing opportunity                 
+ SIGNAL EXPIRED   Setup no longer valid                  
+ POSITION OPENED  Paper execution confirmed              
+ POSITION CLOSED  Paper trade completed                  
+ RISK ALERT       Risk threshold reached                 
+ LEARNING REPORT  Model or strategy evaluation completed 
+ SYSTEM ALERT     Connection or infrastructure problem   
+
+### Detailed trade notification
+
+BLACKMARKET AI
+
+STRONG SETUP
+
+# ETHUSDT
+
+LONG
+
+USDⓈ-M
+
+Entry zone
+
+$2,850–2,860
+
+Stop loss
+
+$2,820
+
+Target 1
+
+$2,910
+
+Target 2
+
+$2,960
+
+TIMEFRAME CONFIRMATION
+
+1m  3m  5m
+
+Bullish
+
+15m  30m  1h
+
+Bullish
+
+4h  1d
+
+Mixed
+
+1w
+
+Bullish
+
+INTELLIGENCE EXPLANATION
+
+- Breakout setup identified.
+- Volume expansion confirmed.
+- Lower timeframe momentum is positive.
+- Higher timeframe conditions are mixed.
+- Simulated riskreward evaluated.
+
+Signal confidence
+
+78% illustrative
+
+Execution
+
+PAPER ONLY
+
+Illustrative notification; not live market data or a recommendation to trade.
+
+The Telegram bot should also prevent duplicate notifications. The same setup should not be sent repeatedly just because the scanner checks it again.
+
+A notification should include a unique signal ID so that you can distinguish a new setup from an update to an existing one.
+
+## 9. Database and permanent memory
+
+SQLite will be the permanent memory of BlackMarket AI.
+
+I recommend these tables
+
+ Table               Stored information              
+ ------------------  ------------------------------- 
+ `symbols`           Exchange instruments            
+ `candles`           Historical OHLCV data           
+ `market_snapshots`  Market conditions               
+ `features`          Calculated ML features          
+ `signals`           Every generated proposal        
+ `predictions`       Model predictions               
+ `paper_orders`      Simulated orders                
+ `paper_positions`   Open and closed positions       
+ `trade_history`     Completed trades                
+ `strategy_metrics`  Strategy performance            
+ `model_registry`    Model versions                  
+ `learning_runs`     Training and evaluation records 
+ `notifications`     Telegram delivery history       
+ `system_events`     Internal communication logs     
+
+### Permanent learning memory
+
+The bot must remember its past decisions after restarting.
+
+For example
+
+```
+MODEL VERSION 0007
+
+TOTAL PREDICTIONS 12,540
+VALIDATED PREDICTIONS 11,980
+
+BREAKOUT
+  Signals 3,400
+  Win rate 54.2%
+  Profit factor 1.31
+
+MOMENTUM
+  Signals 2,800
+  Win rate 57.1%
+  Profit factor 1.42
+
+MEAN REVERSION
+  Signals 2,100
+  Win rate 48.6%
+  Profit factor 0.94
+
+LAST TRAINING 2026-11-16
+MODEL STATUS VALIDATED
+```
+
+These are fictional example statistics.
+
+Win rate must never be considered in isolation. The database should also track expectancy, average winloss, drawdown, profit factor, transaction costs, and sample size.
+
+## 10. Complete project structure
+
+This is the directory structure I would use for the production-oriented implementation.
+
+```
+
+BlackMarket-AI
+│
+├── main.py
+├── config.py
+├── requirements.txt
+├── .env.example
+├── README.md
+├── pyproject.toml
+│
+├── core
+│   ├── orchestrator.py
+│   ├── event_bus.py
+│   ├── event_models.py
+│   ├── scheduler.py
+│   ├── lifecycle.py
+│   └── health_monitor.py
+│
+├── exchange
+│   ├── base_client.py
+│   ├── spot_client.py
+│   ├── futures_client.py
+│   ├── websocket_manager.py
+│   ├── market_discovery.py
+│   ├── symbol_registry.py
+│   └── rate_limiter.py
+│
+├── market
+│   ├── scanner.py
+│   ├── candle_manager.py
+│   ├── market_cache.py
+│   ├── volume_analyzer.py
+│   ├── momentum_analyzer.py
+│   ├── volatility_analyzer.py
+│   ├── orderbook_analyzer.py
+│   ├── funding_analyzer.py
+│   ├── open_interest_analyzer.py
+│   └── regime_detector.py
+│
+├── intelligence
+│   ├── intelligence_core.py
+│   ├── feature_engine.py
+│   ├── decision_engine.py
+│   ├── confidence_engine.py
+│   ├── strategy_selector.py
+│   ├── signal_validator.py
+│   └── explanation_engine.py
+│
+├── strategies
+│   ├── base_strategy.py
+│   ├── momentum.py
+│   ├── breakout.py
+│   ├── trend_following.py
+│   ├── mean_reversion.py
+│   └── reversal.py
+│
+├── learning
+│   ├── dataset_builder.py
+│   ├── trainer.py
+│   ├── predictor.py
+│   ├── online_learning.py
+│   ├── adaptive_weights.py
+│   ├── probability_calibration.py
+│   ├── walk_forward.py
+│   ├── evaluator.py
+│   └── model_registry.py
+│
+├── paper_trading
+│   ├── simulator.py
+│   ├── order_executor.py
+│   ├── fill_engine.py
+│   ├── position_manager.py
+│   ├── risk_manager.py
+│   ├── fee_calculator.py
+│   ├── funding_calculator.py
+│   ├── liquidation_engine.py
+│   └── pnl_calculator.py
+│
+├── notifications
+│   ├── telegram_client.py
+│   ├── alert_manager.py
+│   └── message_templates.py
+│
+├── database
+│   ├── connection.py
+│   ├── models.py
+│   ├── repositories.py
+│   └── migrations
+│
+├── terminal
+│   ├── app.py
+│   ├── dashboard.py
+│   ├── market_screen.py
+│   ├── signals_screen.py
+│   ├── portfolio_screen.py
+│   ├── learning_screen.py
+│   └── logs_screen.py
+│
+├── models
+│   ├── saved_models
+│   ├── checkpoints
+│   └── metadata
+│
+├── data
+│   ├── historical
+│   ├── cache
+│   └── backups
+│
+├── logs
+│
+└── tests
+    ├── test_exchange.py
+    ├── test_market_data.py
+    ├── test_strategies.py
+    ├── test_predictions.py
+    ├── test_learning.py
+    ├── test_simulator.py
+    ├── test_risk.py
+    └── test_recovery.py
+
+```
+
+## 11. Environment configuration
+
+The project should have a central configuration file instead of hardcoding settings across Python modules.
+
+Example `.env.example`
+
+```
+
+# SYSTEM
+APP_NAME=BLACKMARKET_AI
+APP_ENV=development
+LOG_LEVEL=INFO
+
+# EXCHANGE
+BINANCE_MARKET_DATA_ONLY=true
+BINANCE_API_KEY=
+BINANCE_API_SECRET=
+
+# MARKET SCANNING
+SCAN_ALL_ELIGIBLE_SYMBOLS=true
+SPOT_ENABLED=true
+USDM_FUTURES_ENABLED=true
+
+# TIMEFRAMES
+TIMEFRAMES=1m,3m,5m,15m,30m,1h,4h,1d,1w
+
+# PAPER CAPITAL
+SPOT_INITIAL_BALANCE=500
+FUTURES_INITIAL_BALANCE=500
+PAPER_TRADING_ENABLED=true
+REAL_TRADING_ENABLED=false
+
+# RISK MANAGEMENT
+RISK_PER_TRADE_PCT=0.5
+RISK_MAX_DAILY_LOSS_PCT=2.0
+RISK_MAX_TOTAL_OPEN_PCT=3.0
+RISK_MAX_LEVERAGE=3
+MAX_SPOT_POSITIONS=5
+MAX_FUTURES_POSITIONS=5
+
+# LEARNING
+LEARNING_MODE=hybrid
+ML_ENABLED=true
+ADAPTIVE_LEARNING_ENABLED=true
+AUTO_MODEL_TRAINING=true
+MODEL_VALIDATION_REQUIRED=true
+
+# TELEGRAM
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+
+# DATABASE
+DATABASE_URL=sqlitedatablackmarket.db
+
+# SYSTEM SAFETY
+SIGNAL_STALE_SECONDS=30
+AUTO_RECOVERY_ENABLED=true
+MODEL_ROLLBACK_ENABLED=true
+
+```
+
+The actual Telegram token should be stored in your private `.env` file, excluded from Git, logs, backups shared publicly, and screenshots.
+
+## 12. Python dependencies
+
+I recommend keeping the initial dependencies relatively lightweight.
+
+```
+
+# Core
+aiohttp
+websockets
+python-dotenv
+pydantic
+sqlalchemy
+aiosqlite
+
+# Data analysis
+numpy
+pandas
+scipy
+
+# Machine learning
+scikit-learn
+xgboost
+river
+joblib
+
+# Technical analysis
+ta
+
+# Terminal
+rich
+textual
+
+# Telegram
+python-telegram-bot
+
+# Testing
+pytest
+pytest-asyncio
+
+```
+
+Use a pinned, tested dependency lockfile for reproducible installations. Avoid installing GPU-specific libraries unless there is a demonstrated need.
+
+## 13. Development roadmap
+
+I would develop this in eight milestones.
+
+Implementation roadmap
+
+8 milestones
+
+1. Foundation and infrastructure
+
+   First priority
+   - Python project setup.
+   - Configuration management.
+   - SQLite database.
+   - Logging.
+   - Event bus.
+   - Startup and shutdown lifecycle.
+
+     Deliverable reliable application foundation.
+2. Binance market infrastructure
+   - Spot market discovery.
+   - USDⓈ-M contract discovery.
+   - Public REST clients.
+   - WebSocket connections.
+   - Reconnection and rate limiting.
+   - Historical candle collection.
+
+     Deliverable complete eligible-market monitoring.
+3. Market analysis
+   - Nine timeframes.
+   - Technical indicators.
+   - Volume and liquidity analysis.
+   - Market regime classification.
+
+     Deliverable structured market intelligence.
+4. Strategy and decision engine
+   - Five strategy families.
+   - Signal scoring.
+   - Entry and exit conditions.
+   - Signal validation.
+   - Explanation generation.
+
+     Deliverable BUYSELLLONGSHORTWAIT proposals.
+5. Paper trading
+   - Two virtual accounts.
+   - Order and fill simulation.
+   - Risk controls.
+   - Fees and funding.
+   - Position management.
+
+     Deliverable complete simulated trading environment.
+6. Hybrid learning
+   - Historical dataset generation.
+   - Model training.
+   - Online learning.
+   - Adaptive strategy selection.
+   - Walk-forward validation.
+
+     Deliverable locally learning intelligence engine.
+7. Telegram and terminal
+   - Live dashboard.
+   - Signal notifications.
+   - Portfolio monitoring.
+   - Learning reports.
+   - System diagnostics.
+
+     Deliverable complete command center.
+8. Integration and production testing
+   - Long-running stability tests.
+   - Restart recovery.
+   - Data consistency checks.
+   - Paper-trading validation.
+   - Model rollback testing.
+
+     Deliverable stable local release.
+
+### Acceptance criteria
+
+I wouldn't call the project complete just because it starts without errors.
+
+It must pass these tests
+
+ Test                        Required result                   
+ --------------------------  --------------------------------- 
+ Binance credentials absent  Application starts                
+ Spot discovery              All eligible symbols discovered   
+ Futures discovery           All eligible contracts discovered 
+ WebSocket interruption      Automatic recovery                
+ Nine timeframes             Correct candle alignment          
+ Duplicate signals           Properly deduplicated             
+ Paper trading               Correct accounting                
+ Learning                    Historical outcomes evaluated     
+ Model update                Validation required               
+ Restart                     Positions and balances restored   
+ Telegram failure            Core engine continues             
+ Real trading                Impossible in this release        
+
+## 14. Hardware optimization
+
+
+The system should prioritize broad market monitoring, then intelligently allocate deeper processing to the most promising instruments.
+
+
+## 15. Final security and reliability rules
+
+These should be non-negotiable
+
+- No Binance order endpoints in the application.
+- No Binance API key authentication code.
+- No automatic real-money execution.
+- No model modification of risk limits.
+- No trading on stale or incomplete market data.
+- No promotion of unvalidated models.
+- No deleting losing trades from learning history.
+- No fabricated fills or historical performance.
+- No exposure of Telegram credentials.
+- Automatic database backups and model checkpoints.
+
+The paper simulator should be completely isolated from any future live-execution project.
+
+## 16. Final build recommendation
+
+I would use this development sequence
+
+# BLACKMARKET AI v1.0
+
+Local autonomous market research and simulation platform
+
+
+Release targets
+
+Market coverage
+
+Spot + USDⓈ-M
+
+Analysis
+
+9 timeframes
+
+Learning
+
+Hybrid local ML
+
+Simulation
+
+1,000 USDT virtual capital
+
+Notifications
+
+Telegram
+
+Execution
+
+Manual real trading
+

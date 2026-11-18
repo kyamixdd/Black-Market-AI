@@ -1,0 +1,82 @@
+"""ML Predictor: local models for outcome prediction."""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+import joblib
+import numpy as np
+import xgboost as xgb
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler
+
+from config import ML_ENABLED
+
+logger = logging.getLogger(__name__)
+
+
+class Predictor:
+    def __init__(self, model_dir: Path | None = None):
+        self.model_dir = model_dir or Path(__file__).resolve().parents[1] / "models"
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        self.rf_model: RandomForestClassifier | None = None
+        self.xgb_model: xgb.XGBClassifier | None = None
+        self.scaler = StandardScaler()
+        self.is_trained = False
+        self.version = "0001"
+        if ML_ENABLED:
+            self._load_latest()
+
+    def _load_latest(self) -> None:
+        rf_path = self.model_dir / "rf_model.pkl"
+        xgb_path = self.model_dir / "xgb_model.json"
+        scaler_path = self.model_dir / "scaler.pkl"
+        if rf_path.exists() and xgb_path.exists() and scaler_path.exists():
+            try:
+                self.rf_model = joblib.load(rf_path)
+                self.xgb_model = xgb.XGBClassifier()
+                self.xgb_model.load_model(xgb_path)
+                self.scaler = joblib.load(scaler_path)
+                self.is_trained = True
+                logger.info("Loaded existing models")
+            except Exception as exc:
+                logger.warning("Failed to load models: %s", exc)
+
+    def predict(self, features: np.ndarray) -> dict[str, Any]:
+        if not self.is_trained or self.rf_model is None or self.xgb_model is None:
+            return {
+                "prob_up": 0.33, "prob_down": 0.34, "prob_flat": 0.33,
+                "predicted_class": "FLAT", "confidence": 0.0,
+                "model_version": self.version,
+            }
+        X = features.reshape(1, -1)
+        Xs = self.scaler.transform(X)
+        rf_probs = self.rf_model.predict_proba(Xs)[0]
+        xgb_probs = self.xgb_model.predict_proba(Xs)[0]
+        # Average ensemble
+        probs = (rf_probs + xgb_probs) / 2.0
+        class_idx = int(np.argmax(probs))
+        classes = ["DOWN", "FLAT", "UP"] if len(probs) == 3 else ["FLAT", "UP"]
+        pred_class = classes[class_idx] if class_idx < len(classes) else "FLAT"
+        return {
+            "prob_up": float(probs[2] if len(probs) == 3 else probs[1]),
+            "prob_down": float(probs[0]),
+            "prob_flat": float(probs[1] if len(probs) == 3 else 0.0),
+            "predicted_class": pred_class,
+            "confidence": float(probs[class_idx]),
+            "model_version": self.version,
+        }
+
+    def save(self, version: str) -> None:
+        if self.rf_model is None or self.xgb_model is None:
+            return
+        joblib.dump(self.rf_model, self.model_dir / f"rf_{version}.pkl")
+        self.xgb_model.save_model(str(self.model_dir / f"xgb_{version}.json"))
+        joblib.dump(self.scaler, self.model_dir / f"scaler_{version}.pkl")
+        # Symlink latest
+        for name in ["rf_model.pkl", "xgb_model.json", "scaler.pkl"]:
+            target = self.model_dir / name
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            target.symlink_to(self.model_dir / name.replace(".", f"_{version}."))

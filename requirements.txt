@@ -1,0 +1,16 @@
+aiohttp==3.14.5
+websockets==15.0
+python-dotenv==1.1.0
+pydantic==2.11.0
+sqlalchemy==2.0.40
+aiosqlite==0.21.0
+numpy==2.3.0
+pandas==3.1.1
+scipy==1.18.1
+scikit-learn==1.9.1
+xgboost==3.4.1
+river==0.27.0
+joblib==1.6.0
+ta==0.11.0
+rich==14.0.0
+textual==3.0.0

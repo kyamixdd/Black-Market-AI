@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blackmarket-ai"
+version = "1.0.0"
+description = "Local autonomous market research and paper trading simulation platform"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp",
+    "websockets",
+    "python-dotenv",
+    "pydantic",
+    "sqlalchemy",
+    "aiosqlite",
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "xgboost",
+    "river",
+    "joblib",
+    "ta",
+    "rich",
+    "textual",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.setuptools]
+packages = [
+    "core", "exchange", "market", "intelligence", "strategies",
+    "learning", "paper_trading", "notifications", "database", "terminal"
+]

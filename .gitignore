@@ -1,0 +1,63 @@
+# BlackMarket AI - Git Ignore Rules
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Database
+data/blackmarket.db
+data/blackmarket.db-*
+data/blackmarket.db-journal
+
+# Model files
+models/*.joblib
+models/*.pkl
+models/registry/
+
+# Backup files
+data/backups/*.db
+data/backups/*.zip
+backups/*.zip
+
+# Logs
+logs/*.log
+logs/*.log.*
+
+# Historical data
+data/historical/
+data/cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.temp

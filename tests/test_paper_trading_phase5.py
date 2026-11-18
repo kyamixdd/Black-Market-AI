@@ -1,0 +1,533 @@
+"""Test Phase 5 paper trading features: slippage, spread, limit orders, funding, liquidation, risk management."""
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from core.event_bus import EventBus
+from paper_trading.fee_calculator import FeeCalculator
+from paper_trading.funding_calculator import FundingCalculator
+from paper_trading.liquidation_engine import LiquidationEngine
+from paper_trading.risk_manager import RiskManager
+from paper_trading.simulator import Simulator
+
+
+class TestFeeCalculator:
+    """Test fee, slippage, and spread calculations."""
+
+    def test_spot_fee_calculation(self):
+        calc = FeeCalculator()
+        fee = calc.calculate("SPOT", "BUY", 0.1, 50000.0, 1.0)
+        expected = 0.1 * 50000.0 * 0.001  # 0.1%
+        assert fee == expected
+
+    def test_futures_fee_calculation(self):
+        calc = FeeCalculator()
+        fee = calc.calculate("FUTURES", "LONG", 0.1, 50000.0, 3.0)
+        expected = 0.1 * 50000.0 * 3.0 * 0.0005  # 0.05%
+        assert fee == expected
+
+    def test_slippage_market_order_spot(self):
+        calc = FeeCalculator()
+        slip = calc.calculate_slippage("SPOT", "MARKET", 0.1, 50000.0, 1.0, 1000000.0)
+        # Base slippage 5 bps = 0.05%
+        assert slip > 0
+
+    def test_slippage_limit_order(self):
+        calc = FeeCalculator()
+        slip = calc.calculate_slippage("SPOT", "LIMIT", 0.1, 50000.0)
+        assert slip == 0.0
+
+    def test_fill_price_buy(self):
+        calc = FeeCalculator()
+        fill = calc.get_fill_price("SPOT", "BUY", "MARKET", 50000.0, 0.1, 1.0, 1000000.0)
+        assert fill > 50000.0  # Buy fills higher
+
+    def test_fill_price_sell(self):
+        calc = FeeCalculator()
+        fill = calc.get_fill_price("SPOT", "SELL", "MARKET", 50000.0, 0.1, 1.0, 1000000.0)
+        assert fill < 50000.0  # Sell fills lower
+
+    def test_spread_calculation(self):
+        calc = FeeCalculator()
+        spread = calc.calculate_spread("SPOT", 50000.0)
+        expected = 50000.0 * 2 / 10000  # 2 bps
+        assert spread == expected
+
+
+class TestRiskManager:
+    """Test risk management functions."""
+
+    def test_daily_loss_check(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        # Daily loss 1% of balance - should pass
+        assert rm.check_daily_loss(-5.0, 500.0) is True
+        # Daily loss 3% of balance - should fail (exceeds 2%)
+        assert rm.check_daily_loss(-15.0, 500.0) is False
+
+    def test_position_limit_check(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        positions = {"p1": {"status": "OPEN"}, "p2": {"status": "OPEN"}}
+        assert rm.check_position_limit(positions, 5) is True
+        assert rm.check_position_limit(positions, 2) is False
+
+    def test_symbol_exposure_check(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        positions = {"p1": {"symbol": "BTCUSDT", "status": "OPEN"}}
+        assert rm.check_symbol_exposure(positions, "BTCUSDT") is False
+        assert rm.check_symbol_exposure(positions, "ETHUSDT") is True
+
+    def test_total_risk_check(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        # Current risk $10, new risk $5, balance $500 -> 3% = limit
+        assert rm.check_total_risk(10.0, 5.0, 500.0) is True
+        # New risk $6 -> 3.2% > 3% limit
+        assert rm.check_total_risk(10.0, 6.0, 500.0) is False
+
+    def test_position_size_calculation(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        # Balance $500, risk per trade 0.5% = $2.5 risk budget, risk amount $100 -> 0.025 units
+        size = rm.calculate_position_size(500.0, 100.0)
+        assert size == 0.025
+
+    def test_leverage_validation(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        assert rm.validate_leverage("SPOT", 5.0) == 5.0  # No cap on spot
+        assert rm.validate_leverage("FUTURES", 5.0) == 3.0  # Capped at 3x
+
+
+class TestLiquidationEngine:
+    """Test futures liquidation logic."""
+
+    def test_long_liquidation_price(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
+        liq_price = le.calculate_liquidation_price(pos)
+        # 50000 * (1 - 1/3 + 0.05) = 50000 * 0.7167 = 35833.33
+        assert abs(liq_price - 35833.33) < 1.0
+
+    def test_short_liquidation_price(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "SHORT", "entry_price": 50000.0, "leverage": 3.0}
+        liq_price = le.calculate_liquidation_price(pos)
+        # 50000 * (1 + 1/3 - 0.05) = 50000 * 1.2833 = 64166.67
+        assert abs(liq_price - 64166.67) < 1.0
+
+    def test_long_liquidation_check(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
+        assert le.check_liquidation(pos, 35000.0) is True  # Below liq price
+        assert le.check_liquidation(pos, 40000.0) is False  # Above liq price
+
+    def test_short_liquidation_check(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "SHORT", "entry_price": 50000.0, "leverage": 3.0}
+        assert le.check_liquidation(pos, 65000.0) is True  # Above liq price
+        assert le.check_liquidation(pos, 60000.0) is False  # Below liq price
+
+    def test_spot_not_liquidated(self):
+        le = LiquidationEngine()
+        pos = {"market": "SPOT", "side": "LONG", "entry_price": 50000.0}
+        assert le.check_liquidation(pos, 10000.0) is False
+
+    def test_margin_ratio(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
+        # At entry price, margin ratio = 3.0
+        assert abs(le.get_margin_ratio(pos, 50000.0) - 3.0) < 0.01
+        # At 45000, pnl = -10%, margin ratio = 0.9 * 3 = 2.7
+        assert abs(le.get_margin_ratio(pos, 45000.0) - 2.7) < 0.01
+
+    def test_margin_risk_detection(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
+        # At 38000, margin ratio ~ 2.28, threshold * MMR = 1.2 * 0.05 = 0.06
+        # 2.28 > 0.06, so not at risk
+        assert le.is_at_risk(pos, 38000.0) is False
+        # At 36000, margin ratio ~ 2.16, still above 0.06
+        assert le.is_at_risk(pos, 36000.0) is False
+
+
+class TestFundingCalculator:
+    """Test funding payment calculations."""
+
+    def test_long_funding_payment(self):
+        fc = FundingCalculator()
+        pos = {"market": "FUTURES", "side": "LONG", "amount": 0.1, "entry_price": 50000.0, "leverage": 3.0}
+        payment = fc.calculate(pos, 0.0001)  # 0.01%
+        expected = 0.1 * 50000.0 * 3.0 * 0.0001
+        assert payment == expected
+
+    def test_short_funding_payment(self):
+        fc = FundingCalculator()
+        pos = {"market": "FUTURES", "side": "SHORT", "amount": 0.1, "entry_price": 50000.0, "leverage": 3.0}
+        payment = fc.calculate(pos, 0.0001)
+        expected = 0.1 * 50000.0 * 3.0 * 0.0001
+        # Shorts receive when rate is positive (negative payment = they receive)
+        assert payment == -expected
+
+    def test_spot_no_funding(self):
+        fc = FundingCalculator()
+        pos = {"market": "SPOT", "side": "LONG", "amount": 0.1, "entry_price": 50000.0}
+        payment = fc.calculate(pos, 0.0001)
+        assert payment == 0.0
+
+    def test_funding_intervals(self):
+        fc = FundingCalculator()
+        times = fc.get_funding_times(0, 24 * 3600 * 1000 - 1)  # Just before 24h
+        # Should have 3 funding times in 24 hours (0, 8h, 16h)
+        assert len(times) == 3
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_slippage():
+    """Test that slippage is applied to fills."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-SLIP-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    pos_id = await sim.execute_signal(signal)
+    assert pos_id is not None
+    position = sim.spot_positions[pos_id]
+    # Fill price should be worse than signal entry due to spread+slippage
+    assert position["entry_price"] > 50000.0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_limit_order():
+    """Test limit order placement and filling."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-LIMIT-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,  # Below current price
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    # Place limit order
+    order_id = await sim.place_limit_order(signal)
+    assert order_id is not None
+    assert order_id in sim.open_orders
+
+    # Price moves down to limit price - should fill
+    await sim.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert order_id not in sim.open_orders
+    assert len(sim.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_funding():
+    """Test funding payments are applied."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-FUND-001",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 3.0,
+    }
+
+    pos_id = await sim.execute_signal(signal)
+    position = sim.futures_positions[pos_id]
+    initial_balance = sim.futures_balance
+
+    # Apply funding
+    await sim._apply_funding(position, 0.0001)  # 0.01%
+
+    # Balance should decrease (longs pay when rate positive)
+    assert sim.futures_balance < initial_balance
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_liquidation():
+    """Test futures liquidation."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    # Set stop_loss below liquidation price so liquidation triggers first
+    # Liquidation price for 3x LONG at 50000 = 50000 * (1 - 1/3 + 0.05) = 35833
+    signal = {
+        "signal_id": "SIG-LIQ-001",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 35000.0,  # Below liquidation price
+        "take_profit": [52000.0],
+        "leverage": 3.0,
+    }
+
+    await sim.execute_signal(signal)
+    assert len(sim.futures_positions) == 1
+
+    # Price drops to liquidation level (~35833 for 3x long)
+    await sim.update_prices("FUTURES", "BTCUSDT", 35000.0, mark_price=35000.0)
+    assert len(sim.futures_positions) == 0
+    assert len(sim.closed_trades) == 1
+    assert sim.closed_trades[0]["close_reason"] == "LIQUIDATION"
+
+
+@pytest.mark.asyncio
+async def test_risk_daily_loss_protection():
+    """Test daily loss limit prevents new positions."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    # Manually set daily PnL to exceed limit (2% of $1000 = $20)
+    sim.daily_pnl = -25.0
+
+    signal = {
+        "signal_id": "SIG-RISK-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    pos_id = await sim.execute_signal(signal)
+    assert pos_id is None  # Should be rejected
+
+
+@pytest.mark.asyncio
+async def test_risk_max_positions():
+    """Test max positions limit."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    # Fill up to max (5 for spot)
+    for i in range(5):
+        signal = {
+            "signal_id": f"SIG-MAX-{i}",
+            "symbol": f"COIN{i}USDT",
+            "market": "SPOT",
+            "direction": "LONG",
+            "entry": 100.0 + i,
+            "stop_loss": 90.0 + i,
+            "take_profit": [120.0 + i],
+            "leverage": 1.0,
+        }
+        await sim.execute_signal(signal)
+
+    assert len(sim.spot_positions) == 5
+
+    # 6th should fail
+    signal = {
+        "signal_id": "SIG-MAX-6",
+        "symbol": "COIN6USDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 106.0,
+        "stop_loss": 96.0,
+        "take_profit": [126.0],
+        "leverage": 1.0,
+    }
+    pos_id = await sim.execute_signal(signal)
+    assert pos_id is None
+
+
+@pytest.mark.asyncio
+async def test_risk_symbol_exposure():
+    """Test one position per symbol limit."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal1 = {
+        "signal_id": "SIG-EXP-1",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    await sim.execute_signal(signal1)
+    assert len(sim.spot_positions) == 1
+
+    # Second signal same symbol
+    signal2 = {
+        "signal_id": "SIG-EXP-2",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 51000.0,
+        "stop_loss": 50000.0,
+        "take_profit": [53000.0],
+        "leverage": 1.0,
+    }
+    pos_id = await sim.execute_signal(signal2)
+    assert pos_id is None
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_state_snapshot():
+    """Test state snapshot and restore for restart recovery."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-STATE-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    await sim.execute_signal(signal)
+
+    # Get snapshot
+    state = sim.get_state_snapshot()
+    assert state["spot_balance"] < 500.0
+    assert len(state["spot_positions"]) == 1
+    assert len(state["closed_trades"]) == 0
+
+    # Create new simulator and restore
+    bus2 = EventBus()
+    sim2 = Simulator(bus2)
+    sim2.restore_state(state)
+
+    assert sim2.spot_balance == state["spot_balance"]
+    assert len(sim2.spot_positions) == 1
+
+
+def test_daily_pnl_rolls_over_at_utc_day_boundary():
+    simulator = Simulator(EventBus())
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    simulator.daily_pnl = -12.0
+    simulator.daily_pnl_date = yesterday
+
+    assert simulator.get_daily_pnl() == 0.0
+
+    simulator.restore_state({"daily_pnl": -8.0, "daily_pnl_date": yesterday.isoformat()})
+    assert simulator.get_daily_pnl() == 0.0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_short_pnl():
+    """Test short position P&L calculation."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-SHORT-001",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "SHORT",
+        "entry": 50000.0,
+        "stop_loss": 51000.0,
+        "take_profit": [48000.0],
+        "leverage": 3.0,
+    }
+
+    await sim.execute_signal(signal)
+
+    # Price drops - short should profit
+    await sim.update_prices("FUTURES", "BTCUSDT", 48000.0)
+    assert len(sim.futures_positions) == 0
+    assert len(sim.closed_trades) == 1
+    assert sim.closed_trades[0]["pnl"] > 0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_stop_loss():
+    """Test stop loss execution."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-SL-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    await sim.execute_signal(signal)
+
+    # Price hits stop loss
+    await sim.update_prices("SPOT", "BTCUSDT", 48900.0)
+    assert len(sim.spot_positions) == 0
+    assert len(sim.closed_trades) == 1
+    assert sim.closed_trades[0]["close_reason"] == "STOP_LOSS"
+    assert sim.closed_trades[0]["pnl"] < 0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_take_profit():
+    """Test take profit execution."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-TP-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    await sim.execute_signal(signal)
+
+    # Price hits take profit
+    await sim.update_prices("SPOT", "BTCUSDT", 52100.0)
+    assert len(sim.spot_positions) == 0
+    assert len(sim.closed_trades) == 1
+    assert sim.closed_trades[0]["close_reason"] == "TAKE_PROFIT"
+    assert sim.closed_trades[0]["pnl"] > 0
+
+
+@pytest.mark.asyncio
+async def test_realized_trade_pnl_includes_entry_and_exit_fees():
+    sim = Simulator(EventBus())
+    sim.fee_calc.calculate = lambda *args: 0.1
+    sim.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-FEE-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    await sim.execute_signal(signal)
+    await sim.update_prices("SPOT", "BTCUSDT", 52000.0)
+
+    trade = sim.closed_trades[0]
+    assert trade["fee"] == 0.2
+    assert sim.spot_balance == pytest.approx(500.0 + trade["pnl"])
+    assert sim.daily_pnl == pytest.approx(trade["pnl"])
