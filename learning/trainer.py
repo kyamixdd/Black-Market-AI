@@ -145,6 +145,8 @@ class ModelTrainer:
         for alias, filename in targets.items():
             source = self.model_dir / filename
             if not source.is_file():
+                if alias == "river_model.pkl":
+                    (self.model_dir / alias).unlink(missing_ok=True)
                 continue
             shutil.copy2(source, self.model_dir / alias)
         (self.model_dir / "latest_version.txt").write_text(version, encoding="utf-8")
@@ -199,7 +201,7 @@ class ModelTrainer:
         """Check if retraining is needed and execute if so."""
         from sqlalchemy import select
 
-        from config import MODEL_RETRAIN_MIN_DAYS
+        from config import MODEL_RETRAIN_MIN_DAYS, MODEL_RETRAIN_MIN_NEW_SAMPLES
         from database.models import ModelRegistryModel
 
         with self.repo._get_session() as session:
@@ -219,11 +221,42 @@ class ModelTrainer:
         if trained_at.tzinfo is None:
             trained_at = trained_at.replace(tzinfo=timezone.utc)
         days_since = (datetime.now(timezone.utc) - trained_at).days
-        if days_since >= MODEL_RETRAIN_MIN_DAYS:
-            logger.info("Model age %d days >= %d, retraining...", days_since, MODEL_RETRAIN_MIN_DAYS)
+        predictions = self.repo.get_predictions_history(limit=10000)
+        resolved_since_training = 0
+        recent_resolved = []
+        for prediction in predictions:
+            if prediction.is_correct is None:
+                continue
+            created_at = prediction.created_at
+            if created_at and created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if created_at and created_at > trained_at:
+                resolved_since_training += 1
+            recent_resolved.append(bool(prediction.is_correct))
+            if len(recent_resolved) >= 100:
+                break
+
+        recent_accuracy = (
+            sum(recent_resolved) / len(recent_resolved) if recent_resolved else None
+        )
+        should_retrain = (
+            days_since >= MODEL_RETRAIN_MIN_DAYS
+            or resolved_since_training >= MODEL_RETRAIN_MIN_NEW_SAMPLES
+            or (len(recent_resolved) >= 50 and recent_accuracy is not None and recent_accuracy < 0.48)
+        )
+        if should_retrain:
+            logger.info(
+                "Retraining triggered: model_age_days=%d, new_resolved=%d, recent_accuracy=%s",
+                days_since, resolved_since_training, recent_accuracy,
+            )
             return self.train_and_validate()
 
-        return {"status": "model_current", "days_since_train": days_since}
+        return {
+            "status": "model_current",
+            "days_since_train": days_since,
+            "new_resolved_samples": resolved_since_training,
+            "recent_accuracy": recent_accuracy,
+        }
 
 
 class LearningOrchestrator:
