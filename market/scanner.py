@@ -6,6 +6,7 @@ import logging
 
 from core.event_bus import EventBus
 from core.event_models import EventType, make_event
+from config import SPOT_ENABLED, USDM_FUTURES_ENABLED
 from exchange.futures_client import FuturesClient
 from exchange.spot_client import SpotClient
 from exchange.symbol_registry import SymbolRegistry
@@ -87,9 +88,11 @@ class Scanner:
 
     async def start(self) -> None:
         self._running = True
-        self._tasks.append(asyncio.create_task(self._scan_market_tickers("SPOT")))
-        self._tasks.append(asyncio.create_task(self._scan_market_tickers("FUTURES")))
-        self._tasks.append(asyncio.create_task(self._scan_futures_extra()))
+        if SPOT_ENABLED:
+            self._tasks.append(asyncio.create_task(self._scan_market_tickers("SPOT")))
+        if USDM_FUTURES_ENABLED:
+            self._tasks.append(asyncio.create_task(self._scan_market_tickers("FUTURES")))
+            self._tasks.append(asyncio.create_task(self._scan_futures_extra()))
         logger.info("Scanner started")
 
     async def stop(self) -> None:
