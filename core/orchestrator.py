@@ -70,6 +70,7 @@ class Orchestrator:
         self.health_monitor: HealthMonitor = HealthMonitor()
         self._running: bool = False
         self._tasks: list[asyncio.Task] = []
+        self._event_bus_task: asyncio.Task | None = None
         self._analysis_cursors: dict[str, int] = {"SPOT": 0, "FUTURES": 0}
         self._analysis_batch_size = 10
         self._analysis_timeframes = ("1m", "15m", "1h")
@@ -296,6 +297,9 @@ class Orchestrator:
 
     async def run(self) -> None:
         self._running = True
+        # The event bus must have a consumer before scanners publish prices,
+        # signals, fills, or risk events.
+        self._event_bus_task = asyncio.create_task(self.event_bus.run(), name="blackmarket-event-bus")
         await self.scanner.start()
         self._tasks.append(asyncio.create_task(self._analysis_loop(), name="blackmarket-analysis"))
         logger.info("BlackMarket AI running")
@@ -404,6 +408,9 @@ class Orchestrator:
         await self.spot_client.close()
         await self.futures_client.close()
         await self.event_bus.stop()
+        if self._event_bus_task:
+            await asyncio.gather(self._event_bus_task, return_exceptions=True)
+            self._event_bus_task = None
         await self.disaster_recovery.stop()
         logger.info("Shutdown complete")
 
