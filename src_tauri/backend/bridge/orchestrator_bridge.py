@@ -572,7 +572,7 @@ class OrchestratorBridge:
         """Get current risk metrics."""
         sim = self.simulator
         manager = sim.risk_manager
-        total_balance = sim.spot_balance + sim.futures_balance
+        total_balance = sim._get_total_equity()
 
         # Current exposure
         total_risk = 0.0
