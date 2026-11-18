@@ -86,3 +86,16 @@ class TestDataIntegrityGuardian:
 
         signals = await intel.analyze_symbol("BTCUSDT", "SPOT")
         assert len(signals) == 0  # Analysis skipped and empty list returned
+
+
+def test_freshness_accepts_current_forming_candle():
+    cm = CandleManager()
+    guardian = DataIntegrityGuardian(cm)
+    now_ms = int(time.time() * 1000)
+    open_time = (now_ms // 60000) * 60000
+    close_time = open_time + 60000 - 1
+    cm.add_candle(
+        "SPOT", "BTCUSDT", "1m", open_time,
+        50000, 50100, 49900, 50050, 10, close_time=close_time
+    )
+    assert guardian.validate_freshness("SPOT", "BTCUSDT", "1m") is True
