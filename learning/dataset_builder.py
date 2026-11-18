@@ -83,7 +83,11 @@ class DatasetBuilder:
                 logger.warning("Stored feature vector is invalid for %s; rebuilding from candles", pred.prediction_id)
 
         # Legacy rows without stored features need a point-in-time candle rebuild.
-        created_ms = int(pred.created_at.timestamp() * 1000)
+        created_at = pred.created_at
+        if created_at.tzinfo is None:
+            from datetime import timezone
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        created_ms = int(created_at.timestamp() * 1000)
         ohlc_data = self._get_ohlc_data(pred.symbol, pred.market, created_ms)
         if not ohlc_data:
             return None
