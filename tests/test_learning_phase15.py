@@ -302,3 +302,27 @@ class TestPredictionStorage:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+@pytest.mark.asyncio
+async def test_learning_cycle_keeps_new_classifier_candidate_inactive(monkeypatch):
+    from learning.outcome_labeler import OutcomeLabeler
+    from learning.trainer import LearningOrchestrator
+
+    class FakeTrainer:
+        def retrain_if_needed(self, _predictor):
+            return {
+                "status": "trained",
+                "version": "candidate-001",
+                "validation": {"ensemble_passes": True},
+            }
+
+    monkeypatch.setattr(OutcomeLabeler, "evaluate_unresolved", lambda self: 2)
+    learning = LearningOrchestrator(repo=object(), predictor=object(), trainer=FakeTrainer())
+
+    result = await learning.run_learning_cycle()
+
+    assert result["outcomes_labeled"] == 2
+    assert result["retrain"]["status"] == "trained"
+    assert result["promotion"]["status"] == "deferred"
+    assert result["promotion"]["active_model_unchanged"] is True
+    assert "promoted" not in result
