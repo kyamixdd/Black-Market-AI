@@ -102,6 +102,8 @@ class Orchestrator:
         # State tracking for dashboard
         self._scanning: bool = False
         self._ws_connected: bool = False
+        # Monotonic timestamp of the last exchange WebSocket message; None until connected.
+        self._last_ws_message_at: float | None = None
         self._tracked_symbols: list[str] = []
         self._recent_snapshots: list[dict] = []
         self._current_regime: str = "UNKNOWN"
