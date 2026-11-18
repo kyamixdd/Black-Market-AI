@@ -236,10 +236,8 @@ class IdempotentEventProcessor:
         """Load recently processed event IDs from database."""
         from database.repositories import Repository
         repo = Repository(self.db.session_maker())
-        # Load last 100k event IDs
-        events = repo.get_system_events(limit=100000)
         with self._cache_lock:
-            self._processed_cache = {e.event_id for e in events}
+            self._processed_cache = repo.get_processed_event_ids(limit=self._max_cache_size)
 
     def is_processed(self, event_id: str) -> bool:
         """Check if event was already processed."""
@@ -249,7 +247,7 @@ class IdempotentEventProcessor:
             # Check database for older events
             from database.repositories import Repository
             repo = Repository(self.db.session_maker())
-            return repo.event_exists(event_id)
+            return repo.event_processed(event_id)
 
     def mark_processed(self, event_id: str) -> None:
         """Mark event as processed."""
@@ -273,7 +271,9 @@ class IdempotentEventProcessor:
         # Process the event
         result = handler()
 
-        # Mark as processed
+        # Persist completion before acknowledging success to the caller.
+        from database.repositories import Repository
+        Repository(self.db.session_maker()).mark_event_processed(event_id)
         self.mark_processed(event_id)
 
         return False, result
