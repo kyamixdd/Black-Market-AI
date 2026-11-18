@@ -174,6 +174,7 @@ impl BackendSupervisor {
             }
         };
         let log_path = self.backend_log_path();
+        let dotenv_path = self.dotenv_path(&project_root);
         let api_token = match self.load_api_token(&project_root) {
             Ok(token) => token,
             Err(error) => {
@@ -307,6 +308,9 @@ impl BackendSupervisor {
             command
                 .env("BLACKMARKET_DATA_DIR", data_dir)
                 .env("BLACKMARKET_CONFIG_DIR", data_dir);
+        }
+        if let Some(env_file) = &dotenv_path {
+            command.env("BLACKMARKET_ENV_FILE", env_file);
         }
         hide_console(&mut command);
 
@@ -458,6 +462,17 @@ impl BackendSupervisor {
         }
     }
 
+    fn dotenv_path(&self, project_root: &Path) -> Option<PathBuf> {
+        if let Some(data_dir) = &self.app_data_dir {
+            let candidate = data_dir.join(".env");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        let candidate = project_root.join(".env");
+        candidate.is_file().then_some(candidate)
+    }
+
     fn load_api_token(&self, project_root: &Path) -> Result<String, String> {
         // Prefer an explicitly configured shared token so the local engine can
         // authenticate requests from the hosted dashboard. Never log this value.
@@ -469,8 +484,8 @@ impl BackendSupervisor {
 
         // Tauri-launched processes do not inherit Python's dotenv loader, so read
         // the project .env directly when a shared token was configured there.
-        let dotenv_path = project_root.join(".env");
-        if let Ok(contents) = fs::read_to_string(&dotenv_path) {
+        if let Some(dotenv_path) = self.dotenv_path(project_root) {
+            if let Ok(contents) = fs::read_to_string(&dotenv_path) {
             for line in contents.lines() {
                 let Some((key, value)) = line.split_once('=') else { continue };
                 if key.trim() == "BLACKMARKET_API_TOKEN" {
