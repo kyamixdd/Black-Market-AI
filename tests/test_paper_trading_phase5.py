@@ -133,19 +133,18 @@ class TestLiquidationEngine:
     def test_margin_ratio(self):
         le = LiquidationEngine()
         pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
-        # At entry price, margin ratio = 3.0
-        assert abs(le.get_margin_ratio(pos, 50000.0) - 3.0) < 0.01
+        # At entry price, margin-to-notional ratio equals 1 / leverage.
+        assert abs(le.get_margin_ratio(pos, 50000.0) - (1.0 / 3.0)) < 0.01
         # At 45000, pnl = -10%, margin ratio = 0.9 * 3 = 2.7
         assert abs(le.get_margin_ratio(pos, 45000.0) - 2.7) < 0.01
 
     def test_margin_risk_detection(self):
         le = LiquidationEngine()
         pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
-        # At 38000, margin ratio ~ 2.28, threshold * MMR = 1.2 * 0.05 = 0.06
-        # 2.28 > 0.06, so not at risk
+        # At 38000 the margin ratio remains above the 0.06 warning threshold.
         assert le.is_at_risk(pos, 38000.0) is False
-        # At 36000, margin ratio ~ 2.16, still above 0.06
-        assert le.is_at_risk(pos, 36000.0) is False
+        # At 36000 it falls below the threshold, near the 35,833 liquidation price.
+        assert le.is_at_risk(pos, 36000.0) is True
 
 
 class TestFundingCalculator:
