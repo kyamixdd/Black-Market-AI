@@ -169,3 +169,10 @@ def test_app_settings_repository_upserts_and_decodes_values(tmp_path):
         "telegram_enabled": False,
     }
     db.close()
+
+
+def test_postgresql_urls_use_psycopg_without_exposing_passwords():
+    db = Database("postgresql://blackmarket:top-secret@example.invalid:5432/blackmarket")
+    assert db.engine.url.drivername == "postgresql+psycopg"
+    assert "top-secret" not in db.engine.url.render_as_string(hide_password=True)
+    db.close()
