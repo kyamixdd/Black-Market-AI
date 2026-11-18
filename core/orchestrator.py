@@ -435,6 +435,20 @@ class Orchestrator:
                 "payload": event.payload,
             }
             self.repo.save_system_event(event_dict)
+            # Persist account-changing records in the same event-pipeline step,
+            # before downstream handlers or a process crash can lose the state.
+            if event.event_type == EventType.POSITION_OPENED:
+                position = event.payload.get("position")
+                if position:
+                    self.repo.save_position(position)
+            elif event.event_type == EventType.POSITION_CLOSED:
+                trade = event.payload.get("trade")
+                if trade:
+                    self.repo.save_trade_history(trade)
+            elif event.event_type in {
+                EventType.ORDER_PLACED, EventType.ORDER_FILLED, EventType.TRADE_REJECTED
+            }:
+                self._persist_paper_order(event.payload.get("order"))
         except Exception as exc:
             logger.error("Failed to persist event %s: %s", event.event_id, exc)
 
