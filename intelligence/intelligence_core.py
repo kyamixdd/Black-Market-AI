@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from config import SIGNAL_DEDUP_WINDOW_SECONDS
+from config import SIGNAL_DEDUP_WINDOW_SECONDS, TIMEFRAMES
 from core.event_bus import EventBus
 from core.event_models import EventType, make_event
 from intelligence.decision_engine import DecisionEngine
@@ -66,7 +66,7 @@ class IntelligenceCore:
 
         # Build multi-timeframe OHLC data
         ohlc_data = {}
-        for tf in ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]:
+        for tf in TIMEFRAMES:
             if self.candles.has_enough_data(market, symbol, tf, min_count=50):
                 ohlc_data[tf] = self.candles.get_ohlc(market, symbol, tf, limit=200)
 
