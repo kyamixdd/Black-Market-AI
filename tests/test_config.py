@@ -43,3 +43,18 @@ def test_telegram_is_opt_in(monkeypatch):
         else:
             monkeypatch.setenv("TELEGRAM_ENABLED", original_value)
         importlib.reload(config)
+
+
+def test_real_trading_configuration_is_rejected(monkeypatch):
+    import config
+    from core.config_validator import ConfigValidationError, validate_config
+
+    monkeypatch.setattr(config, "PAPER_TRADING_ENABLED", False)
+    monkeypatch.setattr(config, "REAL_TRADING_ENABLED", True)
+
+    try:
+        validate_config()
+    except ConfigValidationError as exc:
+        assert "REAL_TRADING_ENABLED is unsupported" in str(exc)
+    else:
+        raise AssertionError("Real trading configuration must never be accepted")
