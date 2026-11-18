@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import './App.css'
 import {
   Activity,
   ArrowDownToLine,
@@ -1390,7 +1389,7 @@ function App() {
       <footer className="statusbar">
         <span><i className={`status-light ${visibleConnection}`} /> BINANCE PUBLIC DATA · {connectionText}</span>
         <span><i className={`status-light ${data.health?.backend_ready === true ? 'live' : 'offline'}`} /> BACKEND {data.health?.backend_ready === true ? 'READY' : 'UNAVAILABLE'}</span>
-        <span><i className={`status-light ${websocketConnected ? 'live' : 'offline'}`} /> WEBSOCKET {websocketConnected ? 'CONNECTED' : 'RECONNECTING'}</span>
+        <span><i className={`status-light ${websocketConnected ? 'live' : 'offline'}`} /> {isTauri ? `WEBSOCKET ${websocketConnected ? 'CONNECTED' : 'RECONNECTING'}` : 'REST POLLING'}</span>
         <span><i className={`status-light ${data.health?.market_data_active === true ? 'live' : 'offline'}`} /> SCANNER {data.health?.market_data_active === true ? 'ACTIVE' : 'INACTIVE'}</span>
         <span className="status-right">PAPER MODE <b>·</b> NO LIVE TRADING</span>
       </footer>
