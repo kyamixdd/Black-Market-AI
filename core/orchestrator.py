@@ -401,7 +401,6 @@ class Orchestrator:
 
     async def _record_prediction(self, symbol: str, market: str, signals: list[dict[str, Any]]) -> None:
         """Persist one leakage-safe prediction per newly closed 15m candle."""
-        now_ms = int(asyncio.get_running_loop().time() * 1000)
         # Exchange candle timestamps are wall-clock epoch milliseconds.
         from datetime import datetime, timezone
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -502,10 +501,15 @@ class Orchestrator:
                     return asyncio.run(self.learning_orchestrator.run_learning_cycle())
 
                 report = await asyncio.to_thread(run_cycle)
+                learning_event = (
+                    EventType.MODEL_TRAINED
+                    if report.get("retrain", {}).get("status") == "trained"
+                    else EventType.LEARNING_UPDATE
+                )
                 await self.event_bus.publish(make_event(
-                    EventType.LEARNING_UPDATE,
+                    learning_event,
                     "learning",
-                    report=report,
+                    **report,
                 ))
                 if report.get("promoted"):
                     await self.event_bus.publish(make_event(
