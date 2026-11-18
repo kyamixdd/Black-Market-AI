@@ -133,19 +133,18 @@ class TestLiquidationEngine:
     def test_margin_ratio(self):
         le = LiquidationEngine()
         pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
-        # At entry price, margin ratio = 3.0
-        assert abs(le.get_margin_ratio(pos, 50000.0) - 3.0) < 0.01
-        # At 45000, pnl = -10%, margin ratio = 0.9 * 3 = 2.7
-        assert abs(le.get_margin_ratio(pos, 45000.0) - 2.7) < 0.01
+        # At entry price, margin-to-notional ratio equals 1 / leverage.
+        assert abs(le.get_margin_ratio(pos, 50000.0) - (1.0 / 3.0)) < 0.01
+        # At 45000, pnl is -10%, so ratio is 1/3 - 0.10.
+        assert abs(le.get_margin_ratio(pos, 45000.0) - (1.0 / 3.0 - 0.10)) < 0.01
 
     def test_margin_risk_detection(self):
         le = LiquidationEngine()
         pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
-        # At 38000, margin ratio ~ 2.28, threshold * MMR = 1.2 * 0.05 = 0.06
-        # 2.28 > 0.06, so not at risk
+        # At 38000 the margin ratio remains above the 0.06 warning threshold.
         assert le.is_at_risk(pos, 38000.0) is False
-        # At 36000, margin ratio ~ 2.16, still above 0.06
-        assert le.is_at_risk(pos, 36000.0) is False
+        # At 36000 it falls below the threshold, near the 35,833 liquidation price.
+        assert le.is_at_risk(pos, 36000.0) is True
 
 
 class TestFundingCalculator:
@@ -252,7 +251,10 @@ async def test_paper_trading_funding():
     position = sim.futures_positions[pos_id]
     initial_balance = sim.futures_balance
 
-    # Apply funding
+    # Simulate a position that crossed the most recent 8-hour UTC settlement.
+    interval_ms = 8 * 3600 * 1000
+    current_bucket = (int(datetime.now(timezone.utc).timestamp() * 1000) // interval_ms) * interval_ms
+    position["last_funding_time"] = current_bucket - interval_ms
     await sim._apply_funding(position, 0.0001)  # 0.01%
 
     # Balance should decrease (longs pay when rate positive)
@@ -529,5 +531,70 @@ async def test_realized_trade_pnl_includes_entry_and_exit_fees():
 
     trade = sim.closed_trades[0]
     assert trade["fee"] == 0.2
-    assert sim.spot_balance == pytest.approx(500.0 + trade["pnl"])
+    assert sim.spot_balance == pytest.approx(sim.initial_spot_balance + trade["pnl"])
     assert sim.daily_pnl == pytest.approx(trade["pnl"])
+
+def test_simulator_rejects_short_positions_on_spot_market():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-SPOT-SHORT-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "SELL",
+        "entry": 50000.0,
+        "stop_loss": 51000.0,
+        "take_profit": [48000.0],
+        "leverage": 1.0,
+    }
+    valid, reason = simulator.validate_new_position(signal)
+    assert valid is False
+    assert "does not support short" in reason
+
+
+def test_limit_order_fill_never_worsens_limit_price():
+    from paper_trading.fee_calculator import FeeCalculator
+
+    calculator = FeeCalculator()
+    buy_fill = calculator.get_fill_price("SPOT", "BUY", "LIMIT", 100.0, 1.0)
+    sell_fill = calculator.get_fill_price("SPOT", "SELL", "LIMIT", 100.0, 1.0)
+    market_buy_fill = calculator.get_fill_price("SPOT", "BUY", "MARKET", 100.0, 1.0)
+
+    assert buy_fill == 100.0
+    assert sell_fill == 100.0
+    assert market_buy_fill > 100.0
+
+
+def test_futures_liquidation_treats_buy_as_long():
+    from paper_trading.liquidation_engine import LiquidationEngine
+
+    engine = LiquidationEngine()
+    position = {
+        "market": "FUTURES",
+        "side": "BUY",
+        "entry_price": 100.0,
+        "leverage": 10.0,
+    }
+    liquidation_price = engine.calculate_liquidation_price(position)
+
+    assert liquidation_price < 100.0
+    assert engine.check_liquidation(position, liquidation_price - 0.01) is True
+    assert engine.check_liquidation(position, liquidation_price + 0.01) is False
+    assert engine.get_margin_ratio(position, 90.0) < engine.get_margin_ratio(position, 110.0)
+
+
+def test_futures_margin_ratio_reaches_maintenance_margin_at_liquidation():
+    from paper_trading.liquidation_engine import LiquidationEngine
+
+    engine = LiquidationEngine()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "entry_price": 100.0,
+        "leverage": 10.0,
+    }
+    liquidation_price = engine.calculate_liquidation_price(position)
+
+    assert engine.get_margin_ratio(position, 100.0) == pytest.approx(0.10)
+    assert engine.get_margin_ratio(position, liquidation_price) == pytest.approx(engine.DEFAULT_MMR)
+    assert engine.is_at_risk(position, 96.01) is False
+    assert engine.is_at_risk(position, 95.99) is True

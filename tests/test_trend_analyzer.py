@@ -54,3 +54,21 @@ def test_trend_analyzer():
     result = analyzer.analyze("SPOT", "BTCUSDT")
     assert "1m" in result
     assert "alignment" in result
+
+def test_candle_manager_deduplicates_overlapping_historical_refreshes():
+    cm = CandleManager()
+    candles = [(1000, 10.0), (61000, 11.0), (121000, 12.0)]
+    for timestamp, close in candles:
+        assert cm.add_candle("SPOT", "BTCUSDT", "1m", timestamp, close, close, close, close, 1.0)
+
+    # Replaying older history must update in place, not append it to the tail.
+    assert cm.add_candle("SPOT", "BTCUSDT", "1m", 61000, 11.0, 11.5, 10.5, 11.2, 2.0) is False
+    series = cm.get_series("SPOT", "BTCUSDT", "1m", limit=10)
+    assert [c["open_time"] for c in series] == [1000, 61000, 121000]
+    assert series[1]["close"] == 11.2
+
+    # A genuinely new candle remains in chronological order.
+    assert cm.add_candle("SPOT", "BTCUSDT", "1m", 181000, 13.0, 13.0, 13.0, 13.0, 1.0)
+    assert [c["open_time"] for c in cm.get_series("SPOT", "BTCUSDT", "1m", limit=10)] == [
+        1000, 61000, 121000, 181000
+    ]

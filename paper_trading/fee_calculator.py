@@ -67,6 +67,10 @@ class FeeCalculator:
     def get_fill_price(self, market: str, direction: str, order_type: str, price: float,
                        amount: float, leverage: float = 1.0, volume_24h: float = 0.0) -> float:
         """Get the realistic fill price including spread and slippage."""
+        # A limit order cannot execute at a worse price than its limit. Model
+        # the fill at the limit price; market exits still incur spread/slippage.
+        if order_type == "LIMIT":
+            return price
         spread = self.calculate_spread(market, price)
         slippage = self.calculate_slippage(market, order_type, amount, price, leverage, volume_24h)
 

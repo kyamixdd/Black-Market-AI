@@ -206,3 +206,19 @@ def test_signal_deduplication():
 
     # Second should be duplicate
     assert core._is_duplicate(signal) is True
+
+def test_confidence_engine_applies_adaptive_strategy_weight():
+    from intelligence.confidence_engine import ConfidenceEngine
+
+    engine = ConfidenceEngine()
+    signal = {
+        "raw_score": 50.0,
+        "entry": 100.0,
+        "stop_loss": 99.0,
+        "take_profit": [103.0],
+    }
+    base_confidence = engine.calculate(signal)
+    weighted_confidence = engine.calculate({**signal, "_weight": 1.5})
+
+    assert weighted_confidence > base_confidence
+    assert 0.0 <= weighted_confidence <= 1.0

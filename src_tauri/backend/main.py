@@ -22,8 +22,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from dotenv import load_dotenv
 
 config_dir = Path(os.environ.get("BLACKMARKET_CONFIG_DIR", PROJECT_ROOT))
-config_path = config_dir / ".env"
-load_dotenv(config_path if config_path.is_file() else PROJECT_ROOT / ".env")
+config_path = Path(os.environ.get("BLACKMARKET_ENV_FILE", config_dir / ".env"))
+if not config_path.is_file():
+    config_path = PROJECT_ROOT / ".env"
+load_dotenv(config_path if config_path.is_file() else None)
 
 from config import DATABASE_URL, LOG_LEVEL
 from core.config_validator import validate_config_or_exit
@@ -100,7 +102,6 @@ def _api_host() -> str:
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     global orchestrator, db, bridge, ws_manager
-    event_task: asyncio.Task | None = None
     orchestrator_task: asyncio.Task | None = None
 
     logger.info("Starting BlackMarket AI Backend Adapter...")
@@ -125,7 +126,6 @@ async def lifespan(app: FastAPI):
     # Create WebSocket manager
     ws_manager = WebSocketManager(orchestrator.event_bus)
     await ws_manager.start()
-    event_task = asyncio.create_task(orchestrator.event_bus.run(), name="blackmarket-event-bus")
     orchestrator_task = asyncio.create_task(orchestrator.run(), name="blackmarket-orchestrator")
 
     logger.info("BlackMarket AI Backend Adapter started")
@@ -139,9 +139,6 @@ async def lifespan(app: FastAPI):
         if orchestrator_task and not orchestrator_task.done():
             orchestrator_task.cancel()
             await asyncio.gather(orchestrator_task, return_exceptions=True)
-        if event_task and not event_task.done():
-            event_task.cancel()
-            await asyncio.gather(event_task, return_exceptions=True)
         if ws_manager:
             await ws_manager.shutdown()
         if db:
@@ -270,14 +267,27 @@ async def health_check():
             "version": "1.0.0",
         }
     health = orchestrator.health_monitor.get_status()
+    from config import AUTO_MODEL_TRAINING, PAPER_TRADING_ENABLED
+    market_data_active = bool(
+        orchestrator.scanner._running and orchestrator.has_fresh_market_data()
+    )
     return {
         "status": health.get("status", "unknown"),
-        "backend_ready": True,
+        "backend_ready": bool(db is not None and market_data_active),
+        # This is the local dashboard WebSocket service. Exchange market
+        # stream health is reported separately so REST-only fallback stays usable.
         "websocket_connected": bool(ws_manager and ws_manager.get_stats().get("running")),
+        "exchange_websocket_connected": bool(
+            orchestrator._last_ws_message_at
+            and asyncio.get_running_loop().time() - orchestrator._last_ws_message_at < 120
+        ),
         "database_connected": db is not None,
-        "market_data_active": orchestrator.scanner._running,
-        "learning_active": orchestrator.intelligence.predictor.is_trained,
-        "paper_trading_active": True,
+        "market_data_active": market_data_active,
+        "learning_active": bool(AUTO_MODEL_TRAINING and any(
+            task.get_name() == "blackmarket-learning" and not task.done()
+            for task in asyncio.all_tasks()
+        )),
+        "paper_trading_active": PAPER_TRADING_ENABLED,
         "uptime_seconds": health.get("metrics", {}).get("uptime_seconds", 0.0),
         "version": "1.0.0",
     }

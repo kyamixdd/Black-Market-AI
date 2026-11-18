@@ -181,10 +181,19 @@ class DatabaseBackupManager:
                 logger.error(f"Backup not found: {backup_path}")
                 return False
 
+            source_path = Path(self._get_source_path()).resolve()
             if target_path is None:
-                target_path = Path(self._get_source_path())
+                target_path = source_path
+            else:
+                target_path = Path(target_path).resolve()
+            reopen_database = target_path == source_path
 
             try:
+                # Close pooled SQLite connections before replacing the database
+                # file (required on Windows and avoids stale pooled page caches).
+                if reopen_database:
+                    self.db.close()
+                target_path.parent.mkdir(parents=True, exist_ok=True)
                 if self.config.compress:
                     import tempfile
                     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -199,9 +208,16 @@ class DatabaseBackupManager:
                 else:
                     shutil.copy2(backup_path, target_path)
 
+                if reopen_database:
+                    self.db.init_db()
                 logger.info(f"Restored database from {backup_path}")
                 return True
             except Exception as e:
+                if reopen_database and self.db._engine is None:
+                    try:
+                        self.db.init_db()
+                    except Exception:
+                        logger.exception("Failed to reopen database after restore error")
                 logger.error(f"Restore failed: {e}")
                 return False
 
@@ -434,9 +450,11 @@ class PositionRecoveryManager:
                 if closed_at.astimezone(timezone.utc).date() == today:
                     self.simulator.daily_pnl += trade.pnl
         for position in self.simulator.spot_positions.values():
-            self.simulator.spot_balance -= position.get("fees_paid", 0.0)
+            reserved = position.get("margin", position.get("entry_price", 0.0) * position.get("amount", 0.0))
+            self.simulator.spot_balance -= reserved + position.get("fees_paid", 0.0)
         for position in self.simulator.futures_positions.values():
-            self.simulator.futures_balance -= position.get("fees_paid", 0.0)
+            reserved = position.get("margin", position.get("entry_price", 0.0) * position.get("amount", 0.0))
+            self.simulator.futures_balance -= reserved + position.get("fees_paid", 0.0)
 
 
 class ModelCheckpointRecovery:
@@ -634,7 +652,7 @@ class TelegramRetryManager:
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.max_delay = max_delay
-        self._pending: dict[str, tuple[Callable, int]] = {}
+        self._pending: dict[str, tuple[Callable, tuple[Any, ...], dict[str, Any], int]] = {}
         self._lock = threading.RLock()
 
     async def send_with_retry(self, method: Callable, *args, **kwargs) -> bool:
@@ -922,10 +940,19 @@ class DisasterRecoveryOrchestrator:
                 except Exception as e:
                     logger.error(f"Auto backup failed: {e}")
 
-    def _on_stall(self) -> None:
-        """Called when watchdog detects stall."""
+    async def _on_stall(self) -> None:
+        """Attempt bounded REST resynchronization and WebSocket restart after a stall."""
         logger.critical("System stall detected - initiating emergency recovery")
-        # Could trigger restart, alert, etc.
+        try:
+            result = await self.rest_resync.resync_all()
+            logger.warning("Emergency REST resynchronization result: %s", result)
+            await self.ws_reconnection.handle_disconnect()
+        except Exception:
+            logger.exception("Emergency recovery attempt failed")
+        finally:
+            # Re-arm the watchdog so a failed recovery is retried after another
+            # stall interval rather than permanently suppressing future attempts.
+            self.watchdog.heartbeat()
 
 
 def create_disaster_recovery_orchestrator(

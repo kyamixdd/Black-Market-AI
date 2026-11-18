@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,16 @@ class ModelTrainer:
         X, y = self.dataset_builder.build_dataset()
         if len(X) == 0:
             return {"status": "insufficient_data", "samples": 0}
+        if X.ndim != 2 or not np.isfinite(X).all():
+            return {"status": "invalid_dataset", "samples": int(len(X))}
+        class_counts = {int(label): int(count) for label, count in zip(*np.unique(y, return_counts=True))}
+        if set(class_counts) != {0, 1, 2}:
+            return {
+                "status": "insufficient_class_diversity",
+                "samples": int(len(X)),
+                "class_counts": class_counts,
+                "required_classes": [0, 1, 2],
+            }
 
         # 2. Walk-forward validation
         validation = self.validator.validate_ensemble(X, y)
@@ -67,13 +78,13 @@ class ModelTrainer:
     def _train_final_models(self, X: np.ndarray, y: np.ndarray, version: str) -> dict[str, Any]:
         """Train final models on full dataset and save."""
         # Train RF
-        rf = RandomForestClassifier(n_estimators=300, max_depth=12, random_state=42, n_jobs=-1)
+        rf = RandomForestClassifier(n_estimators=200, max_depth=12, random_state=42, n_jobs=2)
         rf.fit(X, y)
 
         # Train XGBoost
         xgb_model = xgb.XGBClassifier(
-            n_estimators=300, max_depth=8, learning_rate=0.05,
-            random_state=42, n_jobs=-1, eval_metric="mlogloss"
+            n_estimators=200, max_depth=8, learning_rate=0.05,
+            random_state=42, n_jobs=2, eval_metric="mlogloss"
         )
         xgb_model.fit(X, y)
 
@@ -90,7 +101,10 @@ class ModelTrainer:
         xgb_model.save_model(str(xgb_path))
         joblib.dump(scaler, scaler_path)
 
-        # Update symlinks to latest
+        # Train the online River model as the incremental-learning leg of the hybrid.
+        self.train_river_online(X, y, version=version)
+
+        # Update portable "latest" model copies after all artifacts are written.
         self._update_latest_symlinks(version)
 
         # Calculate training metrics
@@ -121,12 +135,21 @@ class ModelTrainer:
         return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
     def _update_latest_symlinks(self, version: str) -> None:
-        """Update 'latest' symlinks to point to new version."""
-        for name in ["rf_model.pkl", "xgb_model.json", "scaler.pkl"]:
-            target = self.model_dir / name
-            if target.exists() or target.is_symlink():
-                target.unlink()
-            target.symlink_to(self.model_dir / name.replace(".", f"_{version}."))
+        """Update portable latest-model copies (works without Windows symlink privileges)."""
+        targets = {
+            "rf_model.pkl": f"rf_{version}.pkl",
+            "xgb_model.json": f"xgb_{version}.json",
+            "scaler.pkl": f"scaler_{version}.pkl",
+            "river_model.pkl": f"river_{version}.pkl",
+        }
+        for alias, filename in targets.items():
+            source = self.model_dir / filename
+            if not source.is_file():
+                if alias == "river_model.pkl":
+                    (self.model_dir / alias).unlink(missing_ok=True)
+                continue
+            shutil.copy2(source, self.model_dir / alias)
+        (self.model_dir / "latest_version.txt").write_text(version, encoding="utf-8")
 
     def _register_model(self, version: str, model_type: str, metrics: dict, file_path: str) -> None:
         """Register model in database."""
@@ -148,7 +171,7 @@ class ModelTrainer:
         with open(val_dir / f"validation_{version}.json", "w") as f:
             json_lib.dump(validation, f, indent=2)
 
-    def train_river_online(self, X: np.ndarray, y: np.ndarray) -> compose.Pipeline | None:
+    def train_river_online(self, X: np.ndarray, y: np.ndarray, version: str | None = None) -> compose.Pipeline | None:
         """Train River online learning model for incremental updates."""
         try:
             model = compose.Pipeline(
@@ -164,7 +187,7 @@ class ModelTrainer:
                 model.learn_one(dict(enumerate(xi)), yi)
 
             # Save River model
-            version = self._generate_version()
+            version = version or self._generate_version()
             river_path = self.model_dir / f"river_{version}.pkl"
             joblib.dump(model, river_path)
 
@@ -178,12 +201,10 @@ class ModelTrainer:
         """Check if retraining is needed and execute if so."""
         from sqlalchemy import select
 
-        from config import MODEL_RETRAIN_MIN_DAYS
-        from database.connection import get_session_maker
+        from config import MODEL_RETRAIN_MIN_DAYS, MODEL_RETRAIN_MIN_NEW_SAMPLES
         from database.models import ModelRegistryModel
 
-        session_maker = get_session_maker()
-        with session_maker() as session:
+        with self.repo._get_session() as session:
             stmt = (
                 select(ModelRegistryModel)
                 .where(ModelRegistryModel.is_active.is_(True))
@@ -193,14 +214,49 @@ class ModelTrainer:
             active = session.scalars(stmt).first()
 
         if not active:
-            return {"status": "no_active_model", "action": "train"}
-
-        days_since = (datetime.now(timezone.utc) - active.trained_at).days
-        if days_since >= MODEL_RETRAIN_MIN_DAYS:
-            logger.info("Model age %d days >= %d, retraining...", days_since, MODEL_RETRAIN_MIN_DAYS)
+            logger.info("No active model found; starting the initial training attempt")
             return self.train_and_validate()
 
-        return {"status": "model_current", "days_since_train": days_since}
+        trained_at = active.trained_at
+        if trained_at.tzinfo is None:
+            trained_at = trained_at.replace(tzinfo=timezone.utc)
+        days_since = (datetime.now(timezone.utc) - trained_at).days
+        predictions = self.repo.get_predictions_history(limit=10000)
+        resolved_since_training = 0
+        recent_resolved = []
+        for prediction in predictions:
+            if prediction.is_correct is None:
+                continue
+            created_at = prediction.created_at
+            if created_at and created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if created_at and created_at > trained_at:
+                resolved_since_training += 1
+            recent_resolved.append(bool(prediction.is_correct))
+            if len(recent_resolved) >= 100:
+                break
+
+        recent_accuracy = (
+            sum(recent_resolved) / len(recent_resolved) if recent_resolved else None
+        )
+        should_retrain = (
+            days_since >= MODEL_RETRAIN_MIN_DAYS
+            or resolved_since_training >= MODEL_RETRAIN_MIN_NEW_SAMPLES
+            or (len(recent_resolved) >= 50 and recent_accuracy is not None and recent_accuracy < 0.48)
+        )
+        if should_retrain:
+            logger.info(
+                "Retraining triggered: model_age_days=%d, new_resolved=%d, recent_accuracy=%s",
+                days_since, resolved_since_training, recent_accuracy,
+            )
+            return self.train_and_validate()
+
+        return {
+            "status": "model_current",
+            "days_since_train": days_since,
+            "new_resolved_samples": resolved_since_training,
+            "recent_accuracy": recent_accuracy,
+        }
 
 
 class LearningOrchestrator:
@@ -222,8 +278,12 @@ class LearningOrchestrator:
         labeled = labeler.evaluate_unresolved()
         results["outcomes_labeled"] = labeled
 
-        # 2. Check if retraining is needed
-        retrain_result = self.trainer.retrain_if_needed(self.predictor)
+        # 2. Respect the operator's automatic-training and ML switches.
+        from config import AUTO_MODEL_TRAINING, ML_ENABLED
+        if AUTO_MODEL_TRAINING and ML_ENABLED:
+            retrain_result = self.trainer.retrain_if_needed(self.predictor)
+        else:
+            retrain_result = {"status": "disabled"}
         results["retrain"] = retrain_result
 
         # 3. If new model trained and validated, promote it

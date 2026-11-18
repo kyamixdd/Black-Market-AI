@@ -174,7 +174,8 @@ impl BackendSupervisor {
             }
         };
         let log_path = self.backend_log_path();
-        let api_token = match self.load_api_token() {
+        let dotenv_path = self.dotenv_path(&project_root);
+        let api_token = match self.load_api_token(&project_root) {
             Ok(token) => token,
             Err(error) => {
                 self.fail(
@@ -307,6 +308,9 @@ impl BackendSupervisor {
             command
                 .env("BLACKMARKET_DATA_DIR", data_dir)
                 .env("BLACKMARKET_CONFIG_DIR", data_dir);
+        }
+        if let Some(env_file) = &dotenv_path {
+            command.env("BLACKMARKET_ENV_FILE", env_file);
         }
         hide_console(&mut command);
 
@@ -458,7 +462,45 @@ impl BackendSupervisor {
         }
     }
 
-    fn load_api_token(&self) -> Result<String, String> {
+    fn dotenv_path(&self, project_root: &Path) -> Option<PathBuf> {
+        if let Some(data_dir) = &self.app_data_dir {
+            let candidate = data_dir.join(".env");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        let candidate = project_root.join(".env");
+        candidate.is_file().then_some(candidate)
+    }
+
+    fn load_api_token(&self, project_root: &Path) -> Result<String, String> {
+        // Prefer an explicitly configured shared token so the local engine can
+        // authenticate requests from the hosted dashboard. Never log this value.
+        if let Ok(token) = env::var("BLACKMARKET_API_TOKEN") {
+            if !token.trim().is_empty() {
+                return validate_api_token(token.trim());
+            }
+        }
+
+        // Tauri-launched processes do not inherit Python's dotenv loader, so read
+        // the selected application/project .env directly.
+        if let Some(dotenv_path) = self.dotenv_path(project_root) {
+            if let Ok(contents) = fs::read_to_string(&dotenv_path) {
+                for line in contents.lines() {
+                    let Some((key, value)) = line.split_once('=') else {
+                        continue;
+                    };
+                    if key.trim() == "BLACKMARKET_API_TOKEN" {
+                        let value = value.trim().trim_matches('"').trim_matches('\'');
+                        if !value.is_empty() {
+                            return validate_api_token(value);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Standalone desktop use still gets a private per-install token.
         let data_dir = self
             .app_data_dir
             .as_ref()
@@ -482,11 +524,7 @@ impl BackendSupervisor {
             }
             Err(error) => return Err(error.to_string()),
         };
-        let token = token.trim().to_owned();
-        if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err("The stored token file is invalid.".to_owned());
-        }
-        Ok(token)
+        validate_api_token(token.trim())
     }
 
     fn backend_log_path(&self) -> PathBuf {
@@ -642,6 +680,17 @@ fn probe_health() -> Probe {
         return Probe::Unavailable;
     }
     parse_health_response(&response)
+}
+
+fn validate_api_token(token: &str) -> Result<String, String> {
+    if !(32..=128).contains(&token.len())
+        || !token.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(
+            "The API token must contain 32 to 128 hexadecimal characters.".to_owned(),
+        );
+    }
+    Ok(token.to_owned())
 }
 
 fn parse_health_response(response: &str) -> Probe {
@@ -803,7 +852,7 @@ fn hide_console(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_health_response, Probe};
+    use super::{parse_health_response, validate_api_token, Probe};
 
     #[test]
     fn health_check_requires_backend_database_and_websocket_readiness() {
@@ -826,3 +875,16 @@ mod tests {
         ));
     }
 }
+    #[test]
+    fn accepts_local_and_shared_hex_api_tokens() {
+        assert!(validate_api_token(&"a".repeat(32)).is_ok());
+        assert!(validate_api_token(&"b".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn rejects_weak_or_non_hex_api_tokens() {
+        assert!(validate_api_token("short").is_err());
+        assert!(validate_api_token(&"g".repeat(64)).is_err());
+        assert!(validate_api_token(&"a".repeat(129)).is_err());
+    }
+

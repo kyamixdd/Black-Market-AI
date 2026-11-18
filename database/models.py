@@ -262,6 +262,14 @@ class SystemEventModel(Base):
     payload = Column(Text, nullable=False)
 
 
+class SimulatorStateModel(Base):
+    __tablename__ = "simulator_state"
+
+    state_id = Column(String(32), primary_key=True, default="default")
+    payload = Column(Text, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc)
+
+
 def create_all(db_path: str) -> None:
     engine = create_engine(db_path, future=True)
     Base.metadata.create_all(engine)

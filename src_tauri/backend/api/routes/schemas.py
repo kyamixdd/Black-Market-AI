@@ -526,6 +526,7 @@ class HealthResponse(BaseModel):
     status: str
     backend_ready: bool
     websocket_connected: bool
+    exchange_websocket_connected: bool = False
     database_connected: bool
     market_data_active: bool
     learning_active: bool

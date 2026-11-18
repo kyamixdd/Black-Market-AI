@@ -51,8 +51,11 @@ class OutcomeLabeler:
     def _evaluate_prediction(self, pred: PredictionModel) -> dict[str, Any] | None:
         """Evaluate a single prediction's outcome."""
         # Check if enough time has passed
-        created_ms = int(pred.created_at.timestamp() * 1000)
-        horizon_ms = self.horizon_minutes * 60 * 1000
+        created_at = pred.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        created_ms = int(created_at.timestamp() * 1000)
+        horizon_ms = int(pred.horizon_minutes or self.horizon_minutes) * 60 * 1000
         current_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         if current_ms - created_ms < horizon_ms:
@@ -65,56 +68,70 @@ class OutcomeLabeler:
         if entry_price is None or exit_price is None:
             return None
 
-        # Calculate return with transaction costs
-        costs = self._calculate_costs(pred.market, pred.predicted_class, entry_price, exit_price)
-        actual_return_pct = self._calculate_return_with_costs(
-            pred.market, pred.predicted_class, entry_price, exit_price, costs
-        )
-
-        # Determine actual outcome class
+        # Label the actual underlying market move independently of the model's
+        # prediction. Otherwise a correct DOWN prediction is incorrectly labeled
+        # UP merely because the short trade would have made money.
+        market_return = (exit_price - entry_price) / entry_price
         threshold = 0.002  # 0.2% threshold for UP/DOWN
-        if actual_return_pct > threshold:
+        if market_return > threshold:
             actual_outcome = "UP"
-        elif actual_return_pct < -threshold:
+        elif market_return < -threshold:
             actual_outcome = "DOWN"
         else:
             actual_outcome = "FLAT"
 
-        is_correct = (actual_outcome == pred.predicted_class)
-        eval_notes = f"Entry: {entry_price:.4f}, Exit: {exit_price:.4f}, Net Return: {actual_return_pct:.4%}"
+        costs = self._calculate_costs(pred.market, pred.predicted_class, entry_price, exit_price)
+        cost_fraction = costs / entry_price if entry_price > 0 else 0.0
+        if pred.predicted_class == "UP":
+            simulated_pnl = market_return - cost_fraction
+        elif pred.predicted_class == "DOWN":
+            simulated_pnl = -market_return - cost_fraction
+        else:
+            simulated_pnl = 0.0
+
+        is_correct = actual_outcome == pred.predicted_class
+        eval_notes = (
+            f"Entry: {entry_price:.4f}, Exit: {exit_price:.4f}, "
+            f"Market return: {market_return:.4%}, "
+            f"Predicted-side net return: {simulated_pnl:.4%}"
+        )
 
         return {
             "actual_outcome": actual_outcome,
-            "actual_return_pct": actual_return_pct,
+            "actual_return_pct": market_return,
             "is_correct": is_correct,
-            "transaction_costs": costs / entry_price if entry_price > 0 else 0,
-            "simulated_pnl": actual_return_pct,
+            "transaction_costs": cost_fraction,
+            "simulated_pnl": simulated_pnl,
             "evaluation_notes": eval_notes
         }
 
     def _get_price_at_time(self, symbol: str, market: str, timestamp_ms: int) -> float | None:
         """Get price for symbol at specific timestamp from candles."""
-        # Try to get from 1m candles
-        from database.connection import get_session_maker
-        session_maker = get_session_maker()
+        # Query the same database configured for this orchestrator instance.
         from sqlalchemy import select
-
         from database.models import CandleModel
 
-        with session_maker() as session:
+        with self.repo._get_session() as session:
             stmt = (
-                select(CandleModel.close)
+                select(CandleModel.close, CandleModel.close_time)
                 .where(
                     CandleModel.symbol == symbol,
                     CandleModel.market == market,
                     CandleModel.timeframe == "1m",
-                    CandleModel.open_time <= timestamp_ms,
+                    CandleModel.close_time <= timestamp_ms,
                 )
                 .order_by(CandleModel.open_time.desc())
                 .limit(1)
             )
-            result = session.execute(stmt).scalar()
-            return float(result) if result else None
+            result = session.execute(stmt).first()
+            if not result:
+                return None
+            price, close_time = result
+            # Do not label against an old candle when the symbol has not been
+            # refreshed around the prediction horizon. Wait for fresh history.
+            if timestamp_ms - int(close_time) > 2 * 60 * 1000:
+                return None
+            return float(price) if price and float(price) > 0 else None
 
     def _calculate_costs(self, market: str, direction: str, entry: float, exit: float) -> float:
         """Calculate transaction costs for round trip."""

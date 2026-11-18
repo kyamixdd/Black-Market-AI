@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +13,7 @@ import xgboost as xgb
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
-from config import ML_ENABLED
+from config import ML_ENABLED, MODELS_DIR
 
 logger = logging.getLogger(__name__)
 CLASS_NAMES = {0: "DOWN", 1: "FLAT", 2: "UP"}
@@ -19,10 +21,12 @@ CLASS_NAMES = {0: "DOWN", 1: "FLAT", 2: "UP"}
 
 class Predictor:
     def __init__(self, model_dir: Path | None = None):
-        self.model_dir = model_dir or Path(__file__).resolve().parents[1] / "models"
+        self.model_dir = Path(model_dir or MODELS_DIR)
         self.model_dir.mkdir(parents=True, exist_ok=True)
+        self._model_lock = threading.RLock()
         self.rf_model: RandomForestClassifier | None = None
         self.xgb_model: xgb.XGBClassifier | None = None
+        self.river_model: Any | None = None
         # Retained for compatibility with older model bundles. Current RF/XGB
         # training and validation use raw features, so inference must too.
         self.scaler = StandardScaler()
@@ -32,16 +36,30 @@ class Predictor:
             self._load_latest()
 
     def _load_latest(self) -> None:
+        with self._model_lock:
+            self._load_latest_locked()
+
+    def _load_latest_locked(self) -> None:
         rf_path = self.model_dir / "rf_model.pkl"
         xgb_path = self.model_dir / "xgb_model.json"
         scaler_path = self.model_dir / "scaler.pkl"
+        river_path = self.model_dir / "river_model.pkl"
         if rf_path.exists() and xgb_path.exists():
             try:
                 self.rf_model = joblib.load(rf_path)
                 self.xgb_model = xgb.XGBClassifier()
                 self.xgb_model.load_model(str(xgb_path))
+                if river_path.exists():
+                    try:
+                        self.river_model = joblib.load(river_path)
+                    except Exception as river_exc:
+                        self.river_model = None
+                        logger.warning("Failed to load River model: %s", river_exc)
+                version_file = self.model_dir / "latest_version.txt"
+                if version_file.exists():
+                    self.version = version_file.read_text(encoding="utf-8").strip() or self.version
                 self.is_trained = True
-                logger.info("Loaded existing models")
+                logger.info("Loaded batch models%s", " and River online model" if self.river_model else "")
             except Exception as exc:
                 self.is_trained = False
                 logger.warning("Failed to load models: %s", exc)
@@ -62,6 +80,10 @@ class Predictor:
         return aligned
 
     def predict(self, features: np.ndarray) -> dict[str, Any]:
+        with self._model_lock:
+            return self._predict_locked(features)
+
+    def _predict_locked(self, features: np.ndarray) -> dict[str, Any]:
         if not self.is_trained or self.rf_model is None or self.xgb_model is None:
             return {
                 "prob_up": 0.33, "prob_down": 0.34, "prob_flat": 0.33,
@@ -82,7 +104,24 @@ class Predictor:
         # Applying StandardScaler only at inference creates train/serve skew.
         rf_probs = self._class_probabilities(self.rf_model, X)
         xgb_probs = self._class_probabilities(self.xgb_model, X)
-        probs = (rf_probs + xgb_probs) / 2.0
+        probability_sets = [rf_probs, xgb_probs]
+        if self.river_model is not None:
+            try:
+                river_raw = self.river_model.predict_proba_one(dict(enumerate(X[0])))
+                river_probs = np.zeros(3, dtype=np.float64)
+                for class_value, probability in river_raw.items():
+                    try:
+                        class_index = int(class_value)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if class_index in CLASS_NAMES:
+                        river_probs[class_index] = float(probability)
+                if np.isfinite(river_probs).all() and river_probs.sum() > 0:
+                    river_probs /= river_probs.sum()
+                    probability_sets.append(river_probs)
+            except Exception as exc:
+                logger.warning("River inference failed; using batch ensemble only: %s", exc)
+        probs = np.mean(probability_sets, axis=0)
         total = float(probs.sum())
         if not np.isfinite(probs).all() or total <= 0:
             raise ValueError("Models returned invalid class probabilities")
@@ -98,14 +137,25 @@ class Predictor:
         }
 
     def save(self, version: str) -> None:
+        with self._model_lock:
+            self._save_locked(version)
+
+    def _save_locked(self, version: str) -> None:
         if self.rf_model is None or self.xgb_model is None:
             return
-        joblib.dump(self.rf_model, self.model_dir / f"rf_{version}.pkl")
-        self.xgb_model.save_model(str(self.model_dir / f"xgb_{version}.json"))
-        joblib.dump(self.scaler, self.model_dir / f"scaler_{version}.pkl")
-        # Symlink latest
-        for name in ["rf_model.pkl", "xgb_model.json", "scaler.pkl"]:
-            target = self.model_dir / name
-            if target.exists() or target.is_symlink():
-                target.unlink()
-            target.symlink_to(self.model_dir / name.replace(".", f"_{version}."))
+        artifacts = {
+            "rf_model.pkl": f"rf_{version}.pkl",
+            "xgb_model.json": f"xgb_{version}.json",
+            "scaler.pkl": f"scaler_{version}.pkl",
+        }
+        joblib.dump(self.rf_model, self.model_dir / artifacts["rf_model.pkl"])
+        self.xgb_model.save_model(str(self.model_dir / artifacts["xgb_model.json"]))
+        joblib.dump(self.scaler, self.model_dir / artifacts["scaler.pkl"])
+        if self.river_model is not None:
+            river_name = f"river_{version}.pkl"
+            joblib.dump(self.river_model, self.model_dir / river_name)
+            artifacts["river_model.pkl"] = river_name
+        for alias, filename in artifacts.items():
+            shutil.copy2(self.model_dir / filename, self.model_dir / alias)
+        (self.model_dir / "latest_version.txt").write_text(version, encoding="utf-8")
+        self.version = version

@@ -27,14 +27,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r src_tauri/backend/requirements.txt
           pip install pytest pytest-asyncio
       - name: Run test suite
         env:
           APP_ENV: test
           TELEGRAM_ENABLED: "false"
           REAL_TRADING_ENABLED: "false"
-        run: pytest -q
+        run: python -m pytest -q
 
   frontend:
     name: Frontend typecheck and tests
@@ -55,6 +55,27 @@ jobs:
         run: npm test
       - name: Build frontend
         run: npm run build
+
+
+  tauri-rust:
+    name: Tauri backend supervisor Rust check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blackmarket-desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libwebkit2gtk-4.1-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format Rust sources
+        run: cargo fmt --all
+      - name: Compile supervisor
+        run: cargo check --locked
 
   web:
     name: Web dashboard build

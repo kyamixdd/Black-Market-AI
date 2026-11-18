@@ -159,17 +159,28 @@ class OrchestratorBridge:
     # ===== Signals =====
 
     def get_all_signals(self) -> list[dict]:
-        """Get persisted signal decisions from the local event history."""
-        signals = []
+        """Return the latest persisted decision state for each signal."""
+        latest: dict[str, dict] = {}
         for event in self.repo.get_system_events(limit=1000):
-            if event.event_type not in {"SIGNAL_PROPOSED", "SIGNAL_VALIDATED", "SIGNAL_REJECTED", "SIGNAL_EXPIRED"}:
+            if event.event_type not in {
+                "SIGNAL_PROPOSED", "SIGNAL_VALIDATED", "SIGNAL_REJECTED", "SIGNAL_EXPIRED"
+            }:
                 continue
             try:
                 payload = json.loads(event.payload) if isinstance(event.payload, str) else event.payload
-            except json.JSONDecodeError:
+            except (TypeError, json.JSONDecodeError):
                 logger.warning("Skipping malformed signal event %s", event.event_id)
                 continue
-            if not isinstance(payload, dict) or not payload.get("symbol"):
+            if not isinstance(payload, dict):
+                continue
+            # make_event stores envelope symbol/market outside the JSON payload.
+            payload = {
+                **payload,
+                "symbol": event.symbol or payload.get("symbol"),
+                "market": event.market or payload.get("market"),
+            }
+            signal_id = payload.get("signal_id") or event.event_id
+            if signal_id in latest or not payload.get("symbol") or not payload.get("market"):
                 continue
             signal = self._format_signal(payload)
             signal["status"] = event.event_type.removeprefix("SIGNAL_")
@@ -183,8 +194,8 @@ class OrchestratorBridge:
                 )
             else:
                 signal["data_freshness"] = "UNKNOWN"
-            signals.append(signal)
-        return signals
+            latest[signal_id] = signal
+        return list(latest.values())
 
     def get_signals_by_market(self, market: str) -> list[dict]:
         """Get signals filtered by market."""
@@ -236,8 +247,16 @@ class OrchestratorBridge:
         sim = self.simulator
         spot_unrealized = sum(p.get("unrealized_pnl", 0) for p in sim.spot_positions.values())
         futures_unrealized = sum(p.get("unrealized_pnl", 0) for p in sim.futures_positions.values())
-        spot_equity = sim.get_balance("SPOT") + spot_unrealized
-        futures_equity = sim.get_balance("FUTURES") + futures_unrealized
+        spot_margin = sum(
+            p.get("margin", p.get("entry_price", 0.0) * p.get("amount", 0.0))
+            for p in sim.spot_positions.values()
+        )
+        futures_margin = sum(
+            p.get("margin", p.get("entry_price", 0.0) * p.get("amount", 0.0))
+            for p in sim.futures_positions.values()
+        )
+        spot_equity = sim.get_balance("SPOT") + spot_margin + spot_unrealized
+        futures_equity = sim.get_balance("FUTURES") + futures_margin + futures_unrealized
         total = spot_equity + futures_equity
         now = datetime.now(timezone.utc)
         today = now.date()
@@ -477,7 +496,7 @@ class OrchestratorBridge:
         """Get learning engine status."""
         predictor = self.intelligence.predictor
         from database.repositories import Repository
-        preds = self.repo.get_predictions_history(100)
+        preds = self.repo.get_predictions_history(10000)
         resolved = [p for p in preds if p.is_correct is not None]
         correct = [p for p in resolved if p.is_correct]
         accuracy = len(correct) / len(resolved) * 100 if resolved else 0
@@ -487,8 +506,8 @@ class OrchestratorBridge:
             "version": predictor.version if predictor.is_trained else None,
             "rf_loaded": predictor.rf_model is not None,
             "xgb_loaded": predictor.xgb_model is not None,
-            "river_available": True,
-            "predictions_total": len(preds),
+            "river_available": predictor.river_model is not None,
+            "predictions_total": self.repo.count_predictions(),
             "predictions_resolved": len(resolved),
             "accuracy": accuracy,
             "recent_predictions": self.get_recent_predictions(10),
@@ -553,7 +572,7 @@ class OrchestratorBridge:
         """Get current risk metrics."""
         sim = self.simulator
         manager = sim.risk_manager
-        total_balance = sim.spot_balance + sim.futures_balance
+        total_balance = sim._get_total_equity()
 
         # Current exposure
         total_risk = 0.0

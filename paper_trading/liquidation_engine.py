@@ -14,7 +14,7 @@ class LiquidationEngine:
         leverage = position.get("leverage", 1.0)
         mmr = self.DEFAULT_MMR
 
-        if position["side"] == "LONG":
+        if position["side"] in ("LONG", "BUY"):
             # Long liquidation: mark_price <= entry * (1 - 1/leverage + mmr)
             return position["entry_price"] * (1 - (1 / leverage) + mmr)
         else:
@@ -27,7 +27,7 @@ class LiquidationEngine:
             return False
 
         liq_price = self.calculate_liquidation_price(position)
-        if position["side"] == "LONG":
+        if position["side"] in ("LONG", "BUY"):
             return mark_price <= liq_price
         else:
             return mark_price >= liq_price
@@ -40,14 +40,16 @@ class LiquidationEngine:
         leverage = position.get("leverage", 1.0)
         entry_price = position["entry_price"]
 
-        if position["side"] == "LONG":
+        if position["side"] in ("LONG", "BUY"):
             pnl_pct = (mark_price - entry_price) / entry_price
         else:
             pnl_pct = (entry_price - mark_price) / entry_price
 
-        # Margin ratio = (1 + pnl_pct) * leverage
-        # If this drops below MMR, liquidation triggers
-        return (1 + pnl_pct) * leverage
+        # Equity-to-notional margin ratio: initial margin fraction plus
+        # unrealized return. At the liquidation price this reaches the MMR.
+        if leverage <= 0:
+            return 0.0
+        return max(0.0, (1.0 / leverage) + pnl_pct)
 
     def is_at_risk(self, position: dict, mark_price: float, threshold: float = 1.2) -> bool:
         """Check if position is close to liquidation (margin ratio < threshold * MMR)."""

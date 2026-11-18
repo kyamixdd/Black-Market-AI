@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -21,6 +21,7 @@ from .models import (
     StrategyMetricsModel,
     SymbolModel,
     SystemEventModel,
+    SimulatorStateModel,
     TradeHistoryModel,
 )
 
@@ -179,6 +180,10 @@ class Repository:
             stmt = select(PredictionModel).where(PredictionModel.is_correct.is_(None))
             return list(session.scalars(stmt).all())
 
+    def count_predictions(self) -> int:
+        with self._get_session() as session:
+            return int(session.scalar(select(func.count()).select_from(PredictionModel)) or 0)
+
     def get_predictions_history(self, limit: int = 500) -> list[PredictionModel]:
         with self._get_session() as session:
             stmt = select(PredictionModel).order_by(PredictionModel.created_at.desc()).limit(limit)
@@ -187,13 +192,15 @@ class Repository:
     # --- Paper Orders & Positions ---
     def save_order(self, order: dict[str, Any]) -> str:
         with self._get_session() as session:
+            allowed = {column.key for column in PaperOrderModel.__table__.columns}
+            values = {key: value for key, value in order.items() if key in allowed}
             existing = session.get(PaperOrderModel, order["order_id"])
             if existing:
-                for k, v in order.items():
-                    setattr(existing, k, v)
+                for key, value in values.items():
+                    setattr(existing, key, value)
                 existing.updated_at = datetime.now(timezone.utc)
             else:
-                session.add(PaperOrderModel(**order))
+                session.add(PaperOrderModel(**values))
             session.commit()
             return order["order_id"]
 
@@ -206,12 +213,14 @@ class Repository:
 
     def save_position(self, pos: dict[str, Any]) -> str:
         with self._get_session() as session:
+            allowed = {column.key for column in PaperPositionModel.__table__.columns}
+            values = {key: value for key, value in pos.items() if key in allowed}
             existing = session.get(PaperPositionModel, pos["position_id"])
             if existing:
-                for k, v in pos.items():
-                    setattr(existing, k, v)
+                for key, value in values.items():
+                    setattr(existing, key, value)
             else:
-                session.add(PaperPositionModel(**pos))
+                session.add(PaperPositionModel(**values))
             session.commit()
             return pos["position_id"]
 
@@ -304,6 +313,23 @@ class Repository:
             stmt = select(StrategyMetricsModel)
             return list(session.scalars(stmt).all())
 
+    def get_strategy_weights(self) -> dict[str, float]:
+        """Load persisted global adaptive strategy weights."""
+        with self._get_session() as session:
+            stmt = select(StrategyMetricsModel).where(StrategyMetricsModel.market == "ALL")
+            return {row.strategy: float(row.weight) for row in session.scalars(stmt).all()}
+
+    def save_strategy_weight(self, strategy: str, weight: float) -> None:
+        """Persist the current adaptive weight independently of market metrics."""
+        with self._get_session() as session:
+            record = session.get(StrategyMetricsModel, (strategy, "ALL"))
+            if record:
+                record.weight = float(weight)
+                record.last_updated = datetime.now(timezone.utc)
+            else:
+                session.add(StrategyMetricsModel(strategy=strategy, market="ALL", weight=float(weight)))
+            session.commit()
+
     def save_model_registry(self, record: dict[str, Any]) -> str:
         with self._get_session() as session:
             rec_dict = dict(record)
@@ -371,6 +397,70 @@ class Repository:
             return None
 
     # --- System Events & Notifications ---
+    def save_simulator_state(self, state: dict[str, Any]) -> None:
+        """Upsert the latest paper-account state for crash recovery."""
+        with self._get_session() as session:
+            record = session.get(SimulatorStateModel, "default")
+            payload = json.dumps(state, default=lambda value: value.isoformat() if hasattr(value, "isoformat") else str(value))
+            if record:
+                record.payload = payload
+                record.updated_at = datetime.now(timezone.utc)
+            else:
+                session.add(SimulatorStateModel(state_id="default", payload=payload))
+            session.commit()
+
+    def get_simulator_state_record(self) -> tuple[dict[str, Any], datetime | None] | None:
+        """Return a paper-account snapshot and its durable update timestamp."""
+        with self._get_session() as session:
+            record = session.get(SimulatorStateModel, "default")
+            if not record:
+                return None
+            try:
+                state = json.loads(record.payload)
+            except (TypeError, json.JSONDecodeError):
+                logger.exception("Stored simulator state is malformed")
+                return None
+            if not isinstance(state, dict):
+                return None
+            return state, record.updated_at
+
+    def get_latest_account_record_timestamp(self) -> datetime | None:
+        """Return the newest durable position, order, or trade record timestamp."""
+        with self._get_session() as session:
+            timestamps = [
+                session.scalar(select(func.max(PaperPositionModel.opened_at))),
+                session.scalar(select(func.max(PaperPositionModel.closed_at))),
+                session.scalar(select(func.max(PaperOrderModel.updated_at))),
+                session.scalar(select(func.max(TradeHistoryModel.closed_at))),
+            ]
+            present = [value for value in timestamps if value is not None]
+            return max(present) if present else None
+
+    def get_latest_account_event_timestamp(self) -> datetime | None:
+        """Get the latest durable event that changes paper account state."""
+        account_events = (
+            "POSITION_OPENED", "POSITION_CLOSED", "ORDER_PLACED",
+            "ORDER_FILLED", "TRADE_REJECTED",
+        )
+        with self._get_session() as session:
+            return session.scalar(
+                select(func.max(SystemEventModel.timestamp)).where(
+                    SystemEventModel.event_type.in_(account_events)
+                )
+            )
+
+    def get_simulator_state(self) -> dict[str, Any] | None:
+        with self._get_session() as session:
+            record = session.get(SimulatorStateModel, "default")
+            if not record:
+                return None
+            try:
+                state = json.loads(record.payload)
+            except (TypeError, json.JSONDecodeError):
+                logger.exception("Stored simulator state is malformed")
+                return None
+            return state if isinstance(state, dict) else None
+
     def save_system_event(self, event_dict: dict[str, Any]) -> str:
         with self._get_session() as session:
             ev = SystemEventModel(
@@ -379,7 +469,10 @@ class Repository:
                 source=event_dict["source"],
                 symbol=event_dict.get("symbol"),
                 market=event_dict.get("market"),
-                payload=json.dumps(event_dict.get("payload", {})),
+                payload=json.dumps(
+                    event_dict.get("payload", {}),
+                    default=lambda value: value.isoformat() if hasattr(value, "isoformat") else str(value),
+                ),
             )
             session.add(ev)
             session.commit()

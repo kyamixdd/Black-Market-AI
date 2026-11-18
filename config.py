@@ -50,11 +50,14 @@ SCAN_ALL_ELIGIBLE_SYMBOLS = _env_bool("SCAN_ALL_ELIGIBLE_SYMBOLS", True)
 SPOT_ENABLED = _env_bool("SPOT_ENABLED", True)
 USDM_FUTURES_ENABLED = _env_bool("USDM_FUTURES_ENABLED", True)
 
-TIMEFRAMES = _env_str("TIMEFRAMES", "1m,3m,5m,15m,30m,1h,4h,1d,1w").split(",")
+TIMEFRAMES = [tf.strip() for tf in _env_str("TIMEFRAMES", "1m,3m,5m,15m,30m,1h,4h,1d,1w").split(",") if tf.strip()]
 
 # --- Paper capital ---
-SPOT_INITIAL_BALANCE = _env_float("SPOT_INITIAL_BALANCE", 500.0)
-FUTURES_INITIAL_BALANCE = _env_float("FUTURES_INITIAL_BALANCE", 500.0)
+# The configured virtual capital is the total account budget. When both markets
+# are enabled, split it evenly unless the user explicitly overrides either wallet.
+VIRTUAL_CAPITAL = _env_float("VIRTUAL_CAPITAL", 500.0)
+SPOT_INITIAL_BALANCE = _env_float("SPOT_INITIAL_BALANCE", VIRTUAL_CAPITAL / 2.0)
+FUTURES_INITIAL_BALANCE = _env_float("FUTURES_INITIAL_BALANCE", VIRTUAL_CAPITAL / 2.0)
 PAPER_TRADING_ENABLED = _env_bool("PAPER_TRADING_ENABLED", True)
 REAL_TRADING_ENABLED = _env_bool("REAL_TRADING_ENABLED", False)
 
@@ -97,6 +100,7 @@ SIGNAL_DEDUP_WINDOW_SECONDS = _env_int("SIGNAL_DEDUP_WINDOW_SECONDS", 300)
 PREDICTION_HORIZON_MINUTES = _env_int("PREDICTION_HORIZON_MINUTES", 60)
 WALK_FORWARD_MIN_SAMPLES = _env_int("WALK_FORWARD_MIN_SAMPLES", 500)
 MODEL_RETRAIN_MIN_DAYS = _env_int("MODEL_RETRAIN_MIN_DAYS", 7)
+MODEL_RETRAIN_MIN_NEW_SAMPLES = _env_int("MODEL_RETRAIN_MIN_NEW_SAMPLES", 100)
 
 # --- Model validation thresholds ---
 MIN_VALIDATION_ACCURACY = _env_float("MIN_VALIDATION_ACCURACY", 0.52)

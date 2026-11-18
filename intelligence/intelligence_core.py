@@ -2,9 +2,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
+
+import numpy as np
 from typing import Any
 
+from config import LEARNING_MODE, ML_ENABLED, SIGNAL_DEDUP_WINDOW_SECONDS, TIMEFRAMES
 from core.event_bus import EventBus
+from core.event_models import EventType, make_event
 from intelligence.decision_engine import DecisionEngine
 from intelligence.feature_engine import FeatureEngine
 from intelligence.strategy_selector import StrategySelector
@@ -50,7 +55,7 @@ class IntelligenceCore:
 
         # State
         self._last_signals: dict[str, list] = {}
-        self._signal_ttl_seconds = 300  # 5 minutes
+        self._signal_ttl_seconds = SIGNAL_DEDUP_WINDOW_SECONDS
 
     def get_strategies(self) -> list:
         return self.strategies
@@ -64,25 +69,79 @@ class IntelligenceCore:
 
         # Build multi-timeframe OHLC data
         ohlc_data = {}
-        for tf in ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]:
+        for tf in TIMEFRAMES:
             if self.candles.has_enough_data(market, symbol, tf, min_count=50):
                 ohlc_data[tf] = self.candles.get_ohlc(market, symbol, tf, limit=200)
 
         if not ohlc_data:
             return []
 
+        # Build one shared ML prediction for the symbol and current market state.
+        ml_prediction = None
+        if ML_ENABLED and LEARNING_MODE in {"hybrid", "ml_only"} and self.predictor.is_trained:
+            try:
+                # ML features use only fully closed candles so live inference,
+                # persisted training examples, and outcome labels share one
+                # reproducible point-in-time dataset.
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                closed_ohlc = {}
+                for timeframe in ("15m", "1h", "4h", "1d"):
+                    closed = [
+                        candle for candle in self.candles.get_series(
+                            market, symbol, timeframe, limit=200
+                        )
+                        if candle["close_time"] <= now_ms
+                    ]
+                    if len(closed) >= 50:
+                        closed_ohlc[timeframe] = {
+                            key: np.asarray([candle[key] for candle in closed], dtype=np.float32)
+                            for key in ("open", "high", "low", "close", "volume")
+                        }
+                features = self.feature_engine.build_features(symbol, market, closed_ohlc)
+                if features.size and np.isfinite(features).all():
+                    ml_prediction = self.predictor.predict(features)
+            except Exception:
+                logger.exception("ML inference failed for %s %s", market, symbol)
+                if LEARNING_MODE == "ml_only":
+                    return []
+
         signals = []
         for strategy in self.strategies:
             try:
                 signal = strategy.analyze(symbol, market, ohlc_data)
                 if signal:
-                    # Add market regime
                     trend = self.trend_analyzer.get_trend_summary(market, symbol)
                     signal["regime"] = trend.get("regime", "UNKNOWN")
                     signal["data_freshness"] = "LIVE"
-                    # Multi-timeframe scoring using strategy selector
-                    weight = self.strategy_selector.get_weight(signal["strategy"], signal.get("regime"))
-                    signal["_weight"] = weight
+                    signal["_weight"] = self.strategy_selector.get_weight(
+                        signal["strategy"], signal.get("regime")
+                    )
+
+                    if LEARNING_MODE == "ml_only":
+                        if ml_prediction is None:
+                            continue
+                        is_long = signal["direction"] in ("LONG", "BUY")
+                        directional_probability = (
+                            ml_prediction["prob_up"] if is_long else ml_prediction["prob_down"]
+                        )
+                        if directional_probability < 0.45:
+                            continue
+                        signal["raw_score"] = min(100.0, directional_probability * 100.0)
+                    elif LEARNING_MODE == "hybrid" and ml_prediction is not None:
+                        is_long = signal["direction"] in ("LONG", "BUY")
+                        directional_probability = (
+                            ml_prediction["prob_up"] if is_long else ml_prediction["prob_down"]
+                        )
+                        rule_score = max(0.0, min(1.0, float(signal.get("raw_score", 50.0)) / 100.0))
+                        signal["raw_score"] = (
+                            0.70 * rule_score + 0.30 * directional_probability
+                        ) * 100.0
+
+                    if ml_prediction is not None:
+                        signal["ml_predicted_class"] = ml_prediction["predicted_class"]
+                        signal["ml_confidence"] = ml_prediction["confidence"]
+                        signal["ml_prob_up"] = ml_prediction["prob_up"]
+                        signal["ml_prob_down"] = ml_prediction["prob_down"]
                     signals.append(signal)
             except Exception as exc:
                 logger.error("Strategy %s failed on %s %s: %s", strategy.name, market, symbol, exc)
@@ -100,8 +159,15 @@ class IntelligenceCore:
             # Store for deduplication
             self._store_signal(signal)
 
-            # Submit to decision engine
-            await self.decision_engine.evaluate_signal(signal)
+            # Publish the proposal so the orchestrator's single event pipeline
+            # can persist it and make the validated/rejected decision.
+            await self.event_bus.publish(make_event(
+                EventType.SIGNAL_PROPOSED,
+                "intelligence",
+                symbol=signal["symbol"],
+                market=signal["market"],
+                **{k: v for k, v in signal.items() if k not in {"symbol", "market"}},
+            ))
 
     def _is_duplicate(self, signal: dict[str, Any]) -> bool:
         key = f"{signal['symbol']}:{signal['market']}:{signal['strategy']}:{signal['direction']}"

@@ -105,7 +105,10 @@ def test_position_recovery_restores_balances_daily_pnl_and_open_fees(temporary_d
 
     assert recovery.recover_positions()["orders"] == 1
 
-    assert simulator.spot_balance == initial_spot + 1.0
+    # Closed trade net P&L (+3) is applied; open position margin (100)
+    # and entry fees (2) remain reserved from the free spot balance.
+    expected_spot_free = initial_spot + 3.0 - 100.0 - 2.0
+    assert simulator.spot_balance == expected_spot_free
     assert simulator.futures_balance == initial_futures - 4.0
     assert simulator.get_daily_pnl() == -1.0
     assert len(simulator.spot_positions) == 1
@@ -113,7 +116,7 @@ def test_position_recovery_restores_balances_daily_pnl_and_open_fees(temporary_d
     assert simulator.open_orders["ORD-OPEN-1"]["strategy"] == "MOMENTUM"
 
     recovery.recover_positions()
-    assert simulator.spot_balance == initial_spot + 1.0
+    assert simulator.spot_balance == expected_spot_free
     assert len(simulator.spot_positions) == 1
     assert len(simulator.open_orders) == 1
 
@@ -276,6 +279,11 @@ async def test_reconnection_restarts_existing_streams_without_duplicates():
 @pytest.mark.asyncio
 async def test_production_orchestrator_starts_and_stops_disaster_recovery(temporary_database):
     orchestrator = Orchestrator(temporary_database)
+    # A previously persisted eligible market can be used when fresh discovery
+    # is temporarily unavailable.
+    orchestrator.registry.register("BTCUSDT", "SPOT", {
+        "base_asset": "BTC", "quote_asset": "USDT", "is_eligible": True, "status": "TRADING"
+    })
     orchestrator._discovery.discover_all = AsyncMock(return_value={"spot": 0, "futures": 0})
     orchestrator.disaster_recovery.backup_manager.create_backup = Mock()
     orchestrator.spot_client.close = AsyncMock()

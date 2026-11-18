@@ -35,6 +35,11 @@ class FeatureEngine:
             vol_exp = 1.0 if VolumeAnalyzer.volume_expansion(volumes) else 0.0
             bb_pos = (price - bb["lower"]) / (bb["upper"] - bb["lower"]) if bb["upper"] > bb["lower"] else 0.5
             returns_5 = (price / closes[-6] - 1.0) if len(closes) >= 6 else 0.0
+            sma_20 = MomentumAnalyzer.sma(closes, 20)
+            sma_50 = MomentumAnalyzer.sma(closes, 50)
+            returns_20 = (price / closes[-21] - 1.0) if len(closes) >= 21 and closes[-21] > 0 else 0.0
+            candle_range = highs[-1] - lows[-1]
+            close_location = (price - lows[-1]) / candle_range if candle_range > 0 else 0.5
             features.extend([
                 rsi / 100.0,
                 macd["hist"],
@@ -44,6 +49,9 @@ class FeatureEngine:
                 1.0 if vol_trend == "RISING" else (0.0 if vol_trend == "FALLING" else 0.5),
                 returns_5,
                 float(macd["macd"] > macd["signal"]),
-                float(MomentumAnalyzer.sma(closes, 20) > MomentumAnalyzer.sma(closes, 50)),
+                float(sma_20 > sma_50),
+                returns_20,
+                (price / sma_20 - 1.0) if sma_20 > 0 else 0.0,
+                close_location,
             ])
         return np.array(features, dtype=np.float32)
