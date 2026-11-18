@@ -126,6 +126,7 @@ async def test_backend_startup_failure_closes_database(monkeypatch):
 
     monkeypatch.setattr(main, "validate_config_or_exit", lambda: None)
     monkeypatch.setattr(main, "Database", lambda _url: fake_db)
+    monkeypatch.setattr(main, "Repository", lambda _maker: SimpleNamespace(get_app_settings=lambda: {}))
     monkeypatch.setattr(main, "Orchestrator", FailingOrchestrator)
 
     with pytest.raises(RuntimeError, match="simulated orchestrator startup failure"):
