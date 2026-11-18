@@ -70,14 +70,7 @@ class DatasetBuilder:
         return X, y
 
     def _build_features_for_prediction(self, pred: PredictionModel) -> np.ndarray | None:
-        """Build feature vector for a prediction at its creation time."""
-        # Get OHLC data around prediction time
-        created_ms = int(pred.created_at.timestamp() * 1000)
-        ohlc_data = self._get_ohlc_data(pred.symbol, pred.market, created_ms)
-
-        if not ohlc_data:
-            return None
-
+        """Return exact prediction-time features, with a legacy candle fallback."""
         # Use the exact features recorded at prediction time. Recomputing them
         # from later-refreshed candles can silently change training inputs.
         stored = getattr(pred, "feature_values", None)
@@ -88,6 +81,12 @@ class DatasetBuilder:
                     return values
             except (TypeError, ValueError, json.JSONDecodeError):
                 logger.warning("Stored feature vector is invalid for %s; rebuilding from candles", pred.prediction_id)
+
+        # Legacy rows without stored features need a point-in-time candle rebuild.
+        created_ms = int(pred.created_at.timestamp() * 1000)
+        ohlc_data = self._get_ohlc_data(pred.symbol, pred.market, created_ms)
+        if not ohlc_data:
+            return None
         return self.feature_engine.build_features(pred.symbol, pred.market, ohlc_data)
 
     def _get_ohlc_data(self, symbol: str, market: str, timestamp_ms: int,
