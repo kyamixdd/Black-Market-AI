@@ -636,7 +636,7 @@ class TelegramRetryManager:
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.max_delay = max_delay
-        self._pending: dict[str, tuple[Callable, int]] = {}
+        self._pending: dict[str, tuple[Callable, tuple[Any, ...], dict[str, Any], int]] = {}
         self._lock = threading.RLock()
 
     async def send_with_retry(self, method: Callable, *args, **kwargs) -> bool:
