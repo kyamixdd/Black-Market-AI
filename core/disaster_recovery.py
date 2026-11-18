@@ -409,6 +409,15 @@ class PersistentEventQueue:
 
         return claimed
 
+    def mark_pending(self, event_id: str) -> None:
+        """Release a failed queue item for retry while preserving its attempt count."""
+        from database.repositories import Repository
+
+        with self._lock:
+            Repository(self.db.session_maker()).update_system_event_status(
+                event_id, "PENDING"
+            )
+
     def mark_completed(self, event_id: str) -> None:
         """Mark a claimed queue item completed; repeated calls are harmless."""
         from database.repositories import Repository
@@ -726,7 +735,7 @@ class RESTResynchronizationManager:
 
 
 class TelegramRetryManager:
-    """Manages Telegram notification retries with exponential backoff."""
+    """Retry Telegram notifications, optionally backed by the durable event queue."""
 
     def __init__(
         self,
@@ -734,6 +743,7 @@ class TelegramRetryManager:
         max_retries: int = 5,
         base_delay: float = 5.0,
         max_delay: float = 300.0,
+        db: Database | None = None,
     ):
         self.telegram = telegram_client
         self.max_retries = max_retries
@@ -741,6 +751,11 @@ class TelegramRetryManager:
         self.max_delay = max_delay
         self._pending: dict[str, tuple[Callable, tuple[Any, ...], dict[str, Any], int]] = {}
         self._lock = threading.RLock()
+        self._persistent_queue = (
+            PersistentEventQueue(db, "telegram_notifications") if db is not None else None
+        )
+        self._wake_event = asyncio.Event()
+        self._worker_running = False
 
     async def send_with_retry(self, method: Callable, *args, **kwargs) -> bool:
         """Send notification with automatic retry."""
@@ -750,44 +765,112 @@ class TelegramRetryManager:
                 if result:
                     return True
             except Exception as e:
-                logger.warning(f"Telegram send attempt {attempt + 1} failed: {e}")
+                logger.warning("Telegram send attempt %d failed: %s", attempt + 1, e)
 
             if attempt < self.max_retries - 1:
                 delay = min(self.base_delay * (2 ** attempt), self.max_delay)
                 await asyncio.sleep(delay)
 
-        logger.error(f"Telegram send failed after {self.max_retries} attempts")
+        logger.error("Telegram send failed after %d attempts", self.max_retries)
         return False
 
     def queue_notification(self, notification_id: str, method: Callable, *args, **kwargs) -> None:
-        """Queue notification for later retry."""
+        """Queue a retry durably when a database is available."""
+        if self._persistent_queue is not None:
+            try:
+                self._persistent_queue.enqueue(
+                    "TELEGRAM_NOTIFICATION",
+                    {
+                        "notification_id": notification_id,
+                        "method": getattr(method, "__name__", ""),
+                        "args": list(args),
+                        "kwargs": kwargs,
+                    },
+                    priority=10,
+                )
+                self._wake_event.set()
+                return
+            except Exception:
+                logger.exception("Could not persist Telegram notification %s", notification_id)
         with self._lock:
             self._pending[notification_id] = (method, args, kwargs, 0)
+        self._wake_event.set()
+
+    async def _deliver_persistent(self, item: dict) -> None:
+        queue = self._persistent_queue
+        if queue is None:
+            return
+        payload = item.get("payload", {})
+        method_name = payload.get("method")
+        method = getattr(self.telegram, method_name, None)
+        if not callable(method):
+            logger.error("Discarding queued Telegram notification with unknown method %r", method_name)
+            queue.mark_completed(item["event_id"])
+            return
+        try:
+            delivered = bool(await method(*payload.get("args", []), **payload.get("kwargs", {})))
+        except Exception:
+            logger.exception("Queued Telegram notification %s failed", payload.get("notification_id"))
+            delivered = False
+        if delivered:
+            queue.mark_completed(item["event_id"])
+            return
+        if item.get("attempts", 0) >= self.max_retries:
+            logger.error("Telegram notification %s exhausted retries", payload.get("notification_id"))
+            queue.mark_completed(item["event_id"])
+            return
+        queue.mark_pending(item["event_id"])
+        delay = min(self.base_delay * (2 ** max(0, item.get("attempts", 1) - 1)), self.max_delay)
+        await asyncio.sleep(delay)
 
     async def process_queue(self) -> None:
-        """Process queued notifications."""
+        """Drain queued notifications; used during graceful shutdown and tests."""
         while True:
+            processed_any = False
+            if self._persistent_queue is not None:
+                items = self._persistent_queue.dequeue(limit=100, visibility_timeout_seconds=30)
+                for item in items:
+                    processed_any = True
+                    await self._deliver_persistent(item)
+
             with self._lock:
-                if not self._pending:
-                    break
-                notification_id, (method, args, kwargs, attempts) = self._pending.popitem()
+                pending_items = list(self._pending.items())
+                self._pending.clear()
+            for notification_id, (method, args, kwargs, attempts) in pending_items:
+                processed_any = True
+                if attempts >= self.max_retries:
+                    logger.error("Notification %s failed permanently", notification_id)
+                    continue
+                try:
+                    delivered = bool(await method(*args, **kwargs))
+                except Exception:
+                    logger.exception("Queued Telegram notification %s failed", notification_id)
+                    delivered = False
+                if delivered:
+                    continue
+                if attempts + 1 < self.max_retries:
+                    with self._lock:
+                        self._pending[notification_id] = (method, args, kwargs, attempts + 1)
+                    await asyncio.sleep(min(self.base_delay * (2 ** attempts), self.max_delay))
 
-            if attempts >= self.max_retries:
-                logger.error(f"Notification {notification_id} failed permanently")
-                continue
+            if not processed_any:
+                return
 
+    async def run_worker(self) -> None:
+        """Continuously poll durable work and wake immediately for new notifications."""
+        self._worker_running = True
+        while self._worker_running:
+            await self.process_queue()
+            self._wake_event.clear()
             try:
-                result = await method(*args, **kwargs)
-                if result:
-                    continue  # Success
-            except Exception as e:
-                logger.warning(f"Queued notification {notification_id} attempt {attempts + 1} failed: {e}")
+                await asyncio.wait_for(self._wake_event.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                # Polling also recovers leases left by a crashed process.
+                pass
 
-            # Re-queue with incremented attempts
-            with self._lock:
-                self._pending[notification_id] = (method, args, kwargs, attempts + 1)
-
-            await asyncio.sleep(min(self.base_delay * (2 ** attempts), 60.0))
+    def stop_worker(self) -> None:
+        self._worker_running = False
+        self._wake_event.set()
 
 
 class WatchdogMonitor:
