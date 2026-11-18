@@ -73,6 +73,7 @@ class Orchestrator:
         # Keep one shared model/feature engine for inference and scheduled training.
         self.intelligence.predictor = self.predictor
         self.intelligence.feature_engine = self.feature_engine
+        self.intelligence.strategy_selector = self.strategy_selector
         self.learning_orchestrator = LearningOrchestrator(self.repo, self.predictor)
         self._last_prediction_candle: dict[str, int] = {}
         # Learning accountability
