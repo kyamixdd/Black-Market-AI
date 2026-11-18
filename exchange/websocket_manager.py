@@ -40,7 +40,8 @@ class WebSocketManager:
         if not streams:
             return
         stream_path = "/".join(streams)
-        url = f"{base_url}/{streams[0]}" if len(streams) == 1 else f"{base_url}/stream?streams={stream_path}"
+        combined_base = base_url.removesuffix("/ws")
+        url = f"{base_url}/{streams[0]}" if len(streams) == 1 else f"{combined_base}/stream?streams={stream_path}"
         backoff = 1.0
         while self._running:
             try:
