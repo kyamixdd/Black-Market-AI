@@ -269,7 +269,10 @@ async def health_check():
     return {
         "status": health.get("status", "unknown"),
         "backend_ready": bool(db is not None and orchestrator.scanner._running),
-        "websocket_connected": bool(orchestrator._ws_connected),
+        "websocket_connected": bool(
+            orchestrator._last_ws_message_at
+            and asyncio.get_running_loop().time() - orchestrator._last_ws_message_at < 120
+        ),
         "database_connected": db is not None,
         "market_data_active": orchestrator.scanner._running,
         "learning_active": bool(AUTO_MODEL_TRAINING and any(
