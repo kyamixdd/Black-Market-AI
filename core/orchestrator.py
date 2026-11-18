@@ -70,6 +70,9 @@ class Orchestrator:
         self.health_monitor: HealthMonitor = HealthMonitor()
         self._running: bool = False
         self._tasks: list[asyncio.Task] = []
+        self._analysis_cursors: dict[str, int] = {"SPOT": 0, "FUTURES": 0}
+        self._analysis_batch_size = 10
+        self._analysis_timeframes = ("1m", "15m", "1h")
         self._discovery: MarketDiscovery = MarketDiscovery(self.registry, self.rate_limiter,
                                                         SPOT_ENABLED, USDM_FUTURES_ENABLED)
         # State tracking for dashboard
@@ -171,8 +174,17 @@ class Orchestrator:
         market = payload.get("market", "SPOT")
         symbol = payload.get("symbol")
         price = payload.get("price")
-        if price and symbol:
-            await self.simulator.update_prices(market, symbol, price)
+        mark_price = payload.get("mark_price")
+        funding_rate = payload.get("funding_rate")
+        if symbol and isinstance(price, (int, float)) and price > 0:
+            await self.simulator.update_prices(
+                market,
+                symbol,
+                float(price),
+                mark_price=float(mark_price) if isinstance(mark_price, (int, float)) and mark_price > 0 else None,
+                funding_rate=float(funding_rate) if isinstance(funding_rate, (int, float)) else None,
+            )
+            await self.simulator.check_limit_orders(market, symbol, float(price))
 
     async def _on_position_closed(self, event) -> None:
         # Learning feedback: evaluate prediction if any
@@ -260,6 +272,10 @@ class Orchestrator:
 
     async def _persist_event(self, event) -> None:
         """Persist critical events to SQLite for state recovery after interruptions."""
+        # High-volume ticker events are transient and must not grow the SQLite
+        # event journal without bound. Persist decisions, fills, risk, and lifecycle events.
+        if event.event_type in {EventType.MARKET_DATA, EventType.MARKET_SNAPSHOT}:
+            return
         try:
             event_dict = {
                 "event_id": event.event_id,
@@ -276,6 +292,7 @@ class Orchestrator:
     async def run(self) -> None:
         self._running = True
         await self.scanner.start()
+        self._tasks.append(asyncio.create_task(self._analysis_loop(), name="blackmarket-analysis"))
         logger.info("BlackMarket AI running")
         # Main loop - keep running until stopped
         while self._running:
@@ -283,6 +300,80 @@ class Orchestrator:
             self.disaster_recovery.watchdog.heartbeat()
             # Periodic persistence
             await self._persist_state()
+
+    async def _analysis_loop(self) -> None:
+        """Rotate through the complete eligible universe and run real strategy analysis.
+
+        Ticker discovery covers every eligible symbol. Candle-heavy analysis is
+        deliberately batched to respect public exchange rate limits on a desktop PC.
+        """
+        semaphore = asyncio.Semaphore(4)
+
+        async def analyze_one(market: str, symbol: str) -> None:
+            async with semaphore:
+                try:
+                    client = self.spot_client if market == "SPOT" else self.futures_client
+                    for timeframe in self._analysis_timeframes:
+                        await self.candle_manager.collect_historical(
+                            self.spot_client,
+                            self.futures_client,
+                            market,
+                            symbol,
+                            timeframe,
+                            limit=500,
+                        )
+                        candles = self.candle_manager.get_series(
+                            market, symbol, timeframe, limit=500
+                        )
+                        if candles:
+                            self.repo.save_candles([
+                                {
+                                    "symbol": symbol,
+                                    "market": market,
+                                    "timeframe": timeframe,
+                                    "open_time": candle["open_time"],
+                                    "open": candle["open"],
+                                    "high": candle["high"],
+                                    "low": candle["low"],
+                                    "close": candle["close"],
+                                    "volume": candle["volume"],
+                                    "close_time": candle["close_time"],
+                                }
+                                for candle in candles
+                            ])
+                    signals = await self.intelligence.analyze_symbol(symbol, market)
+                    for signal in signals:
+                        await self.event_bus.publish(make_event(
+                            EventType.SIGNAL_PROPOSED,
+                            "intelligence",
+                            symbol=symbol,
+                            market=market,
+                            **signal,
+                        ))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Analysis cycle failed for %s %s", market, symbol)
+
+        while self._running:
+            for market, enabled in (("SPOT", SPOT_ENABLED), ("FUTURES", USDM_FUTURES_ENABLED)):
+                if not enabled:
+                    continue
+                tickers = self.cache.get_market_tickers(market)
+                tickers.sort(
+                    key=lambda item: float(item.get("volume_24h") or 0.0),
+                    reverse=True,
+                )
+                if not tickers:
+                    continue
+                cursor = self._analysis_cursors[market] % len(tickers)
+                batch = [
+                    tickers[(cursor + offset) % len(tickers)]["symbol"]
+                    for offset in range(min(self._analysis_batch_size, len(tickers)))
+                ]
+                self._analysis_cursors[market] = (cursor + len(batch)) % len(tickers)
+                await asyncio.gather(*(analyze_one(market, symbol) for symbol in batch))
+            await asyncio.sleep(60)
 
     async def _persist_state(self) -> None:
         try:
@@ -298,6 +389,11 @@ class Orchestrator:
         logger.info("Shutting down...")
         self._running = False
         await self.scanner.stop()
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         await self.disaster_recovery.ws_reconnection.stop()
         await self.ws_manager.stop()
         await self.spot_client.close()
