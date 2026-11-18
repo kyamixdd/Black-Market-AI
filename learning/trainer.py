@@ -190,11 +190,9 @@ class ModelTrainer:
         from sqlalchemy import select
 
         from config import MODEL_RETRAIN_MIN_DAYS
-        from database.connection import get_session_maker
         from database.models import ModelRegistryModel
 
-        session_maker = get_session_maker()
-        with session_maker() as session:
+        with self.repo._get_session() as session:
             stmt = (
                 select(ModelRegistryModel)
                 .where(ModelRegistryModel.is_active.is_(True))
@@ -207,7 +205,10 @@ class ModelTrainer:
             logger.info("No active model found; starting the initial training attempt")
             return self.train_and_validate()
 
-        days_since = (datetime.now(timezone.utc) - active.trained_at).days
+        trained_at = active.trained_at
+        if trained_at.tzinfo is None:
+            trained_at = trained_at.replace(tzinfo=timezone.utc)
+        days_since = (datetime.now(timezone.utc) - trained_at).days
         if days_since >= MODEL_RETRAIN_MIN_DAYS:
             logger.info("Model age %d days >= %d, retraining...", days_since, MODEL_RETRAIN_MIN_DAYS)
             return self.train_and_validate()
