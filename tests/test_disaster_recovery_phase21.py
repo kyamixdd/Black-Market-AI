@@ -745,3 +745,52 @@ class TestPersistentEventQueue:
         assert duplicate_result is None
         assert calls == ["position-42"]
         assert queue.dequeue(limit=1) == []
+
+    @pytest.mark.asyncio
+    async def test_telegram_retry_queue_survives_in_database_and_retries(tmp_path):
+        from database.connection import Database
+
+        db = Database(f"sqlite:///{tmp_path / 'telegram-retries.db'}")
+        db.init_db()
+
+        class FakeTelegram:
+            def __init__(self):
+                self.calls = 0
+
+            async def send_message(self, message):
+                self.calls += 1
+                return self.calls >= 2
+
+        telegram = FakeTelegram()
+        retry = TelegramRetryManager(
+            telegram, max_retries=3, base_delay=0.001, max_delay=0.01, db=db
+        )
+        retry.queue_notification("notification-1", telegram.send_message, "queued hello")
+
+        await retry.process_queue()
+
+        assert telegram.calls == 2
+        assert retry._persistent_queue.dequeue(limit=10) == []
+        db.close()
+
+    @pytest.mark.asyncio
+    async def test_telegram_retry_worker_wakes_for_new_notifications(tmp_path):
+        from database.connection import Database
+
+        db = Database(f"sqlite:///{tmp_path / 'telegram-worker.db'}")
+        db.init_db()
+        delivered = asyncio.Event()
+
+        class FakeTelegram:
+            async def send_message(self, _message):
+                delivered.set()
+                return True
+
+        telegram = FakeTelegram()
+        retry = TelegramRetryManager(telegram, base_delay=0.001, db=db)
+        worker = asyncio.create_task(retry.run_worker())
+        retry.queue_notification("notification-2", telegram.send_message, "wake worker")
+        await asyncio.wait_for(delivered.wait(), timeout=2)
+        retry.stop_worker()
+        await asyncio.wait_for(worker, timeout=2)
+        db.close()
