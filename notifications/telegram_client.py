@@ -83,6 +83,16 @@ class TelegramClient:
             logger.error("Telegram send failed: %s", exc)
             return False
 
+    async def close(self) -> None:
+        """Release Telegram's HTTP connection pool during graceful shutdown."""
+        if self._bot is not None:
+            try:
+                await self._bot.shutdown()
+            except Exception:
+                logger.warning("Telegram bot shutdown failed", exc_info=True)
+            finally:
+                self._bot = None
+
     async def test_connection(self) -> bool:
         """Verify bot credentials and Telegram API connectivity without sending a message."""
         if not self._enabled:
