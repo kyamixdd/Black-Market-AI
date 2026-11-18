@@ -49,8 +49,31 @@ jobs:
           cache: npm
           cache-dependency-path: blackmarket-desktop/package-lock.json
       - name: Install dependencies
-        run: npm ci
+        run: npm install
       - name: Run frontend tests
         run: npm test
       - name: Build frontend
+        run: npm run build
+
+  web:
+    name: Web dashboard build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: blackmarket-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install
+      - name: Typecheck
+        run: npm run lint
+      - name: Build web dashboard
+        env:
+          BLACKMARKET_BACKEND_URL: https://backend.invalid
+          BLACKMARKET_API_TOKEN: ci-placeholder-token
+          BLACKMARKET_WEB_PASSWORD: ci-placeholder-password
+          BLACKMARKET_SESSION_SECRET: ci-placeholder-session-secret-at-least-32-characters
         run: npm run build
