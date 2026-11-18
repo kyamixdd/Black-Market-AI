@@ -9,7 +9,8 @@ async function proxy(request: NextRequest, context: Context) {
   const token = process.env.BLACKMARKET_API_TOKEN;
   if (!base || !token) return NextResponse.json({ error: "Backend connection is not configured" }, { status: 503 });
   const { path } = await context.params;
-  const target = new URL(base + "/api/" + path.map(encodeURIComponent).join("/"));
+  const encodedPath = path.map(encodeURIComponent).join("/");
+  const target = new URL(base + (path[0] === "health" ? "/health" : "/api/" + encodedPath));
   request.nextUrl.searchParams.forEach((value, key) => target.searchParams.append(key, value));
   const headers = new Headers({ Authorization: "Bearer " + token, Accept: "application/json" });
   const contentType = request.headers.get("content-type");
