@@ -20,6 +20,12 @@ class SignalValidator:
         if direction not in ("LONG", "BUY", "SHORT", "SELL"):
             return False, "Unsupported direction"
 
+        market = signal.get("market")
+        if market not in ("SPOT", "FUTURES"):
+            return False, "Unsupported market"
+        if market == "SPOT" and direction in ("SHORT", "SELL"):
+            return False, "Spot market does not support short positions"
+
         entry = signal.get("entry")
         stop_loss = signal.get("stop_loss")
         take_profits = signal.get("take_profit")
