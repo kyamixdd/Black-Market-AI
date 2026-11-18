@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
+
+from config import SIGNAL_STALE_SECONDS
 from typing import Any
 
 
@@ -33,6 +36,23 @@ class SignalValidator:
             or not 0 <= raw_score <= 100
         ):
             return False, "Invalid raw confidence score"
+
+        created_at = signal.get("created_at")
+        if created_at is not None:
+            if isinstance(created_at, str):
+                try:
+                    created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                except ValueError:
+                    return False, "Invalid signal timestamp"
+            if not isinstance(created_at, datetime):
+                return False, "Invalid signal timestamp"
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+            if age_seconds < -5:
+                return False, "Signal timestamp is in the future"
+            if age_seconds > SIGNAL_STALE_SECONDS:
+                return False, "Signal is stale"
 
         direction = signal.get("direction")
         if direction not in ("LONG", "BUY", "SHORT", "SELL"):
