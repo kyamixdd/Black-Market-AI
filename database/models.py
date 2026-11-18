@@ -262,6 +262,15 @@ class SystemEventModel(Base):
     payload = Column(Text, nullable=False)
 
 
+class ProcessedEventModel(Base):
+    """Durable idempotency ledger for events successfully handled by consumers."""
+
+    __tablename__ = "processed_events"
+
+    event_id = Column(String(64), primary_key=True)
+    processed_at = Column(DateTime, default=now_utc)
+
+
 class AppSettingModel(Base):
     """Persistent application settings, stored as JSON values by key."""
 
