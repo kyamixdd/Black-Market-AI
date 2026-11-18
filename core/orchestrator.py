@@ -12,6 +12,7 @@ import numpy as np
 
 from config import (
     PAPER_TRADING_ENABLED,
+    AUTO_MODEL_TRAINING,
     SPOT_ENABLED,
     TELEGRAM_ENABLED,
     USDM_FUTURES_ENABLED,
@@ -437,6 +438,7 @@ class Orchestrator:
         await self._start_market_websockets()
         self._tasks.append(asyncio.create_task(self._analysis_loop(), name="blackmarket-analysis"))
         self._tasks.append(asyncio.create_task(self._learning_loop(), name="blackmarket-learning"))
+        self._update_health()
         logger.info("BlackMarket AI running")
         # Main loop - keep running until stopped
         while self._running:
@@ -444,6 +446,49 @@ class Orchestrator:
             # Periodic persistence; watchdog heartbeats come from successful analysis cycles.
             await self._persist_state()
 
+    def _update_health(self) -> None:
+        """Refresh component health from live backend state."""
+        database_health = self.db.health()
+        self.health_monitor.check_component(
+            "database", database_health.get("status") == "ok", database_health.get("error")
+        )
+        bus_running = bool(self._event_bus_task and not self._event_bus_task.done())
+        self.health_monitor.check_component(
+            "event_bus", bus_running and self.event_bus.dropped == 0,
+            None if self.event_bus.dropped == 0 else f"Dropped {self.event_bus.dropped} events",
+        )
+        self.health_monitor.check_component(
+            "scanner", self.scanner._running,
+            None if self.scanner._running else "Market scanner is not running",
+        )
+        recent_market_data = False
+        for market, enabled in (("SPOT", SPOT_ENABLED), ("FUTURES", USDM_FUTURES_ENABLED)):
+            if not enabled:
+                continue
+            for ticker in self.cache.get_market_tickers(market):
+                timestamp = ticker.get("timestamp")
+                if timestamp is not None:
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.replace(tzinfo=timezone.utc)
+                    age = (datetime.now(timezone.utc) - timestamp).total_seconds()
+                    if -5 <= age <= 90:
+                        recent_market_data = True
+                        break
+            if recent_market_data:
+                break
+        self.health_monitor.check_component(
+            "market_data", recent_market_data,
+            None if recent_market_data else "No recent REST/WebSocket market tickers",
+        )
+        if AUTO_MODEL_TRAINING:
+            learning_running = any(
+                task.get_name() == "blackmarket-learning" and not task.done()
+                for task in self._tasks
+            )
+            self.health_monitor.check_component(
+                "learning", learning_running,
+                None if learning_running else "Automatic learning loop is not running",
+            )
     async def _analysis_loop(self) -> None:
         """Rotate through the complete eligible universe and run real strategy analysis.
 
