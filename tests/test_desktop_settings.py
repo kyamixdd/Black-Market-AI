@@ -81,6 +81,7 @@ def test_settings_update_persists_and_applies_runtime_risk_changes():
         spot_positions={},
         futures_positions={},
         open_orders={},
+        get_state_snapshot=lambda: {},
     )
     risk = SimpleNamespace(
         max_risk_pct=0.5,
