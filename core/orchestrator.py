@@ -67,6 +67,9 @@ class Orchestrator:
                                        self.spot_client, self.futures_client)
         self.decision_engine: DecisionEngine = DecisionEngine(self.event_bus)
         self.strategy_selector: StrategySelector = StrategySelector()
+        for strategy, weight in self.repo.get_strategy_weights().items():
+            if strategy in self.strategy_selector.weights:
+                self.strategy_selector.weights[strategy] = max(0.2, min(2.0, weight))
         self.feature_engine: FeatureEngine = FeatureEngine()
         self.predictor: Predictor = Predictor()
         self.simulator: Simulator = Simulator(self.event_bus)
@@ -305,6 +308,9 @@ class Orchestrator:
                 )
                 self.repo.update_strategy_metrics(
                     strategy, trade.get("market", "SPOT"), won, trade.get("pnl", 0.0)
+                )
+                self.repo.save_strategy_weight(
+                    strategy, self.strategy_selector.weights.get(strategy, 1.0)
                 )
             await self._persist_state()
             if self.telegram:
