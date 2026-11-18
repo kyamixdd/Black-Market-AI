@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   createChart,
+  CandlestickSeries,
+  HistogramSeries,
   IChartApi,
   ISeriesApi,
   CandlestickData,
@@ -85,7 +87,7 @@ export const MarketChart: React.FC<MarketChartProps> = ({
     resizeObserver.observe(containerRef.current);
 
     // Create main candlestick series
-    const candleSeries = chart.addCandlestickSeries({
+    const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#a8d9c0',
       downColor: '#d99ca5',
       borderVisible: false,
@@ -95,7 +97,7 @@ export const MarketChart: React.FC<MarketChartProps> = ({
     });
 
     // Create volume histogram series
-    const volumeSeries = chart.addHistogramSeries({
+    const volumeSeries = chart.addSeries(HistogramSeries, {
       color: '#666a70',
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
