@@ -89,6 +89,21 @@ class Simulator:
         """Return the latest quote-volume estimate for realistic slippage."""
         return self.market_volumes.get((market, symbol), 0.0)
 
+    def _available_balance(self, market: str, exclude_order_id: str | None = None) -> float:
+        """Free balance after reserving capital for pending limit orders."""
+        fee_rate = SPOT_TAKER if market == "SPOT" else FUTURES_TAKER
+        reserved = 0.0
+        for order_id, order in self.open_orders.items():
+            if order_id == exclude_order_id or order.get("market") != market or order.get("status") != "OPEN":
+                continue
+            leverage = float(order.get("leverage", 1.0))
+            reserved += (
+                float(order.get("amount", 0.0))
+                * float(order.get("entry_price", 0.0))
+                * (1.0 + fee_rate * leverage)
+            )
+        return max(0.0, self.get_balance(market) - reserved)
+
     def _effective_leverage(self, signal: dict[str, Any]) -> float:
         market = signal.get("market")
         requested = signal.get("leverage", 1.0)
@@ -181,7 +196,7 @@ class Simulator:
             return False, "Daily loss limit exceeded"
 
         # Risk manager check
-        balance = self.get_balance(market)
+        balance = self._available_balance(market)
         qty = self._calculate_quantity(balance, risk_amount, leverage, float(entry), market)
         if qty <= 0:
             return False, "Calculated quantity is zero"
@@ -200,7 +215,7 @@ class Simulator:
             logger.warning("Signal %s risk check failed: %s", signal.get("signal_id", "unknown"), reason)
             return None
         market = signal["market"]
-        balance = self.get_balance(market)
+        balance = self._available_balance(market)
         risk_amount = abs(signal["entry"] - signal["stop_loss"])
         leverage = self._effective_leverage(signal)
         qty = self._calculate_quantity(balance, risk_amount, leverage, float(signal["entry"]), market)
@@ -423,7 +438,7 @@ class Simulator:
             return None
 
         market = signal["market"]
-        balance = self.get_balance(market)
+        balance = self._available_balance(market)
         risk_amount = abs(signal["entry"] - signal["stop_loss"])
         leverage = self._effective_leverage(signal)
         qty = self._calculate_quantity(balance, risk_amount, leverage, float(signal["entry"]), market)
@@ -466,7 +481,9 @@ class Simulator:
                 hit = True
             if hit:
                 # Convert limit order to position
-                order["status"] = "FILLED"
+                # Remove this reservation before validation/execution so the
+                # order does not block itself as an existing same-symbol order.
+                self.open_orders.pop(order["order_id"], None)
                 signal = {
                     "signal_id": order.get("signal_id", "LIMIT-" + order["order_id"]),
                     "symbol": order["symbol"],
@@ -480,7 +497,6 @@ class Simulator:
                     "strategy": order.get("strategy", "UNKNOWN"),
                 }
                 position_id = await self.execute_signal(signal)
-                del self.open_orders[order["order_id"]]
                 order["status"] = "FILLED" if position_id else "REJECTED"
                 order["position_id"] = position_id
                 event_type = EventType.ORDER_FILLED if position_id else EventType.TRADE_REJECTED
