@@ -29,19 +29,33 @@ class CandleManager:
         """Add a candle, deduplicate by open_time. Returns True if added, False if duplicate."""
         key = (market, symbol, timeframe)
 
-        # Deduplication: skip if same open_time already exists
-        if self._last_open_time.get(key) == open_time:
-            return False
-
-        self._candles[key].append({
+        candle = {
             "open_time": open_time, "open": open_, "high": high,
             "low": low, "close": close, "volume": volume,
             "close_time": close_time or open_time + TIMEFRAME_SECONDS.get(timeframe, 60) * 1000 - 1,
-        })
-        self._last_open_time[key] = open_time
+        }
+        series = self._candles[key]
+        # REST refreshes overlap hundreds of previously fetched candles. Replace
+        # matching timestamps instead of appending the same history repeatedly.
+        for index, existing in enumerate(series):
+            if existing["open_time"] == open_time:
+                series[index] = candle
+                self._last_open_time[key] = series[-1]["open_time"] if series else open_time
+                return False
 
-        if len(self._candles[key]) > self._max_per_series:
-            self._candles[key] = self._candles[key][-self._max_per_series:]
+        # Keep the series ordered even when a backfill arrives out of order.
+        if not series or open_time > series[-1]["open_time"]:
+            series.append(candle)
+        else:
+            insert_at = next(
+                (i for i, existing in enumerate(series) if existing["open_time"] > open_time),
+                len(series),
+            )
+            series.insert(insert_at, candle)
+
+        if len(series) > self._max_per_series:
+            del series[:-self._max_per_series]
+        self._last_open_time[key] = series[-1]["open_time"]
         return True
 
     def update_current_candle(self, market: str, symbol: str, timeframe: str,
@@ -75,11 +89,14 @@ class CandleManager:
         expected_interval_ms = tf_seconds * 1000
         missing = []
 
+        # Compare adjacent candles from newest to oldest. The newer candle
+        # must open exactly one timeframe after the older candle.
         for i in range(1, min(len(series), expected_count)):
-            expected_time = series[-i]["open_time"] + expected_interval_ms
-            actual_time = series[-(i + 1)]["open_time"]
-            if actual_time != expected_time:
-                missing.append(expected_time)
+            newer = series[-i]["open_time"]
+            older = series[-(i + 1)]["open_time"]
+            expected_time = older + expected_interval_ms
+            if newer > expected_time:
+                missing.extend(range(expected_time, newer, expected_interval_ms))
 
         return missing
 
