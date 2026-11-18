@@ -150,7 +150,7 @@ class ApiService {
 
   // Health
   async getHealth() {
-    const response = await axios.get(`${API_BASE_URL}/health`, { timeout: 10000 });
+    const response = await axios.get(`${API_BASE_URL}${typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window) ? '/api/backend/health' : '/health'}`, { timeout: 10000 });
     return response.data;
   }
 
