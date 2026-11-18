@@ -130,6 +130,12 @@ class Orchestrator:
         self._setup_subscriptions()
         # Recover positions once, then start backups, watchdog, and reconnect management.
         await self.disaster_recovery.start()
+        # Prefer the exact simulator snapshot (balances, margin, pending orders,
+        # and daily P&L) over reconstructing account state from trades alone.
+        saved_state = self.repo.get_simulator_state()
+        if saved_state:
+            self.simulator.restore_state(saved_state)
+            logger.info("Restored persisted simulator snapshot")
         logger.info("Initialization complete")
 
     def _setup_subscriptions(self) -> None:
@@ -210,6 +216,12 @@ class Orchestrator:
         trade = event.payload.get("trade")
         if trade:
             self.repo.save_trade_history(trade)
+            strategy = trade.get("strategy")
+            if strategy:
+                self.strategy_selector.update_performance(
+                    strategy, trade.get("pnl", 0.0) > 0, trade.get("pnl_pct", 0.0)
+                )
+            await self._persist_state()
             if self.telegram:
                 await self.telegram.send_position_closed(trade)
 
@@ -217,14 +229,17 @@ class Orchestrator:
         position = event.payload.get("position")
         if position:
             self.repo.save_position(position)
+            await self._persist_state()
             if self.telegram:
                 await self.telegram.send_position_opened(position)
 
     async def _on_order_placed(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
+        await self._persist_state()
 
     async def _on_order_filled(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
+        await self._persist_state()
 
     def _persist_paper_order(self, order: dict[str, Any] | None) -> None:
         if not order:
@@ -525,11 +540,15 @@ class Orchestrator:
 
     async def _persist_state(self) -> None:
         try:
-            # Save open positions
+            # Save open positions and a complete account snapshot. Closed trades
+            # are already stored in trade_history, so omit them from this snapshot.
             for pos in self.simulator.spot_positions.values():
                 self.repo.save_position(pos)
             for pos in self.simulator.futures_positions.values():
                 self.repo.save_position(pos)
+            snapshot = self.simulator.get_state_snapshot()
+            snapshot["closed_trades"] = []
+            self.repo.save_simulator_state(snapshot)
         except Exception as exc:
             logger.error("State persistence failed: %s", exc)
 
