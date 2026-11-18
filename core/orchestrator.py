@@ -174,6 +174,8 @@ class Orchestrator:
         market = payload.get("market", "SPOT")
         symbol = payload.get("symbol")
         price = payload.get("price")
+        if price is None and symbol:
+            price = self.cache.get_price(market, symbol)
         mark_price = payload.get("mark_price")
         funding_rate = payload.get("funding_rate")
         if symbol and isinstance(price, (int, float)) and price > 0:
@@ -312,9 +314,8 @@ class Orchestrator:
         async def analyze_one(market: str, symbol: str) -> None:
             async with semaphore:
                 try:
-                    client = self.spot_client if market == "SPOT" else self.futures_client
                     for timeframe in self._analysis_timeframes:
-                        await self.candle_manager.collect_historical(
+                        updated_count = await self.candle_manager.collect_historical(
                             self.spot_client,
                             self.futures_client,
                             market,
@@ -326,6 +327,9 @@ class Orchestrator:
                             market, symbol, timeframe, limit=500
                         )
                         if candles:
+                            # Persist the full history once, then only the newest
+                            # candles on subsequent refreshes to avoid repeated DB writes.
+                            candles_to_save = candles if updated_count > 1 else candles[-2:]
                             self.repo.save_candles([
                                 {
                                     "symbol": symbol,
@@ -339,15 +343,13 @@ class Orchestrator:
                                     "volume": candle["volume"],
                                     "close_time": candle["close_time"],
                                 }
-                                for candle in candles
+                                for candle in candles_to_save
                             ])
                     signals = await self.intelligence.analyze_symbol(symbol, market)
                     for signal in signals:
                         await self.event_bus.publish(make_event(
                             EventType.SIGNAL_PROPOSED,
                             "intelligence",
-                            symbol=symbol,
-                            market=market,
                             **signal,
                         ))
                 except asyncio.CancelledError:
