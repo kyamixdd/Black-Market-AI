@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+
+import numpy as np
 from typing import Any
 
 from config import LEARNING_MODE, ML_ENABLED, SIGNAL_DEDUP_WINDOW_SECONDS, TIMEFRAMES
