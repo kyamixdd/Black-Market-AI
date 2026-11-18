@@ -413,10 +413,8 @@ class Simulator:
         market = signal["market"]
         balance = self.get_balance(market)
         risk_amount = abs(signal["entry"] - signal["stop_loss"])
-        qty = balance * (RISK_PER_TRADE_PCT / 100.0) / risk_amount
-        leverage = signal.get("leverage", 1.0)
-        if market == "FUTURES" and leverage > RISK_MAX_LEVERAGE:
-            leverage = RISK_MAX_LEVERAGE
+        leverage = self._effective_leverage(signal)
+        qty = self._calculate_quantity(balance, risk_amount, leverage, float(signal["entry"]), market)
 
         # Limit orders don't fill immediately - they go to open_orders
         order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
