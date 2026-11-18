@@ -1,4 +1,5 @@
 """Tests for Phase 21 Disaster Recovery and Long-Run Stability."""
+import json
 import asyncio
 import gzip
 import tempfile
