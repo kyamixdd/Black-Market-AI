@@ -382,11 +382,11 @@ class Orchestrator:
 
     async def _on_model_promoted(self, event) -> None:
         if self.telegram:
-            await self.telegram.send_message(f"🚀 <b>MODEL PROMOTED</b>\n\nVersion: {event.payload.get('version', 'unknown')}")
+            await self._send_telegram(self.telegram.send_message, f"🚀 <b>MODEL PROMOTED</b>\n\nVersion: {event.payload.get('version', 'unknown')}")
 
     async def _on_model_rolled_back(self, event) -> None:
         if self.telegram:
-            await self.telegram.send_message(f"↩️ <b>MODEL ROLLED BACK</b>\n\nVersion: {event.payload.get('version', 'unknown')}")
+            await self._send_telegram(self.telegram.send_message, f"↩️ <b>MODEL ROLLED BACK</b>\n\nVersion: {event.payload.get('version', 'unknown')}")
 
     async def _persist_event(self, event) -> None:
         """Persist critical events to SQLite for state recovery after interruptions."""
