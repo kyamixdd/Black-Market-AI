@@ -102,3 +102,49 @@ def test_closed_trade_history_is_persisted_without_duplicates(tmp_path):
     assert len(history) == 1
     assert history[0].position_id == trade["position_id"]
     assert history[0].pnl == 0.18
+
+
+def test_repository_persists_simulator_records_with_runtime_only_fields(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'simulator-records.db'}")
+    db.init_db()
+    repo = Repository(db.session_maker())
+
+    repo.save_position({
+        "position_id": "POS-RUNTIME-1",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "side": "LONG",
+        "entry_price": 100.0,
+        "amount": 0.1,
+        "current_price": 101.0,
+        "stop_loss": 95.0,
+        "take_profit": 110.0,
+        "leverage": 5.0,
+        "unrealized_pnl": 0.5,
+        "realized_pnl": 0.0,
+        "fees_paid": 0.1,
+        "status": "OPEN",
+        "opened_at": datetime.now(timezone.utc),
+        "margin": 10.0,
+        "last_funding_time": 123456789,
+        "order_type": "LIMIT",
+        "signal_id": "SIG-RUNTIME-1",
+        "strategy": "momentum",
+    })
+    repo.save_order({
+        "order_id": "ORD-RUNTIME-1",
+        "signal_id": "SIG-RUNTIME-1",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "order_type": "LIMIT",
+        "side": "LONG",
+        "amount": 0.1,
+        "price": 100.0,
+        "status": "OPEN",
+        "created_at": datetime.now(timezone.utc),
+        "strategy": "momentum",
+    })
+
+    assert repo.get_open_positions("FUTURES")[0].position_id == "POS-RUNTIME-1"
+    assert repo.get_open_orders("FUTURES")[0].order_id == "ORD-RUNTIME-1"
+    db.close()
