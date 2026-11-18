@@ -10,7 +10,7 @@ BlackMarket AI is a comprehensive cryptocurrency market intelligence system that
 
 ### Key Features
 
-- 🚀 **Market Discovery**: Discovers 2,181+ symbols (1,373 Spot + 808 Futures) from Binance public APIs
+- 🚀 **Market Discovery**: Discovers currently eligible Spot and USDⓈ-M Futures symbols dynamically from Binance public APIs
 - 📊 **Multi-Timeframe Analysis**: 9 timeframes (1m to 1w) with technical indicators (RSI, MACD, ADX, VWAP, etc.)
 - 🧠 **Hybrid ML**: Ensemble models with online learning and walk-forward validation
 - 🎯 **Strategy Engine**: 5 strategy families (Momentum, Breakout, Trend Following, Mean Reversion, Reversal)
@@ -23,7 +23,7 @@ BlackMarket AI is a comprehensive cryptocurrency market intelligence system that
 
 ## Requirements
 
-- **Python**: 3.10 or higher (3.14 recommended)
+- **Python**: 3.10 or higher (Python 3.12 is the CI-tested version; other versions should be validated with the pinned dependencies)
 - **Operating System**: Windows 10+, macOS 10.14+, or Linux (Ubuntu 18.04+)
 - **Memory**: 4GB RAM minimum, 8GB recommended
 - **Disk**: 500MB for application, additional space for historical data
@@ -103,9 +103,8 @@ USDM_FUTURES_ENABLED=true
 # Timeframes
 TIMEFRAMES=1m,3m,5m,15m,30m,1h,4h,1d,1w
 
-# Paper Capital
-SPOT_INITIAL_BALANCE=500
-FUTURES_INITIAL_BALANCE=500
+# Paper Capital (total virtual capital split across Spot and Futures)
+VIRTUAL_CAPITAL=500
 PAPER_TRADING_ENABLED=true
 
 # Risk Management
@@ -116,17 +115,25 @@ MAX_SPOT_POSITIONS=5
 MAX_FUTURES_POSITIONS=5
 
 # Learning
+LEARNING_MODE=hybrid
 ML_ENABLED=true
 AUTO_MODEL_TRAINING=true
 MODEL_VALIDATION_REQUIRED=true
+MODEL_RETRAIN_MIN_DAYS=7
+MODEL_RETRAIN_MIN_NEW_SAMPLES=100
 
 # Telegram (Optional; disabled by default)
 TELEGRAM_ENABLED=false
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 TELEGRAM_CHAT_ID=your_chat_id_here
 
+# Hosted dashboard authentication (optional for local-only desktop use).
+# If using the hosted Render dashboard, set this to the SAME 64-character hex
+# token configured as BLACKMARKET_API_TOKEN in Render. Keep it private.
+BLACKMARKET_API_TOKEN=
+
 # Database
-DATABASE_URL=sqlite:///data/blackmarket.db
+# Leave DATABASE_URL unset to use the selected local application-data directory.
 ```
 
 ### Telegram Bot Setup
@@ -146,9 +153,9 @@ Telegram is optional. Leave `TELEGRAM_ENABLED=false` to run the core application
 
 Launch the BlackMarket AI desktop executable or its shortcut as the primary experience. The desktop application starts and supervises the local FastAPI backend. It checks backend, database, and WebSocket readiness before showing market data; a startup failure displays diagnostics and a retry action instead of placeholder dashboard values. Only one desktop instance is allowed, and closing the app stops a backend process that it started.
 
-The Tauri bundle is configured to include the Python source, but it does **not** bundle a Python interpreter or the Python package environment. Install Python 3.10+ and the project dependencies first. On Windows, run `.\install_windows.ps1` from the project directory; it installs `src_tauri\backend\requirements.txt` into the project's `venv`, which the desktop supervisor can use. For another interpreter, set `BLACKMARKET_PYTHON` to its executable and install the backend requirements there. A missing interpreter or dependency is reported in the startup screen and backend log.
+The Tauri bundle is configured to include the Python source, but it does **not** bundle a Python interpreter or the Python package environment. Install Python 3.10+ and the project dependencies first. Python 3.12 is the CI-tested runtime; Python 3.14 has not yet been verified against the complete dependency set. On Windows, run `.\install_windows.ps1` from the project directory; it installs `src_tauri\backend\requirements.txt` into the project's `venv`, which the desktop supervisor can use. For another interpreter, set `BLACKMARKET_PYTHON` to its executable and install the backend requirements there. A missing interpreter or dependency is reported in the startup screen and backend log.
 
-The desktop backend binds only to `127.0.0.1:8765`. Desktop data, configuration, and logs use the current user's application-data directory; the startup screen shows the backend log location when available. The desktop app does not require Binance credentials and does not provide real-money trading.
+The desktop backend binds only to `127.0.0.1:8765`. If the hosted dashboard will connect through a private tunnel later, place the same `BLACKMARKET_API_TOKEN` used in Render in the project's private `.env` file; the desktop supervisor reads it without logging the value. Otherwise it creates a private per-install token for desktop-only use. Desktop data, configuration, and logs use the current user's application-data directory; the startup screen shows the backend log location when available. The desktop app does not require Binance credentials and does not provide real-money trading.
 
 For desktop development on Windows, install the Tauri prerequisites (Rust and Visual Studio C++ Build Tools), then run:
 
@@ -289,10 +296,10 @@ On startup, the application checks database integrity and recovers persisted pap
 
 ### Data Protection
 
-- Database files are encrypted at rest (SQLite)
-- Configuration files (.env) should never be committed to version control
-- Backup files are stored locally with timestamps
-- No sensitive data is logged or transmitted
+- SQLite databases are **not encrypted at rest by default**; protect the Windows/macOS user account and use full-disk encryption where available
+- Configuration files (.env) contain secrets and must never be committed to version control
+- Backup files are stored locally with timestamps; protect the backup directory as well
+- The shared API token is required only when the hosted dashboard must authenticate to the local backend
 
 ## Troubleshooting
 
