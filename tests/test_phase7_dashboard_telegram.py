@@ -38,9 +38,9 @@ class TestTelegramClient:
         client = TelegramClient(token="test", chat_id="123")
         msg = "Test message"
 
-        # First time - not duplicate
+        # A message is only deduplicated after Telegram confirms delivery.
         assert client._is_duplicate(msg) is False
-        # Second time - duplicate
+        client._remember_sent(msg)
         assert client._is_duplicate(msg) is True
 
     def test_format_duration(self):
