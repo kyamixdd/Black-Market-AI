@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from config import SIGNAL_DEDUP_WINDOW_SECONDS, TIMEFRAMES
+from config import LEARNING_MODE, ML_ENABLED, SIGNAL_DEDUP_WINDOW_SECONDS, TIMEFRAMES
 from core.event_bus import EventBus
 from core.event_models import EventType, make_event
 from intelligence.decision_engine import DecisionEngine
@@ -73,18 +73,55 @@ class IntelligenceCore:
         if not ohlc_data:
             return []
 
+        # Build one shared ML prediction for the symbol and current market state.
+        ml_prediction = None
+        if ML_ENABLED and LEARNING_MODE in {"hybrid", "ml_only"} and self.predictor.is_trained:
+            try:
+                features = self.feature_engine.build_features(symbol, market, ohlc_data)
+                if features.size and np.isfinite(features).all():
+                    ml_prediction = self.predictor.predict(features)
+            except Exception:
+                logger.exception("ML inference failed for %s %s", market, symbol)
+                if LEARNING_MODE == "ml_only":
+                    return []
+
         signals = []
         for strategy in self.strategies:
             try:
                 signal = strategy.analyze(symbol, market, ohlc_data)
                 if signal:
-                    # Add market regime
                     trend = self.trend_analyzer.get_trend_summary(market, symbol)
                     signal["regime"] = trend.get("regime", "UNKNOWN")
                     signal["data_freshness"] = "LIVE"
-                    # Multi-timeframe scoring using strategy selector
-                    weight = self.strategy_selector.get_weight(signal["strategy"], signal.get("regime"))
-                    signal["_weight"] = weight
+                    signal["_weight"] = self.strategy_selector.get_weight(
+                        signal["strategy"], signal.get("regime")
+                    )
+
+                    if LEARNING_MODE == "ml_only":
+                        if ml_prediction is None:
+                            continue
+                        is_long = signal["direction"] in ("LONG", "BUY")
+                        directional_probability = (
+                            ml_prediction["prob_up"] if is_long else ml_prediction["prob_down"]
+                        )
+                        if directional_probability < 0.45:
+                            continue
+                        signal["raw_score"] = min(100.0, directional_probability * 100.0)
+                    elif LEARNING_MODE == "hybrid" and ml_prediction is not None:
+                        is_long = signal["direction"] in ("LONG", "BUY")
+                        directional_probability = (
+                            ml_prediction["prob_up"] if is_long else ml_prediction["prob_down"]
+                        )
+                        rule_score = max(0.0, min(1.0, float(signal.get("raw_score", 50.0)) / 100.0))
+                        signal["raw_score"] = (
+                            0.70 * rule_score + 0.30 * directional_probability
+                        ) * 100.0
+
+                    if ml_prediction is not None:
+                        signal["ml_predicted_class"] = ml_prediction["predicted_class"]
+                        signal["ml_confidence"] = ml_prediction["confidence"]
+                        signal["ml_prob_up"] = ml_prediction["prob_up"]
+                        signal["ml_prob_down"] = ml_prediction["prob_down"]
                     signals.append(signal)
             except Exception as exc:
                 logger.error("Strategy %s failed on %s %s: %s", strategy.name, market, symbol, exc)
