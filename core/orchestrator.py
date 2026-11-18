@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import uuid
 from typing import Any
 
@@ -57,6 +58,7 @@ class Orchestrator:
         self.spot_client: SpotClient = SpotClient(self.rate_limiter)
         self.futures_client: FuturesClient = FuturesClient(self.rate_limiter)
         self.ws_manager: WebSocketManager = WebSocketManager(self.rate_limiter)
+        self.ws_manager.add_handler(self._on_exchange_ws_message)
         self.candle_manager: CandleManager = CandleManager()
         self.scanner: Scanner = Scanner(self.event_bus, self.registry, self.cache,
                                        self.spot_client, self.futures_client)
@@ -190,6 +192,56 @@ class Orchestrator:
     async def _on_signal_expired(self, event) -> None:
         if self.telegram:
             await self.telegram.send_signal_update(self._event_signal(event), "expired")
+
+    async def _on_exchange_ws_message(self, message: dict[str, Any]) -> None:
+        """Convert Binance combined ticker streams into normal market-data events."""
+        data = message.get("data", message) if isinstance(message, dict) else {}
+        if not isinstance(data, dict) or data.get("e") != "24hrTicker":
+            return
+        symbol = data.get("s")
+        market = message.get("_market", "SPOT")
+        try:
+            price = float(data.get("c", 0))
+            volume = float(data.get("q", 0))
+            change = float(data.get("P", 0))
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not symbol or not all(math.isfinite(value) for value in (price, volume, change)) or price <= 0:
+            return
+        self._ws_connected = True
+        self.cache.update_ticker(market, symbol, price, volume, change)
+        await self.event_bus.publish(make_event(
+            EventType.MARKET_DATA,
+            "binance_websocket",
+            symbol=symbol,
+            market=market,
+            price=price,
+            volume_24h=volume,
+            price_change_24h=change,
+        ))
+
+    async def _start_market_websockets(self) -> None:
+        """Subscribe to the most liquid eligible symbols; REST still covers the full universe."""
+        spot_streams: list[str] = []
+        futures_streams: list[str] = []
+        for market, enabled, target in (
+            ("SPOT", SPOT_ENABLED, spot_streams),
+            ("FUTURES", USDM_FUTURES_ENABLED, futures_streams),
+        ):
+            if not enabled:
+                continue
+            tickers = self.cache.get_market_tickers(market)
+            tickers.sort(key=lambda item: float(item.get("volume_24h") or 0.0), reverse=True)
+            target.extend(
+                f"{item['symbol'].lower()}@ticker"
+                for item in tickers[:100]
+                if item.get("symbol")
+            )
+        await self.ws_manager.start(spot_streams, futures_streams)
+        logger.info(
+            "Exchange WebSocket subscriptions started: spot=%d futures=%d",
+            len(spot_streams), len(futures_streams),
+        )
 
     async def _on_market_data(self, event) -> None:
         payload = event.payload
@@ -337,6 +389,15 @@ class Orchestrator:
         # signals, fills, or risk events.
         self._event_bus_task = asyncio.create_task(self.event_bus.run(), name="blackmarket-event-bus")
         await self.scanner.start()
+        # Give the initial REST scan a moment to populate the ticker cache before
+        # selecting high-liquidity WebSocket subscriptions.
+        for _ in range(10):
+            if (SPOT_ENABLED and self.cache.get_market_tickers("SPOT")) or (
+                USDM_FUTURES_ENABLED and self.cache.get_market_tickers("FUTURES")
+            ):
+                break
+            await asyncio.sleep(1)
+        await self._start_market_websockets()
         self._tasks.append(asyncio.create_task(self._analysis_loop(), name="blackmarket-analysis"))
         self._tasks.append(asyncio.create_task(self._learning_loop(), name="blackmarket-learning"))
         logger.info("BlackMarket AI running")
