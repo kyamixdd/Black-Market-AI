@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +49,9 @@ class Predictor:
                     except Exception as river_exc:
                         self.river_model = None
                         logger.warning("Failed to load River model: %s", river_exc)
-                self.version = rf_path.stem.removeprefix("rf_") or self.version
+                version_file = self.model_dir / "latest_version.txt"
+                if version_file.exists():
+                    self.version = version_file.read_text(encoding="utf-8").strip() or self.version
                 self.is_trained = True
                 logger.info("Loaded batch models%s", " and River online model" if self.river_model else "")
             except Exception as exc:
@@ -126,12 +129,19 @@ class Predictor:
     def save(self, version: str) -> None:
         if self.rf_model is None or self.xgb_model is None:
             return
-        joblib.dump(self.rf_model, self.model_dir / f"rf_{version}.pkl")
-        self.xgb_model.save_model(str(self.model_dir / f"xgb_{version}.json"))
-        joblib.dump(self.scaler, self.model_dir / f"scaler_{version}.pkl")
-        # Symlink latest
-        for name in ["rf_model.pkl", "xgb_model.json", "scaler.pkl"]:
-            target = self.model_dir / name
-            if target.exists() or target.is_symlink():
-                target.unlink()
-            target.symlink_to(self.model_dir / name.replace(".", f"_{version}."))
+        artifacts = {
+            "rf_model.pkl": f"rf_{version}.pkl",
+            "xgb_model.json": f"xgb_{version}.json",
+            "scaler.pkl": f"scaler_{version}.pkl",
+        }
+        joblib.dump(self.rf_model, self.model_dir / artifacts["rf_model.pkl"])
+        self.xgb_model.save_model(str(self.model_dir / artifacts["xgb_model.json"]))
+        joblib.dump(self.scaler, self.model_dir / artifacts["scaler.pkl"])
+        if self.river_model is not None:
+            river_name = f"river_{version}.pkl"
+            joblib.dump(self.river_model, self.model_dir / river_name)
+            artifacts["river_model.pkl"] = river_name
+        for alias, filename in artifacts.items():
+            shutil.copy2(self.model_dir / filename, self.model_dir / alias)
+        (self.model_dir / "latest_version.txt").write_text(version, encoding="utf-8")
+        self.version = version
