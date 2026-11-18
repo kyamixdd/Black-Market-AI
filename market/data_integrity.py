@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 import time
+
+import numpy as np
 from typing import Any
 
 from .candle_manager import CandleManager, TIMEFRAME_SECONDS
@@ -60,6 +62,7 @@ class DataIntegrityGuardian:
         # Check 1m timeframe for latest close
         series = self.candles.get_series(market, symbol, "1m", limit=1)
         if not series:
+            self._update_status(market, symbol, "consistency", True)
             return True # Not enough data to compare
 
         last_close = series[-1]["close"]
@@ -74,23 +77,31 @@ class DataIntegrityGuardian:
         return True
 
     def detect_anomalies(self, market: str, symbol: str, timeframe: str) -> bool:
-        """Detect price anomalies using ATR."""
-        ohlc = self.candles.get_ohlc(market, symbol, timeframe, limit=30)
-        if len(ohlc["close"]) < 20:
-            return True # Not enough data for ATR
-
-        from .volatility_analyzer import VolatilityAnalyzer
-        last_atr = VolatilityAnalyzer.atr(ohlc["high"], ohlc["low"], ohlc["close"], period=14)
-        if last_atr == 0:
+        """Detect price anomalies using completed candles only."""
+        now_ms = int(time.time() * 1000)
+        series = [
+            candle for candle in self.candles.get_series(market, symbol, timeframe, limit=30)
+            if candle["close_time"] <= now_ms
+        ]
+        if len(series) < 20:
+            self._update_status(market, symbol, "anomaly", True)
             return True
 
-        last_close = ohlc["close"][-1]
-        prev_close = ohlc["close"][-2]
+        highs = np.asarray([c["high"] for c in series], dtype=np.float64)
+        lows = np.asarray([c["low"] for c in series], dtype=np.float64)
+        closes = np.asarray([c["close"] for c in series], dtype=np.float64)
+        from .volatility_analyzer import VolatilityAnalyzer
+        last_atr = VolatilityAnalyzer.atr(highs, lows, closes, period=14)
+        if last_atr <= 0:
+            self._update_status(market, symbol, "anomaly", True)
+            return True
 
-        move = abs(last_close - prev_close)
-        if last_atr > 0 and move > (last_atr * self._anomaly_threshold_atr):
-            logger.error("Price anomaly detected for %s %s %s: move=%.4f, atr=%.4f",
-                         market, symbol, timeframe, move, last_atr)
+        move = abs(closes[-1] - closes[-2])
+        if move > last_atr * self._anomaly_threshold_atr:
+            logger.error(
+                "Price anomaly detected for %s %s %s: move=%.4f, atr=%.4f",
+                market, symbol, timeframe, move, last_atr,
+            )
             self._update_status(market, symbol, "anomaly", False, "Price spike detected")
             return False
         self._update_status(market, symbol, "anomaly", True)
