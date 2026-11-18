@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
@@ -56,7 +57,7 @@ class Database:
 
     def init_db(self) -> None:
         Base.metadata.create_all(self.engine)
-        logger.info("Database initialized at %s", self.url)
+        logger.info("Database initialized at %s", make_url(self.url).render_as_string(hide_password=True))
 
     def integrity_check(self) -> str:
         with self.engine.connect() as connection:
