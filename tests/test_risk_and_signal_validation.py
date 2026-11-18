@@ -90,3 +90,39 @@ def test_invalid_numeric_feature_vector_is_rejected_by_predictor():
         assert "finite" in str(exc)
     else:
         raise AssertionError("Expected non-finite features to be rejected")
+
+
+@pytest.mark.asyncio
+async def test_decision_engine_publishes_rejection_with_event_envelope_fields():
+    from core.event_bus import EventBus
+    from core.event_models import EventType
+    from intelligence.decision_engine import DecisionEngine
+
+    bus = EventBus()
+    rejected = []
+
+    async def capture(event):
+        rejected.append(event)
+
+    bus.subscribe(EventType.SIGNAL_REJECTED, capture)
+    consumer = asyncio.create_task(bus.run())
+    engine = DecisionEngine(bus)
+    await engine.evaluate_signal({
+        "signal_id": "SIG-INVALID-SPOT-SHORT",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "strategy": "test",
+        "direction": "SELL",
+        "timeframe": "15m",
+        "entry": 100.0,
+        "stop_loss": 110.0,
+        "take_profit": [90.0],
+        "reasons": ["test"],
+    })
+    await bus.stop()
+    await consumer
+
+    assert len(rejected) == 1
+    assert rejected[0].symbol == "BTCUSDT"
+    assert rejected[0].market == "SPOT"
+    assert "does not support short" in rejected[0].payload["reject_reason"]
