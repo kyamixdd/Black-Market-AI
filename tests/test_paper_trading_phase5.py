@@ -581,3 +581,21 @@ def test_futures_liquidation_treats_buy_as_long():
     assert engine.check_liquidation(position, liquidation_price - 0.01) is True
     assert engine.check_liquidation(position, liquidation_price + 0.01) is False
     assert engine.get_margin_ratio(position, 90.0) < engine.get_margin_ratio(position, 110.0)
+
+
+def test_futures_margin_ratio_reaches_maintenance_margin_at_liquidation():
+    from paper_trading.liquidation_engine import LiquidationEngine
+
+    engine = LiquidationEngine()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "entry_price": 100.0,
+        "leverage": 10.0,
+    }
+    liquidation_price = engine.calculate_liquidation_price(position)
+
+    assert engine.get_margin_ratio(position, 100.0) == pytest.approx(0.10)
+    assert engine.get_margin_ratio(position, liquidation_price) == pytest.approx(engine.DEFAULT_MMR)
+    assert engine.is_at_risk(position, liquidation_price + 0.01) is False
+    assert engine.is_at_risk(position, liquidation_price - 0.01) is True
