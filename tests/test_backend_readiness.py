@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from intelligence.feature_engine import FeatureEngine
 from learning.dataset_builder import DatasetBuilder
@@ -96,3 +97,40 @@ def test_health_endpoint_is_safe_before_first_exchange_websocket_message(monkeyp
     assert response["backend_ready"] is True
     assert response["market_data_active"] is True
     assert response["exchange_websocket_connected"] is False
+
+
+@pytest.mark.asyncio
+async def test_backend_startup_failure_closes_database(monkeypatch):
+    from src_tauri.backend import main
+
+    class FakeDB:
+        closed = False
+
+        def __init__(self, _url):
+            pass
+
+        def init_db(self):
+            pass
+
+        def integrity_check(self):
+            return "ok"
+
+        def close(self):
+            self.closed = True
+
+    fake_db = FakeDB("sqlite:///unused.db")
+
+    class FailingOrchestrator:
+        def __init__(self, _db):
+            raise RuntimeError("simulated orchestrator startup failure")
+
+    monkeypatch.setattr(main, "validate_config_or_exit", lambda: None)
+    monkeypatch.setattr(main, "Database", lambda _url: fake_db)
+    monkeypatch.setattr(main, "Orchestrator", FailingOrchestrator)
+
+    with pytest.raises(RuntimeError, match="simulated orchestrator startup failure"):
+        async with main.lifespan(main.app):
+            pass
+
+    assert fake_db.closed is True
+    assert main.db is None
