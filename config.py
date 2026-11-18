@@ -53,8 +53,11 @@ USDM_FUTURES_ENABLED = _env_bool("USDM_FUTURES_ENABLED", True)
 TIMEFRAMES = _env_str("TIMEFRAMES", "1m,3m,5m,15m,30m,1h,4h,1d,1w").split(",")
 
 # --- Paper capital ---
-SPOT_INITIAL_BALANCE = _env_float("SPOT_INITIAL_BALANCE", 500.0)
-FUTURES_INITIAL_BALANCE = _env_float("FUTURES_INITIAL_BALANCE", 500.0)
+# The configured virtual capital is the total account budget. When both markets
+# are enabled, split it evenly unless the user explicitly overrides either wallet.
+VIRTUAL_CAPITAL = _env_float("VIRTUAL_CAPITAL", 500.0)
+SPOT_INITIAL_BALANCE = _env_float("SPOT_INITIAL_BALANCE", VIRTUAL_CAPITAL / 2.0)
+FUTURES_INITIAL_BALANCE = _env_float("FUTURES_INITIAL_BALANCE", VIRTUAL_CAPITAL / 2.0)
 PAPER_TRADING_ENABLED = _env_bool("PAPER_TRADING_ENABLED", True)
 REAL_TRADING_ENABLED = _env_bool("REAL_TRADING_ENABLED", False)
 
