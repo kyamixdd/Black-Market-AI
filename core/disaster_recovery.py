@@ -924,10 +924,16 @@ class DisasterRecoveryOrchestrator:
                 except Exception as e:
                     logger.error(f"Auto backup failed: {e}")
 
-    def _on_stall(self) -> None:
-        """Called when watchdog detects stall."""
+    async def _on_stall(self) -> None:
+        """Attempt bounded REST resynchronization and WebSocket restart after a stall."""
         logger.critical("System stall detected - initiating emergency recovery")
-        # Could trigger restart, alert, etc.
+        try:
+            result = await self.rest_resync.resync_all()
+            logger.warning("Emergency REST resynchronization result: %s", result)
+            await self.ws_reconnection.handle_disconnect()
+            self.watchdog.heartbeat()
+        except Exception:
+            logger.exception("Emergency recovery attempt failed")
 
 
 def create_disaster_recovery_orchestrator(
