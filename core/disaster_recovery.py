@@ -434,9 +434,11 @@ class PositionRecoveryManager:
                 if closed_at.astimezone(timezone.utc).date() == today:
                     self.simulator.daily_pnl += trade.pnl
         for position in self.simulator.spot_positions.values():
-            self.simulator.spot_balance -= position.get("fees_paid", 0.0)
+            reserved = position.get("margin", position.get("entry_price", 0.0) * position.get("amount", 0.0))
+            self.simulator.spot_balance -= reserved + position.get("fees_paid", 0.0)
         for position in self.simulator.futures_positions.values():
-            self.simulator.futures_balance -= position.get("fees_paid", 0.0)
+            reserved = position.get("margin", position.get("entry_price", 0.0) * position.get("amount", 0.0))
+            self.simulator.futures_balance -= reserved + position.get("fees_paid", 0.0)
 
 
 class ModelCheckpointRecovery:
