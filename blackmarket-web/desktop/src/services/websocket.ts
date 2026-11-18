@@ -23,6 +23,8 @@ interface WebSocketMessage {
 
 class WebSocketService {
   private ws: WebSocket | null = null
+  private eventSource: EventSource | null = null
+  private readonly useBrowserSse: boolean
   private readonly url: string
   private reconnectAttempts = 0
   private reconnectDelay = 1000
@@ -35,6 +37,7 @@ class WebSocketService {
   private manuallyDisconnected = false
 
   constructor() {
+    this.useBrowserSse = typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)
     this.url = 'ws://127.0.0.1:8765/ws'
   }
 
@@ -64,6 +67,73 @@ class WebSocketService {
   }
 
   connect(): Promise<void> {
+    if (this.useBrowserSse) {
+      if (this.eventSource?.readyState === EventSource.OPEN || this.eventSource?.readyState === EventSource.CONNECTING) {
+        return Promise.resolve()
+      }
+      this.manuallyDisconnected = false
+      this.setState(this.reconnectAttempts ? 'reconnecting' : 'connecting')
+      return new Promise((resolve, reject) => {
+        const source = new EventSource('/api/backend/events/stream')
+        this.eventSource = source
+        let settled = false
+        source.onopen = () => {
+          if (this.eventSource !== source) return
+          this.reconnectAttempts = 0
+          this.setState('connected')
+          this.emit('connected')
+          if (!settled) {
+            settled = true
+            resolve()
+          }
+        }
+        source.onmessage = (message) => {
+          try {
+            const event = JSON.parse(message.data) as { event_type?: string }
+            const channelByType: Record<string, string> = {
+              MARKET_DATA: 'price_updates',
+              MARKET_SNAPSHOT: 'market_updates',
+              SIGNAL_PROPOSED: 'signal_updates',
+              SIGNAL_VALIDATED: 'signal_updates',
+              SIGNAL_REJECTED: 'signal_updates',
+              SIGNAL_EXPIRED: 'signal_updates',
+              PREDICTION: 'learning_updates',
+              LEARNING_UPDATE: 'learning_updates',
+              MODEL_TRAINED: 'learning_updates',
+              MODEL_PROMOTED: 'learning_updates',
+              MODEL_ROLLED_BACK: 'learning_updates',
+              POSITION_OPENED: 'position_updates',
+              POSITION_CLOSED: 'position_updates',
+              TRADE_EXECUTED: 'portfolio_updates',
+              TRADE_PARTIALLY_FILLED: 'portfolio_updates',
+              TRADE_CLOSED: 'portfolio_updates',
+              TRADE_CANCELLED: 'portfolio_updates',
+              TRADE_REJECTED: 'portfolio_updates',
+              ORDER_PLACED: 'portfolio_updates',
+              ORDER_FILLED: 'portfolio_updates',
+              RISK_ALERT: 'risk_updates',
+              SYSTEM_HEALTH: 'system_events',
+              NOTIFICATION: 'system_events',
+            }
+            const channel = event.event_type ? channelByType[event.event_type] : undefined
+            if (channel) this.emit(channel, event)
+            this.emit('event', event)
+          } catch (error) {
+            this.emit('error', error)
+          }
+        }
+        source.onerror = () => {
+          if (this.eventSource !== source) return
+          this.setState('reconnecting')
+          this.emit('disconnected')
+          if (!settled) {
+            settled = true
+            reject(new Error('Authenticated backend event stream is unavailable'))
+          }
+          // EventSource performs bounded reconnects internally.
+        }
+      })
+    }
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return Promise.resolve()
     }
@@ -202,6 +272,8 @@ class WebSocketService {
 
   disconnect() {
     this.manuallyDisconnected = true
+    this.eventSource?.close()
+    this.eventSource = null
     this.stopPing()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
