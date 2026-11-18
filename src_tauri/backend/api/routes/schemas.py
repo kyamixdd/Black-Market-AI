@@ -489,19 +489,30 @@ class SignalRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     spot_enabled: bool | None = None
     futures_enabled: bool | None = None
     scan_all_eligible_symbols: bool | None = None
     timeframes: list[str] | None = None
-    spot_initial_balance: float | None = None
-    futures_initial_balance: float | None = None
-    risk_per_trade_pct: float | None = None
-    risk_max_daily_loss_pct: float | None = None
-    risk_max_total_open_pct: float | None = None
-    risk_max_leverage: float | None = None
-    max_spot_positions: int | None = None
-    max_futures_positions: int | None = None
+    spot_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000)
+    futures_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000)
+    risk_per_trade_pct: float | None = Field(default=None, gt=0, le=10)
+    risk_max_daily_loss_pct: float | None = Field(default=None, gt=0, le=20)
+    risk_max_total_open_pct: float | None = Field(default=None, gt=0, le=50)
+    risk_max_leverage: float | None = Field(default=None, ge=1, le=20)
+    max_spot_positions: int | None = Field(default=None, ge=1, le=100)
+    max_futures_positions: int | None = Field(default=None, ge=1, le=100)
     telegram_enabled: bool | None = None
+
+    @classmethod
+    def validate_timeframes(cls, value):
+        allowed = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
+        if value is not None and (
+            not value or len(value) != len(set(value)) or any(item not in allowed for item in value)
+        ):
+            raise ValueError("timeframes must be a non-empty unique list of supported intervals")
+        return value
 
 
 class SettingsResponse(BaseModel):
