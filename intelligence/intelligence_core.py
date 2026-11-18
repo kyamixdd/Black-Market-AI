@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import numpy as np
 from typing import Any
@@ -79,7 +80,24 @@ class IntelligenceCore:
         ml_prediction = None
         if ML_ENABLED and LEARNING_MODE in {"hybrid", "ml_only"} and self.predictor.is_trained:
             try:
-                features = self.feature_engine.build_features(symbol, market, ohlc_data)
+                # ML features use only fully closed candles so live inference,
+                # persisted training examples, and outcome labels share one
+                # reproducible point-in-time dataset.
+                now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+                closed_ohlc = {}
+                for timeframe in ("15m", "1h", "4h", "1d"):
+                    closed = [
+                        candle for candle in self.candles.get_series(
+                            market, symbol, timeframe, limit=200
+                        )
+                        if candle["close_time"] <= now_ms
+                    ]
+                    if len(closed) >= 50:
+                        closed_ohlc[timeframe] = {
+                            key: np.asarray([candle[key] for candle in closed], dtype=np.float32)
+                            for key in ("open", "high", "low", "close", "volume")
+                        }
+                features = self.feature_engine.build_features(symbol, market, closed_ohlc)
                 if features.size and np.isfinite(features).all():
                     ml_prediction = self.predictor.predict(features)
             except Exception:
