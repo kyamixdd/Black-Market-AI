@@ -70,7 +70,7 @@ async def test_market_discovery_registers_spot_and_futures_symbols(monkeypatch):
     }
 
     async def fake_fetch(url):
-        return spot if "api.binance.com" in url else futures
+        return futures if "fapi.binance.com" in url else spot
 
     monkeypatch.setattr(discovery, "_fetch", fake_fetch)
     result = await discovery.discover_all()
