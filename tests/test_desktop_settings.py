@@ -96,6 +96,7 @@ def test_settings_update_persists_and_applies_runtime_risk_changes():
     bridge.repo = SimpleNamespace(
         get_app_settings=lambda: dict(saved),
         save_app_settings=lambda updates: saved.update(updates),
+        save_simulator_state=lambda state: saved.update({"_simulator_state_saved": bool(state)}),
     )
 
     result = bridge.update_settings({
@@ -111,6 +112,7 @@ def test_settings_update_persists_and_applies_runtime_risk_changes():
     assert risk.max_open_risk_pct == 4.0
     assert simulator.initial_spot_balance == 300.0
     assert simulator.spot_balance == 300.0
+    assert saved["_simulator_state_saved"] is True
     assert result["restart_required"] == ["timeframes"]
 
 
