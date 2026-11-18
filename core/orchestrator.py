@@ -273,8 +273,12 @@ class Orchestrator:
             self.repo.save_trade_history(trade)
             strategy = trade.get("strategy")
             if strategy:
+                won = trade.get("pnl", 0.0) > 0
                 self.strategy_selector.update_performance(
-                    strategy, trade.get("pnl", 0.0) > 0, trade.get("pnl_pct", 0.0)
+                    strategy, won, trade.get("pnl_pct", 0.0)
+                )
+                self.repo.update_strategy_metrics(
+                    strategy, trade.get("market", "SPOT"), won, trade.get("pnl", 0.0)
                 )
             await self._persist_state()
             if self.telegram:
