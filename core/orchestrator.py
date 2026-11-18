@@ -247,6 +247,22 @@ class Orchestrator:
         if self.telegram:
             await self._send_telegram(self.telegram.send_signal_update, self._event_signal(event), "expired")
 
+    def has_fresh_market_data(self, max_age_seconds: int = 120) -> bool:
+        """Return true only when an enabled market has a recent ticker update."""
+        now = datetime.now(timezone.utc)
+        for market, enabled in (("SPOT", SPOT_ENABLED), ("FUTURES", USDM_FUTURES_ENABLED)):
+            if not enabled:
+                continue
+            for ticker in self.cache.get_market_tickers(market):
+                updated_at = ticker.get("timestamp")
+                if not updated_at:
+                    continue
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+                if 0 <= (now - updated_at).total_seconds() <= max_age_seconds:
+                    return True
+        return False
+
     async def _on_exchange_ws_message(self, message: dict[str, Any]) -> None:
         """Convert Binance combined ticker streams into normal market-data events."""
         data = message.get("data", message) if isinstance(message, dict) else {}
@@ -600,7 +616,8 @@ class Orchestrator:
                 ]
                 self._analysis_cursors[market] = (cursor + len(batch)) % len(tickers)
                 await asyncio.gather(*(analyze_one(market, symbol) for symbol in batch))
-                self.disaster_recovery.watchdog.heartbeat()
+                if self.has_fresh_market_data():
+                    self.disaster_recovery.watchdog.heartbeat()
             await asyncio.sleep(60)
 
     async def _record_prediction(self, symbol: str, market: str, signals: list[dict[str, Any]]) -> None:
