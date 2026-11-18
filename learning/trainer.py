@@ -245,8 +245,12 @@ class LearningOrchestrator:
         labeled = labeler.evaluate_unresolved()
         results["outcomes_labeled"] = labeled
 
-        # 2. Check if retraining is needed
-        retrain_result = self.trainer.retrain_if_needed(self.predictor)
+        # 2. Respect the operator's automatic-training and ML switches.
+        from config import AUTO_MODEL_TRAINING, ML_ENABLED
+        if AUTO_MODEL_TRAINING and ML_ENABLED:
+            retrain_result = self.trainer.retrain_if_needed(self.predictor)
+        else:
+            retrain_result = {"status": "disabled"}
         results["retrain"] = retrain_result
 
         # 3. If new model trained and validated, promote it
