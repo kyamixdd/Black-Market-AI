@@ -398,10 +398,11 @@ class Simulator:
         pnl = self.pnl_calc.realized(position, fill_price)
         fee = self.fee_calc.calculate(market, position["side"], position["amount"], fill_price, position["leverage"])
         margin = float(position.get("margin", position["entry_price"] * position["amount"]))
-        if reason == "LIQUIDATION" and market == "FUTURES":
-            pnl = max(pnl, -margin)
-        balance_delta = margin + pnl - fee
-        trade_pnl = pnl - position.get("fees_paid", 0.0) - fee
+        # Isolated paper margin cannot create a negative account balance, even
+        # when a stop/liquidation gap jumps past the reserved collateral.
+        pnl = max(pnl, -margin)
+        balance_delta = max(0.0, margin + pnl - fee)
+        trade_pnl = balance_delta - margin - position.get("fees_paid", 0.0)
         position["status"] = "CLOSED"
         position["closed_at"] = datetime.now(timezone.utc)
         position["close_price"] = fill_price
