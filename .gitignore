@@ -24,16 +24,24 @@ htmlcov/
 data/blackmarket.db
 data/blackmarket.db-*
 data/blackmarket.db-journal
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.db.gz
+*.sqlite.gz
+*.sqlite3.gz
 
 # Model files
 models/*.joblib
 models/*.pkl
+models/*.json
 models/registry/
 
 # Backup files
-data/backups/*.db
-data/backups/*.zip
-backups/*.zip
+data/backups/
+backups/
+*.zip
 
 # Logs
 logs/*.log
@@ -42,6 +50,7 @@ logs/*.log.*
 # Historical data
 data/historical/
 data/cache/
+data/datasets/
 
 # IDE
 .vscode/
