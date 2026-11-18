@@ -76,6 +76,7 @@ def _apply_persisted_settings(database: Database) -> None:
     import config
     from core import orchestrator as orchestrator_module
     from market import scanner as scanner_module
+    from intelligence import intelligence_core as intelligence_module
     from paper_trading import simulator as simulator_module
 
     settings = Repository(database.session_maker()).get_app_settings()
@@ -83,7 +84,7 @@ def _apply_persisted_settings(database: Database) -> None:
         "spot_enabled": ("SPOT_ENABLED", bool, (config, orchestrator_module, scanner_module)),
         "futures_enabled": ("USDM_FUTURES_ENABLED", bool, (config, orchestrator_module, scanner_module)),
         "scan_all_eligible_symbols": ("SCAN_ALL_ELIGIBLE_SYMBOLS", bool, (config, orchestrator_module)),
-        "timeframes": ("TIMEFRAMES", list, (config, orchestrator_module)),
+        "timeframes": ("TIMEFRAMES", list, (config, orchestrator_module, intelligence_module)),
         "spot_initial_balance": ("SPOT_INITIAL_BALANCE", float, (config, simulator_module)),
         "futures_initial_balance": ("FUTURES_INITIAL_BALANCE", float, (config, simulator_module)),
         "risk_per_trade_pct": ("RISK_PER_TRADE_PCT", float, (config, simulator_module)),
