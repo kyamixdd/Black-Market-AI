@@ -23,6 +23,7 @@ class Predictor:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.rf_model: RandomForestClassifier | None = None
         self.xgb_model: xgb.XGBClassifier | None = None
+        self.river_model: Any | None = None
         # Retained for compatibility with older model bundles. Current RF/XGB
         # training and validation use raw features, so inference must too.
         self.scaler = StandardScaler()
@@ -35,13 +36,21 @@ class Predictor:
         rf_path = self.model_dir / "rf_model.pkl"
         xgb_path = self.model_dir / "xgb_model.json"
         scaler_path = self.model_dir / "scaler.pkl"
+        river_path = self.model_dir / "river_model.pkl"
         if rf_path.exists() and xgb_path.exists():
             try:
                 self.rf_model = joblib.load(rf_path)
                 self.xgb_model = xgb.XGBClassifier()
                 self.xgb_model.load_model(str(xgb_path))
+                if river_path.exists():
+                    try:
+                        self.river_model = joblib.load(river_path)
+                    except Exception as river_exc:
+                        self.river_model = None
+                        logger.warning("Failed to load River model: %s", river_exc)
+                self.version = rf_path.stem.removeprefix("rf_") or self.version
                 self.is_trained = True
-                logger.info("Loaded existing models")
+                logger.info("Loaded batch models%s", " and River online model" if self.river_model else "")
             except Exception as exc:
                 self.is_trained = False
                 logger.warning("Failed to load models: %s", exc)
@@ -82,7 +91,24 @@ class Predictor:
         # Applying StandardScaler only at inference creates train/serve skew.
         rf_probs = self._class_probabilities(self.rf_model, X)
         xgb_probs = self._class_probabilities(self.xgb_model, X)
-        probs = (rf_probs + xgb_probs) / 2.0
+        probability_sets = [rf_probs, xgb_probs]
+        if self.river_model is not None:
+            try:
+                river_raw = self.river_model.predict_proba_one(dict(enumerate(X[0])))
+                river_probs = np.zeros(3, dtype=np.float64)
+                for class_value, probability in river_raw.items():
+                    try:
+                        class_index = int(class_value)
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+                    if class_index in CLASS_NAMES:
+                        river_probs[class_index] = float(probability)
+                if np.isfinite(river_probs).all() and river_probs.sum() > 0:
+                    river_probs /= river_probs.sum()
+                    probability_sets.append(river_probs)
+            except Exception as exc:
+                logger.warning("River inference failed; using batch ensemble only: %s", exc)
+        probs = np.mean(probability_sets, axis=0)
         total = float(probs.sum())
         if not np.isfinite(probs).all() or total <= 0:
             raise ValueError("Models returned invalid class probabilities")
