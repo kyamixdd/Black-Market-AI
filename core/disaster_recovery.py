@@ -181,10 +181,18 @@ class DatabaseBackupManager:
                 logger.error(f"Backup not found: {backup_path}")
                 return False
 
+            source_path = Path(self._get_source_path()).resolve()
             if target_path is None:
-                target_path = Path(self._get_source_path())
+                target_path = source_path
+            else:
+                target_path = Path(target_path).resolve()
+            reopen_database = target_path == source_path
 
             try:
+                # Close pooled SQLite connections before replacing the database
+                # file (required on Windows and avoids stale pooled page caches).
+                if reopen_database:
+                    self.db.close()
                 if self.config.compress:
                     import tempfile
                     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -199,9 +207,16 @@ class DatabaseBackupManager:
                 else:
                     shutil.copy2(backup_path, target_path)
 
+                if reopen_database:
+                    self.db.init_db()
                 logger.info(f"Restored database from {backup_path}")
                 return True
             except Exception as e:
+                if reopen_database and self.db._engine is None:
+                    try:
+                        self.db.init_db()
+                    except Exception:
+                        logger.exception("Failed to reopen database after restore error")
                 logger.error(f"Restore failed: {e}")
                 return False
 
