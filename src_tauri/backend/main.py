@@ -27,7 +27,7 @@ if not config_path.is_file():
     config_path = PROJECT_ROOT / ".env"
 load_dotenv(config_path if config_path.is_file() else None)
 
-from config import DATABASE_URL, LOG_LEVEL
+from config import APP_ENV, DATABASE_URL, LOG_LEVEL
 from core.config_validator import validate_config_or_exit
 from core.orchestrator import Orchestrator
 from database.connection import Database
@@ -142,6 +142,9 @@ async def lifespan(app: FastAPI):
         # Validate configuration before opening external resources.
         validate_config_or_exit()
 
+        # Hosted production must use durable PostgreSQL, never ephemeral SQLite.
+        if APP_ENV == "production" and DATABASE_URL.startswith("sqlite"):
+            raise RuntimeError("Production requires a durable PostgreSQL DATABASE_URL; SQLite is not supported for hosted production.")
         # Initialize and verify the database before constructing services.
         db = Database(DATABASE_URL)
         db.init_db()
