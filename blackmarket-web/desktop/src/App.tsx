@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
+import './App.css'
 import {
   Activity,
   ArrowDownToLine,
@@ -429,7 +430,7 @@ function App() {
           } else if (!isTauri && Date.now() - startedAt >= 30000) {
             setStartupStatus({
               state: 'failed',
-              message: 'The backend is unavailable in this browser preview.',
+              message: 'The backend is unavailable.',
               details: 'The hosted website cannot start the Python engine. Start the BlackMarket AI backend on your connected Windows PC.',
             })
           } else {
