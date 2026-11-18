@@ -404,7 +404,10 @@ class Repository:
                 source=event_dict["source"],
                 symbol=event_dict.get("symbol"),
                 market=event_dict.get("market"),
-                payload=json.dumps(event_dict.get("payload", {})),
+                payload=json.dumps(
+                    event_dict.get("payload", {}),
+                    default=lambda value: value.isoformat() if hasattr(value, "isoformat") else str(value),
+                ),
             )
             session.add(ev)
             session.commit()
