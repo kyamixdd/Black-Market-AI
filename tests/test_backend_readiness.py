@@ -87,7 +87,7 @@ def test_health_endpoint_is_safe_before_first_exchange_websocket_message(monkeyp
             return True
 
     monkeypatch.setattr(main, "orchestrator", FakeOrchestrator())
-    monkeypatch.setattr(main, "db", object())
+    monkeypatch.setattr(main, "db", SimpleNamespace(health=lambda: {"status": "ok"}))
     monkeypatch.setattr(main, "ws_manager", SimpleNamespace(
         get_stats=lambda: {"running": True}
     ))
