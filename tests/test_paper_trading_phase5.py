@@ -598,3 +598,43 @@ def test_futures_margin_ratio_reaches_maintenance_margin_at_liquidation():
     assert engine.get_margin_ratio(position, liquidation_price) == pytest.approx(engine.DEFAULT_MMR)
     assert engine.is_at_risk(position, 96.01) is False
     assert engine.is_at_risk(position, 95.99) is True
+
+
+@pytest.mark.asyncio
+async def test_market_exit_slippage_uses_the_closing_transaction_side():
+    sim = Simulator(EventBus())
+    long_signal = {
+        "signal_id": "SIG-EXIT-LONG",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50_000.0,
+        "stop_loss": 49_000.0,
+        "take_profit": [52_000.0],
+        "leverage": 1.0,
+        "raw_score": 80.0,
+    }
+    long_id = await sim.execute_signal(long_signal)
+    assert long_id is not None
+    await sim.update_prices("SPOT", "BTCUSDT", 48_900.0)
+    long_trade = sim.closed_trades[-1]
+    assert long_trade["close_reason"] == "STOP_LOSS"
+    assert long_trade["exit_price"] < 48_900.0  # Long exits sell into the bid.
+
+    short_signal = {
+        "signal_id": "SIG-EXIT-SHORT",
+        "symbol": "ETHUSDT",
+        "market": "FUTURES",
+        "direction": "SHORT",
+        "entry": 3_000.0,
+        "stop_loss": 3_100.0,
+        "take_profit": [2_800.0],
+        "leverage": 1.0,
+        "raw_score": 80.0,
+    }
+    short_id = await sim.execute_signal(short_signal)
+    assert short_id is not None
+    await sim.update_prices("FUTURES", "ETHUSDT", 3_110.0)
+    short_trade = sim.closed_trades[-1]
+    assert short_trade["close_reason"] == "STOP_LOSS"
+    assert short_trade["exit_price"] > 3_110.0  # Short exits buy through the ask.
