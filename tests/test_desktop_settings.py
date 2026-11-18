@@ -70,16 +70,65 @@ def test_portfolio_uses_configured_baselines_and_utc_periods():
     assert portfolio["unrealized_pnl"] == 15.0
 
 
-@pytest.mark.asyncio
-async def test_settings_update_returns_explicit_unsupported_response(monkeypatch):
-    from src_tauri.backend.api.routes import settings as settings_routes
-    from src_tauri.backend.api.routes.schemas import SettingsRequest
-
+def test_settings_update_persists_and_applies_runtime_risk_changes():
+    saved = {}
+    simulator = SimpleNamespace(
+        initial_spot_balance=250.0,
+        initial_futures_balance=250.0,
+        spot_balance=250.0,
+        futures_balance=250.0,
+        spot_positions={},
+        futures_positions={},
+        open_orders={},
+    )
+    risk = SimpleNamespace(
+        max_risk_pct=0.5,
+        max_daily_loss_pct=2.0,
+        max_open_risk_pct=3.0,
+        max_leverage=3.0,
+        max_spot_positions=5,
+        max_futures_positions=5,
+    )
     bridge = object.__new__(OrchestratorBridge)
-    monkeypatch.setattr(settings_routes, "get_bridge", lambda: bridge)
+    bridge.simulator = simulator
+    bridge.risk_manager = risk
+    bridge.repo = SimpleNamespace(
+        get_app_settings=lambda: dict(saved),
+        save_app_settings=lambda updates: saved.update(updates),
+    )
 
-    with pytest.raises(HTTPException) as error:
-        await settings_routes.update_settings(SettingsRequest(risk_max_total_open_pct=1000))
+    result = bridge.update_settings({
+        "risk_per_trade_pct": 0.75,
+        "risk_max_total_open_pct": 4.0,
+        "spot_initial_balance": 300.0,
+        "timeframes": ["1m", "5m", "1h"],
+    })
 
-    assert error.value.status_code == 501
-    assert error.value.detail == "Settings updates are not supported."
+    assert saved["risk_per_trade_pct"] == 0.75
+    assert saved["spot_initial_balance"] == 300.0
+    assert risk.max_risk_pct == 0.75
+    assert risk.max_open_risk_pct == 4.0
+    assert simulator.initial_spot_balance == 300.0
+    assert simulator.spot_balance == 300.0
+    assert result["restart_required"] == ["timeframes"]
+
+
+def test_settings_update_rejects_capital_change_with_open_positions():
+    bridge = object.__new__(OrchestratorBridge)
+    bridge.simulator = SimpleNamespace(
+        initial_spot_balance=250.0,
+        initial_futures_balance=250.0,
+        spot_balance=250.0,
+        futures_balance=250.0,
+        spot_positions={"position": {"symbol": "BTCUSDT"}},
+        futures_positions={},
+        open_orders={},
+    )
+    bridge.risk_manager = SimpleNamespace(
+        max_risk_pct=0.5, max_daily_loss_pct=2.0, max_open_risk_pct=3.0,
+        max_leverage=3.0, max_spot_positions=5, max_futures_positions=5,
+    )
+    bridge.repo = SimpleNamespace(get_app_settings=lambda: {}, save_app_settings=lambda _settings: None)
+
+    with pytest.raises(ValueError, match="cannot be changed while positions or orders are open"):
+        bridge.update_settings({"spot_initial_balance": 400.0})
