@@ -171,6 +171,22 @@ class Orchestrator:
         """Rehydrate event envelope fields consumed by make_event()."""
         return {**event.payload, "symbol": event.symbol, "market": event.market}
 
+    async def _send_telegram(self, method, *args, **kwargs) -> bool:
+        """Send once and enqueue transient failures for background retry."""
+        if not self.telegram:
+            return False
+        try:
+            delivered = bool(await method(*args, **kwargs))
+        except Exception:
+            logger.exception("Telegram notification failed")
+            delivered = False
+        if not delivered and self.disaster_recovery.telegram_retry:
+            notification_id = f"{getattr(method, '__name__', 'telegram')}-{uuid.uuid4().hex}"
+            self.disaster_recovery.telegram_retry.queue_notification(
+                notification_id, method, *args, **kwargs
+            )
+        return delivered
+
     async def _on_signal_proposed(self, event) -> None:
         await self.decision_engine.evaluate_signal(self._event_signal(event))
 
@@ -184,15 +200,15 @@ class Orchestrator:
         await self.simulator.execute_signal(signal)
 
         if self.telegram and signal.get("confidence", 0) >= 0.75:
-            await self.telegram.send_strong_setup(signal)
+            await self._send_telegram(self.telegram.send_strong_setup, signal)
 
     async def _on_signal_rejected(self, event) -> None:
         if self.telegram:
-            await self.telegram.send_signal_update(self._event_signal(event), "rejected")
+            await self._send_telegram(self.telegram.send_signal_update, self._event_signal(event), "rejected")
 
     async def _on_signal_expired(self, event) -> None:
         if self.telegram:
-            await self.telegram.send_signal_update(self._event_signal(event), "expired")
+            await self._send_telegram(self.telegram.send_signal_update, self._event_signal(event), "expired")
 
     async def _on_exchange_ws_message(self, message: dict[str, Any]) -> None:
         """Convert Binance combined ticker streams into normal market-data events."""
@@ -283,7 +299,7 @@ class Orchestrator:
                 )
             await self._persist_state()
             if self.telegram:
-                await self.telegram.send_position_closed(trade)
+                await self._send_telegram(self.telegram.send_position_closed, trade)
 
     async def _on_position_opened(self, event) -> None:
         position = event.payload.get("position")
@@ -291,7 +307,7 @@ class Orchestrator:
             self.repo.save_position(position)
             await self._persist_state()
             if self.telegram:
-                await self.telegram.send_position_opened(position)
+                await self._send_telegram(self.telegram.send_position_opened, position)
 
     async def _on_order_placed(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
@@ -334,25 +350,25 @@ class Orchestrator:
         alert_type = payload.get("alert_type", "UNKNOWN")
         if self.telegram and alert_type in ("DAILY_LOSS", "MARGIN_RISK", "LIQUIDATION"):
             if alert_type == "DAILY_LOSS":
-                await self.telegram.send_daily_risk_warning(
+                await self._send_telegram(self.telegram.send_daily_risk_warning, 
                     self.simulator.get_daily_pnl(),
-                    self.simulator.spot_balance + self.simulator.futures_balance
+                    self.simulator._get_total_equity()
                 )
             elif alert_type == "MARGIN_RISK":
-                await self.telegram.send_early_warning(
+                await self._send_telegram(self.telegram.send_early_warning, 
                     f"Margin risk: {payload.get('message', '')}",
-                    payload.get("symbol", ""), payload.get("market", "")
+                    event.symbol or "", event.market or ""
                 )
             elif alert_type == "LIQUIDATION":
-                await self.telegram.send_early_warning(
+                await self._send_telegram(self.telegram.send_early_warning, 
                     f"LIQUIDATION: {payload.get('message', '')}",
-                    payload.get("symbol", ""), payload.get("market", "")
+                    event.symbol or "", event.market or ""
                 )
 
     async def _on_system_health(self, event) -> None:
         if self.telegram:
             payload = event.payload
-            await self.telegram.send_connection_status(
+            await self._send_telegram(self.telegram.send_connection_status, 
                 payload.get("component", "SYSTEM"),
                 payload.get("status", "unknown"),
                 payload.get("message", "")
@@ -360,7 +376,7 @@ class Orchestrator:
 
     async def _on_model_trained(self, event) -> None:
         if self.telegram:
-            await self.telegram.send_learning_report(event.payload)
+            await self._send_telegram(self.telegram.send_learning_report, event.payload)
 
     async def _on_model_promoted(self, event) -> None:
         if self.telegram:
