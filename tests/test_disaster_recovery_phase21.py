@@ -721,3 +721,27 @@ class TestPersistentEventQueue:
         assert len(first) == 1
         assert first[0]["event_id"] == high_id
         assert first[0]["event_id"] != low_id
+
+    def test_queue_delivery_and_idempotency_ledger_work_end_to_end(self, temp_db):
+        from core.disaster_recovery import IdempotentEventProcessor, PersistentEventQueue
+
+        queue = PersistentEventQueue(temp_db, "test_end_to_end")
+        processor = IdempotentEventProcessor(temp_db)
+        event_id = queue.enqueue("POSITION_CLOSED", {"position_id": "position-42"}, priority=9)
+        item = queue.dequeue(limit=1)[0]
+        calls = []
+
+        was_processed, result = processor.process_event(
+            item["event_id"], lambda: calls.append(item["payload"]["position_id"]) or "ok"
+        )
+        assert was_processed is False
+        assert result == "ok"
+        queue.mark_completed(event_id)
+
+        duplicate, duplicate_result = processor.process_event(
+            event_id, lambda: calls.append("duplicate")
+        )
+        assert duplicate is True
+        assert duplicate_result is None
+        assert calls == ["position-42"]
+        assert queue.dequeue(limit=1) == []
