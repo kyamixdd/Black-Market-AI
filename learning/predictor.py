@@ -12,7 +12,7 @@ import xgboost as xgb
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
 
-from config import ML_ENABLED
+from config import ML_ENABLED, MODELS_DIR
 
 logger = logging.getLogger(__name__)
 CLASS_NAMES = {0: "DOWN", 1: "FLAT", 2: "UP"}
@@ -20,7 +20,7 @@ CLASS_NAMES = {0: "DOWN", 1: "FLAT", 2: "UP"}
 
 class Predictor:
     def __init__(self, model_dir: Path | None = None):
-        self.model_dir = model_dir or Path(__file__).resolve().parents[1] / "models"
+        self.model_dir = Path(model_dir or MODELS_DIR)
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.rf_model: RandomForestClassifier | None = None
         self.xgb_model: xgb.XGBClassifier | None = None
