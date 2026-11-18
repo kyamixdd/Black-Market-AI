@@ -350,6 +350,13 @@ class PersistentEventQueue:
                     .where(SystemEventModel.event_type.like(f"{self._event_type_prefix}%"))
                     .order_by(SystemEventModel.timestamp.asc())
                 ).all()
+                rows = sorted(
+                    rows,
+                    key=lambda row: (
+                        -int(self._decode_payload(row.payload).get("priority", 0)),
+                        row.timestamp or now,
+                    ),
+                )
 
                 for row in rows:
                     if len(claimed) >= limit:
@@ -400,8 +407,6 @@ class PersistentEventQueue:
                     })
                 session.commit()
 
-        # Higher-priority items should be handled first within this claimed batch.
-        claimed.sort(key=lambda item: (-item["priority"], item["enqueued_at"] or ""))
         return claimed
 
     def mark_completed(self, event_id: str) -> None:
