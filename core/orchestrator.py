@@ -16,6 +16,7 @@ from config import (
     TELEGRAM_ENABLED,
     USDM_FUTURES_ENABLED,
     PREDICTION_HORIZON_MINUTES,
+    TIMEFRAMES,
 )
 from core.event_bus import EventBus
 from core.disaster_recovery import create_disaster_recovery_orchestrator
@@ -86,8 +87,8 @@ class Orchestrator:
         self._tasks: list[asyncio.Task] = []
         self._event_bus_task: asyncio.Task | None = None
         self._analysis_cursors: dict[str, int] = {"SPOT": 0, "FUTURES": 0}
-        self._analysis_batch_size = 10
-        self._analysis_timeframes = ("1m", "15m", "1h")
+        self._analysis_batch_size = 5
+        self._analysis_timeframes = tuple(TIMEFRAMES)
         self._discovery: MarketDiscovery = MarketDiscovery(self.registry, self.rate_limiter,
                                                         SPOT_ENABLED, USDM_FUTURES_ENABLED)
         # State tracking for dashboard
@@ -426,10 +427,10 @@ class Orchestrator:
                             market,
                             symbol,
                             timeframe,
-                            limit=500,
+                            limit=200,
                         )
                         candles = self.candle_manager.get_series(
-                            market, symbol, timeframe, limit=500
+                            market, symbol, timeframe, limit=200
                         )
                         if candles:
                             # Persist the full history once, then only the newest
