@@ -207,7 +207,7 @@ class Simulator:
             return False, f"Position already open for {signal['symbol']} on {market}"
 
         # Risk manager - daily loss check
-        total_balance = self.spot_balance + self.futures_balance
+        total_balance = self._get_total_equity()
         if not self.risk_manager.check_daily_loss(self.get_daily_pnl(), total_balance):
             return False, "Daily loss limit exceeded"
 
