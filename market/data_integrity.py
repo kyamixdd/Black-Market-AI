@@ -34,10 +34,16 @@ class DataIntegrityGuardian:
         now_ms = int(time.time() * 1000)
         # For 1m candles, we expect data within last ~2 mins
         # For larger timeframes, we still expect the 'latest' completed candle to be recent
-        delay_sec = (now_ms - latest["close_time"]) / 1000
+        delay_ms = now_ms - latest["close_time"]
+        delay_sec = delay_ms / 1000
 
-        # We use a relaxed threshold because some symbols update less frequently
-        is_fresh = delay_sec < (TIMEFRAME_SECONDS.get(timeframe, 60) + self._max_freshness_delay)
+        # Reject exchange timestamps that are materially ahead of the local clock.
+        if delay_ms < -self._max_clock_skew:
+            self._update_status(market, symbol, "freshness", False, f"Future-dated {timeframe} candle")
+            return False
+
+        # Allow the timeframe duration plus a small exchange/network delay.
+        is_fresh = delay_sec <= (TIMEFRAME_SECONDS.get(timeframe, 60) + self._max_freshness_delay)
 
         if not is_fresh:
             logger.warning("Data stale for %s %s %s: delay=%.1fs", market, symbol, timeframe, delay_sec)
@@ -113,11 +119,16 @@ class DataIntegrityGuardian:
 
         # Re-run checks before consulting the aggregate status so a symbol can
         # recover automatically after stale or incomplete candles are repaired.
-        fresh = self.validate_freshness(market, symbol, "1h")
-        continuous = self.check_continuity(market, symbol, "1h")
+        fresh_1m = self.validate_freshness(market, symbol, "1m")
+        fresh_1h = self.validate_freshness(market, symbol, "1h")
+        continuous_1m = self.check_continuity(market, symbol, "1m")
+        continuous_1h = self.check_continuity(market, symbol, "1h")
         anomaly_free = self.detect_anomalies(market, symbol, "1h")
         status = self._get_status(market, symbol)
-        return fresh and continuous and anomaly_free and status.get("healthy", True)
+        return (
+            fresh_1m and fresh_1h and continuous_1m and continuous_1h
+            and anomaly_free and status.get("healthy", True)
+        )
 
     def _update_status(self, market: str, symbol: str, check_type: str,
                         is_healthy: bool, message: str | None = None) -> None:
