@@ -518,13 +518,29 @@ class Simulator:
         }
 
     def restore_state(self, state: dict[str, Any]) -> None:
-        """Restore state from persistence."""
-        self.spot_balance = state.get("spot_balance", SPOT_INITIAL_BALANCE)
-        self.futures_balance = state.get("futures_balance", FUTURES_INITIAL_BALANCE)
+        """Restore account state, normalizing timestamps serialized as ISO strings."""
+        def parse_datetime(value):
+            if isinstance(value, str):
+                try:
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    return None
+            return value
+
+        self.spot_balance = float(state.get("spot_balance", SPOT_INITIAL_BALANCE))
+        self.futures_balance = float(state.get("futures_balance", FUTURES_INITIAL_BALANCE))
         self.spot_positions = state.get("spot_positions", {})
         self.futures_positions = state.get("futures_positions", {})
         self.open_orders = state.get("open_orders", {})
         self.closed_trades = state.get("closed_trades", [])
+        for position in list(self.spot_positions.values()) + list(self.futures_positions.values()):
+            position["opened_at"] = parse_datetime(position.get("opened_at"))
+        for order in self.open_orders.values():
+            order["created_at"] = parse_datetime(order.get("created_at"))
+        for trade in self.closed_trades:
+            trade["opened_at"] = parse_datetime(trade.get("opened_at"))
+            trade["closed_at"] = parse_datetime(trade.get("closed_at"))
         daily_pnl_date = state.get("daily_pnl_date")
         try:
             self.daily_pnl_date = datetime.fromisoformat(daily_pnl_date).date() if daily_pnl_date else datetime.now(timezone.utc).date()
