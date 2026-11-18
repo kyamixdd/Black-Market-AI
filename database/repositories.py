@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -179,6 +179,10 @@ class Repository:
         with self._get_session() as session:
             stmt = select(PredictionModel).where(PredictionModel.is_correct.is_(None))
             return list(session.scalars(stmt).all())
+
+    def count_predictions(self) -> int:
+        with self._get_session() as session:
+            return int(session.scalar(select(func.count()).select_from(PredictionModel)) or 0)
 
     def get_predictions_history(self, limit: int = 500) -> list[PredictionModel]:
         with self._get_session() as session:
