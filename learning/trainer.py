@@ -269,7 +269,7 @@ class ModelTrainer:
 
 
 class LearningOrchestrator:
-    """Orchestrates the complete learning loop: predict → wait → label → train → validate → promote."""
+    """Orchestrates prediction outcomes, training, validation, and a safe promotion gate."""
 
     def __init__(self, repo: Repository, predictor: Predictor, trainer: ModelTrainer | None = None):
         self.repo = repo
