@@ -92,6 +92,7 @@ class Orchestrator:
         self._running: bool = False
         self._tasks: list[asyncio.Task] = []
         self._event_bus_task: asyncio.Task | None = None
+        self._stop_event = asyncio.Event()
         self._analysis_cursors: dict[str, int] = {"SPOT": 0, "FUTURES": 0}
         self._analysis_batch_size = 5
         self._analysis_timeframes = tuple(TIMEFRAMES)
@@ -423,6 +424,7 @@ class Orchestrator:
 
     async def run(self) -> None:
         self._running = True
+        self._stop_event.clear()
         # The event bus must have a consumer before scanners publish prices,
         # signals, fills, or risk events.
         self._event_bus_task = asyncio.create_task(self.event_bus.run(), name="blackmarket-event-bus")
@@ -686,7 +688,10 @@ class Orchestrator:
                 raise
             except Exception:
                 logger.exception("Scheduled learning cycle failed")
-            await asyncio.sleep(3600)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=3600)
+            except asyncio.TimeoutError:
+                pass
 
     async def _persist_state(self) -> None:
         try:
@@ -705,11 +710,20 @@ class Orchestrator:
     async def stop(self) -> None:
         logger.info("Shutting down...")
         self._running = False
+        self._stop_event.set()
         await self.scanner.stop()
+        learning_tasks = []
         for task in self._tasks:
-            task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+            if task.get_name() == "blackmarket-learning":
+                learning_tasks.append(task)
+            else:
+                task.cancel()
+        other_tasks = [task for task in self._tasks if task not in learning_tasks]
+        if other_tasks:
+            await asyncio.gather(*other_tasks, return_exceptions=True)
+        # Wait for an in-flight training thread instead of abandoning writes.
+        if learning_tasks:
+            await asyncio.gather(*learning_tasks, return_exceptions=True)
         self._tasks.clear()
         await self.disaster_recovery.ws_reconnection.stop()
         await self.ws_manager.stop()
