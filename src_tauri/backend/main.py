@@ -265,16 +265,23 @@ async def health_check():
             "version": "1.0.0",
         }
     health = orchestrator.health_monitor.get_status()
-    from config import AUTO_MODEL_TRAINING, PAPER_TRADING_ENABLED
+    from config import AUTO_MODEL_TRAINING, PAPER_TRADING_ENABLED, SPOT_ENABLED, USDM_FUTURES_ENABLED
+    market_data_active = bool(
+        orchestrator.scanner._running
+        and (
+            (SPOT_ENABLED and orchestrator.cache.get_market_tickers("SPOT"))
+            or (USDM_FUTURES_ENABLED and orchestrator.cache.get_market_tickers("FUTURES"))
+        )
+    )
     return {
         "status": health.get("status", "unknown"),
-        "backend_ready": bool(db is not None and orchestrator.scanner._running),
+        "backend_ready": bool(db is not None and market_data_active),
         "websocket_connected": bool(
             orchestrator._last_ws_message_at
             and asyncio.get_running_loop().time() - orchestrator._last_ws_message_at < 120
         ),
         "database_connected": db is not None,
-        "market_data_active": orchestrator.scanner._running,
+        "market_data_active": market_data_active,
         "learning_active": bool(AUTO_MODEL_TRAINING and any(
             task.get_name() == "blackmarket-learning" and not task.done()
             for task in asyncio.all_tasks()
