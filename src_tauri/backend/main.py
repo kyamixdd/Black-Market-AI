@@ -31,6 +31,7 @@ from config import DATABASE_URL, LOG_LEVEL
 from core.config_validator import validate_config_or_exit
 from core.orchestrator import Orchestrator
 from database.connection import Database
+from database.repositories import Repository
 
 from src_tauri.backend.api.routes import (
     markets,
@@ -67,6 +68,38 @@ _tauri_origins = ["http://tauri.localhost", "tauri://localhost", *_ALLOWED_ORIGI
 if os.environ.get("BLACKMARKET_DESKTOP_DEV") == "1":
     _tauri_origins.extend(["http://localhost:3000", "http://127.0.0.1:3000"])
 
+
+
+
+def _apply_persisted_settings(database: Database) -> None:
+    """Load persisted operator settings before constructing runtime services."""
+    import config
+    from core import orchestrator as orchestrator_module
+    from market import scanner as scanner_module
+    from paper_trading import simulator as simulator_module
+
+    settings = Repository(database.session_maker()).get_app_settings()
+    targets = {
+        "spot_enabled": ("SPOT_ENABLED", bool, (config, orchestrator_module, scanner_module)),
+        "futures_enabled": ("USDM_FUTURES_ENABLED", bool, (config, orchestrator_module, scanner_module)),
+        "scan_all_eligible_symbols": ("SCAN_ALL_ELIGIBLE_SYMBOLS", bool, (config, orchestrator_module)),
+        "timeframes": ("TIMEFRAMES", list, (config, orchestrator_module)),
+        "spot_initial_balance": ("SPOT_INITIAL_BALANCE", float, (config, simulator_module)),
+        "futures_initial_balance": ("FUTURES_INITIAL_BALANCE", float, (config, simulator_module)),
+        "risk_per_trade_pct": ("RISK_PER_TRADE_PCT", float, (config, simulator_module)),
+        "risk_max_daily_loss_pct": ("RISK_MAX_DAILY_LOSS_PCT", float, (config, simulator_module)),
+        "risk_max_total_open_pct": ("RISK_MAX_TOTAL_OPEN_PCT", float, (config, simulator_module)),
+        "risk_max_leverage": ("RISK_MAX_LEVERAGE", float, (config, simulator_module)),
+        "max_spot_positions": ("MAX_SPOT_POSITIONS", int, (config, simulator_module)),
+        "max_futures_positions": ("MAX_FUTURES_POSITIONS", int, (config, simulator_module)),
+        "telegram_enabled": ("TELEGRAM_ENABLED", bool, (config, orchestrator_module)),
+    }
+    for key, (attribute, cast, modules) in targets.items():
+        if key not in settings:
+            continue
+        value = cast(settings[key])
+        for module in modules:
+            setattr(module, attribute, value)
 
 def _is_loopback(host: str | None) -> bool:
     if not host:
@@ -112,6 +145,7 @@ async def lifespan(app: FastAPI):
         # Initialize and verify the database before constructing services.
         db = Database(DATABASE_URL)
         db.init_db()
+        _apply_persisted_settings(db)
         integrity = db.integrity_check()
         if integrity.lower() != "ok":
             raise RuntimeError(f"SQLite database integrity check failed: {integrity}")
