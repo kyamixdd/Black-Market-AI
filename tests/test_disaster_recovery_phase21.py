@@ -648,3 +648,63 @@ class TestTelegramRetryManager:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+class TestPersistentEventQueue:
+    @pytest.fixture
+    def temp_db(self):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as handle:
+            db_path = handle.name
+        db = Database(f"sqlite:///{db_path}")
+        db.init_db()
+        yield db
+        db.close()
+        os.unlink(db_path)
+
+    def test_enqueue_dequeue_and_complete(self, temp_db):
+        from core.disaster_recovery import PersistentEventQueue
+
+        queue = PersistentEventQueue(temp_db, "test_critical")
+        event_id = queue.enqueue("POSITION_CLOSED", {"position_id": "p-1"}, priority=5)
+
+        items = queue.dequeue(limit=10)
+        assert len(items) == 1
+        assert items[0]["event_id"] == event_id
+        assert items[0]["event_type"] == "POSITION_CLOSED"
+        assert items[0]["payload"] == {"position_id": "p-1"}
+        assert items[0]["priority"] == 5
+        assert items[0]["attempts"] == 1
+
+        # A claimed item is invisible until its lease expires or it is completed.
+        assert queue.dequeue(limit=10) == []
+        queue.mark_completed(event_id)
+        queue.mark_completed(event_id)
+        assert queue.dequeue(limit=10) == []
+
+    def test_claimed_item_can_be_retried_after_visibility_timeout(self, temp_db):
+        from core.disaster_recovery import PersistentEventQueue
+
+        queue = PersistentEventQueue(temp_db, "test_retry")
+        event_id = queue.enqueue("NOTIFY", {"message": "retry me"})
+        first = queue.dequeue(limit=1)
+        assert first[0]["attempts"] == 1
+
+        # Force the claim timestamp into the past to test lease recovery.
+        from database.models import SystemEventModel
+        with temp_db.session_maker() as session:
+            row = session.get(SystemEventModel, event_id)
+            payload = json.loads(row.payload)
+            payload["claimed_at"] = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+            row.payload = json.dumps(payload)
+            session.commit()
+
+        retried = queue.dequeue(limit=1, visibility_timeout_seconds=1)
+        assert len(retried) == 1
+        assert retried[0]["event_id"] == event_id
+        assert retried[0]["attempts"] == 2
+
+    def test_dequeue_rejects_non_positive_limit(self, temp_db):
+        from core.disaster_recovery import PersistentEventQueue
+
+        queue = PersistentEventQueue(temp_db, "test_empty")
+        queue.enqueue("NOOP", {})
+        assert queue.dequeue(limit=0) == []
