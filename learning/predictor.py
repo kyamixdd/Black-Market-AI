@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ class Predictor:
     def __init__(self, model_dir: Path | None = None):
         self.model_dir = Path(model_dir or MODELS_DIR)
         self.model_dir.mkdir(parents=True, exist_ok=True)
+        self._model_lock = threading.RLock()
         self.rf_model: RandomForestClassifier | None = None
         self.xgb_model: xgb.XGBClassifier | None = None
         self.river_model: Any | None = None
@@ -34,6 +36,10 @@ class Predictor:
             self._load_latest()
 
     def _load_latest(self) -> None:
+        with self._model_lock:
+            self._load_latest_locked()
+
+    def _load_latest_locked(self) -> None:
         rf_path = self.model_dir / "rf_model.pkl"
         xgb_path = self.model_dir / "xgb_model.json"
         scaler_path = self.model_dir / "scaler.pkl"
@@ -74,6 +80,10 @@ class Predictor:
         return aligned
 
     def predict(self, features: np.ndarray) -> dict[str, Any]:
+        with self._model_lock:
+            return self._predict_locked(features)
+
+    def _predict_locked(self, features: np.ndarray) -> dict[str, Any]:
         if not self.is_trained or self.rf_model is None or self.xgb_model is None:
             return {
                 "prob_up": 0.33, "prob_down": 0.34, "prob_flat": 0.33,
@@ -127,6 +137,10 @@ class Predictor:
         }
 
     def save(self, version: str) -> None:
+        with self._model_lock:
+            self._save_locked(version)
+
+    def _save_locked(self, version: str) -> None:
         if self.rf_model is None or self.xgb_model is None:
             return
         artifacts = {
