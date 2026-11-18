@@ -14,6 +14,7 @@ def test_settings_report_telegram_configuration_without_exposing_credentials(mon
     monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "test-secret-token")
     monkeypatch.setattr(config, "TELEGRAM_CHAT_ID", "test-chat-id")
     bridge = object.__new__(OrchestratorBridge)
+    bridge.repo = SimpleNamespace(get_app_settings=lambda: {})
     bridge.simulator = SimpleNamespace(initial_spot_balance=123.0, initial_futures_balance=321.0)
     bridge.risk_manager = SimpleNamespace(
         max_risk_pct=0.5,
