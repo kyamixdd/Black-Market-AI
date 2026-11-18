@@ -38,6 +38,7 @@ class Simulator:
         self.futures_positions: dict[str, dict] = {}
         self.open_orders: dict[str, dict] = {}
         self.closed_trades: list[dict] = []
+        self.market_volumes: dict[tuple[str, str], float] = {}
         self.daily_pnl = 0.0
         self.daily_pnl_date = datetime.now(timezone.utc).date()
         self.fee_calc = FeeCalculator()
@@ -79,23 +80,79 @@ class Simulator:
                 total += risk
         return total
 
+    def update_market_volume(self, market: str, symbol: str, volume_24h: float) -> None:
+        if isinstance(volume_24h, (int, float)) and volume_24h >= 0:
+            self.market_volumes[(market, symbol)] = float(volume_24h)
+
     def _get_volume_24h(self, market: str, symbol: str) -> float:
-        """Get 24h volume for slippage calculation - placeholder, will be wired to market cache."""
-        # This should be replaced with actual market cache data
-        return 1000000.0  # Default 1M USDT volume
+        """Return the latest quote-volume estimate for realistic slippage."""
+        return self.market_volumes.get((market, symbol), 0.0)
+
+    def _effective_leverage(self, signal: dict[str, Any]) -> float:
+        market = signal.get("market")
+        requested = signal.get("leverage", 1.0)
+        if isinstance(requested, bool) or not isinstance(requested, (int, float)):
+            return 0.0
+        if not isinstance(requested, (int, float)) or requested < 1:
+            return 0.0
+        if market == "SPOT":
+            return 1.0
+        return self.risk_manager.validate_leverage(market, float(requested))
+
+    def _calculate_quantity(self, balance: float, risk_distance: float, leverage: float) -> float:
+        if balance <= 0 or risk_distance <= 0 or leverage <= 0:
+            return 0.0
+        # PnL is leverage-adjusted in this simulator, so reduce base quantity
+        # proportionally to keep stop-loss risk at the configured account %.
+        return balance * (RISK_PER_TRADE_PCT / 100.0) / (risk_distance * leverage)
 
     def validate_new_position(self, signal: dict[str, Any]) -> tuple[bool, str]:
-        market = signal["market"]
-        direction = signal["direction"]
+        market = signal.get("market")
+        direction = signal.get("direction")
+        if market not in ("SPOT", "FUTURES"):
+            return False, "Unsupported market"
+        if direction not in ("LONG", "BUY", "SHORT", "SELL"):
+            return False, "Unsupported direction"
+        if market == "SPOT" and direction in ("SHORT", "SELL"):
+            return False, "Spot market does not support short positions"
+        symbol = signal.get("symbol")
+        if not isinstance(symbol, str) or not symbol:
+            return False, "Invalid symbol"
+        entry = signal.get("entry")
+        stop_loss = signal.get("stop_loss")
+        if (
+            isinstance(entry, bool) or isinstance(stop_loss, bool)
+            or not isinstance(entry, (int, float)) or not isinstance(stop_loss, (int, float))
+            or not __import__("math").isfinite(entry) or not __import__("math").isfinite(stop_loss)
+            or entry <= 0 or stop_loss <= 0
+        ):
+            return False, "Invalid entry or stop-loss price"
+        risk_amount = abs(float(entry) - float(stop_loss))
+        if risk_amount <= 0:
+            return False, "Invalid stop loss"
+        leverage = self._effective_leverage(signal)
+        if leverage < 1:
+            return False, "Invalid leverage"
         positions = self._get_positions(market)
+        # Pending limit orders reserve a position slot and prevent duplicate
+        # same-symbol exposure before they are filled.
+        exposure = dict(positions)
+        exposure.update({
+            order_id: {
+                "symbol": order.get("symbol"),
+                "status": "OPEN",
+            }
+            for order_id, order in self.open_orders.items()
+            if order.get("market") == market and order.get("status") == "OPEN"
+        })
 
         # Check total position limit using risk manager
         max_positions = MAX_SPOT_POSITIONS if market == "SPOT" else MAX_FUTURES_POSITIONS
-        if not self.risk_manager.check_position_limit(positions, max_positions):
+        if not self.risk_manager.check_position_limit(exposure, max_positions):
             return False, f"Max {market} positions reached"
 
         # Check per-symbol position limit
-        if not self.risk_manager.check_symbol_exposure(positions, signal["symbol"]):
+        if not self.risk_manager.check_symbol_exposure(exposure, symbol):
             return False, f"Position already open for {signal['symbol']} on {market}"
 
         # Risk manager - daily loss check
@@ -105,18 +162,13 @@ class Simulator:
 
         # Risk manager check
         balance = self.get_balance(market)
-        risk_amount = abs(signal["entry"] - signal["stop_loss"])
-        if risk_amount <= 0:
-            return False, "Invalid stop loss"
-        qty = self.risk_manager.calculate_position_size(balance, risk_amount)
+        qty = self._calculate_quantity(balance, risk_amount, leverage)
         if qty <= 0:
             return False, "Calculated quantity is zero"
         # Leverage
-        leverage = signal.get("leverage", 1.0)
-        leverage = self.risk_manager.validate_leverage(market, leverage)
-        # Total open risk
+        # Total open risk includes the leverage multiplier used by P&L.
         total_risk = self._get_total_risk()
-        new_risk = risk_amount * qty
+        new_risk = risk_amount * qty * leverage
         if not self.risk_manager.check_total_risk(total_risk, new_risk, total_balance):
             return False, "Total open risk limit exceeded"
         return True, "OK"
@@ -125,15 +177,13 @@ class Simulator:
         """Execute a validated signal into a paper position."""
         ok, reason = self.validate_new_position(signal)
         if not ok:
-            logger.warning("Signal %s risk check failed: %s", signal["signal_id"], reason)
+            logger.warning("Signal %s risk check failed: %s", signal.get("signal_id", "unknown"), reason)
             return None
         market = signal["market"]
         balance = self.get_balance(market)
         risk_amount = abs(signal["entry"] - signal["stop_loss"])
-        qty = balance * (RISK_PER_TRADE_PCT / 100.0) / risk_amount
-        leverage = signal.get("leverage", 1.0)
-        if market == "FUTURES" and leverage > RISK_MAX_LEVERAGE:
-            leverage = RISK_MAX_LEVERAGE
+        leverage = self._effective_leverage(signal)
+        qty = self._calculate_quantity(balance, risk_amount, leverage)
 
         # Get realistic fill price with spread and slippage
         volume_24h = self._get_volume_24h(market, signal["symbol"])
@@ -330,7 +380,7 @@ class Simulator:
         """Place a simulated limit order."""
         ok, reason = self.validate_new_position(signal)
         if not ok:
-            logger.warning("Limit order %s risk check failed: %s", signal["signal_id"], reason)
+            logger.warning("Limit order %s risk check failed: %s", signal.get("signal_id", "unknown"), reason)
             return None
 
         market = signal["market"]
@@ -392,11 +442,16 @@ class Simulator:
                     "order_type": "LIMIT",
                     "strategy": order.get("strategy", "UNKNOWN"),
                 }
-                await self.execute_signal(signal)
+                position_id = await self.execute_signal(signal)
                 del self.open_orders[order["order_id"]]
+                order["status"] = "FILLED" if position_id else "REJECTED"
+                order["position_id"] = position_id
+                event_type = EventType.ORDER_FILLED if position_id else EventType.TRADE_REJECTED
                 await self.event_bus.publish(make_event(
-                    EventType.ORDER_FILLED, "simulator",
-                    symbol=order["symbol"], market=order["market"], order=order
+                    event_type, "simulator",
+                    symbol=order["symbol"], market=order["market"],
+                    order=order,
+                    reason=None if position_id else "Risk validation failed at fill time",
                 ))
 
     # --- Restart Recovery ---
