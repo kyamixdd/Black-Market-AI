@@ -646,6 +646,7 @@ class OrchestratorBridge:
             TIMEFRAMES,
             TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
         )
+        persisted = self.repo.get_app_settings()
         return {
             "spot_enabled": SPOT_ENABLED,
             "futures_enabled": USDM_FUTURES_ENABLED,
@@ -662,11 +663,74 @@ class OrchestratorBridge:
             "telegram_enabled": TELEGRAM_ENABLED,
             "telegram_bot_token_configured": bool(TELEGRAM_BOT_TOKEN),
             "telegram_chat_id_configured": bool(TELEGRAM_CHAT_ID),
+            "restart_required": [],
+            **persisted,
         }
 
     def update_settings(self, updates: dict) -> dict:
-        """Report that runtime settings updates are not implemented."""
-        raise NotImplementedError("Settings updates are not supported.")
+        """Persist validated settings and apply safe risk/capital changes immediately."""
+        from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+        if not updates:
+            return self.get_settings()
+
+        values = dict(updates)
+        risk_fields = {
+            "risk_per_trade_pct", "risk_max_daily_loss_pct",
+            "risk_max_total_open_pct", "risk_max_leverage",
+            "max_spot_positions", "max_futures_positions",
+        }
+        restart_fields = {
+            "spot_enabled", "futures_enabled",
+            "scan_all_eligible_symbols", "timeframes", "telegram_enabled",
+        }
+        restart_required = sorted(set(values) & restart_fields)
+
+        # Validate the combined risk profile, not each submitted field in isolation.
+        current = self.get_settings()
+        effective = {**current, **values}
+        if effective["risk_per_trade_pct"] > effective["risk_max_total_open_pct"]:
+            raise ValueError("risk_per_trade_pct cannot exceed risk_max_total_open_pct")
+        if not effective["spot_enabled"] and not effective["futures_enabled"]:
+            raise ValueError("At least one market must remain enabled")
+        if effective.get("telegram_enabled") and not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+            raise ValueError("Telegram cannot be enabled until its bot token and chat ID are configured securely")
+
+        # Capital changes are only safe when there are no open positions or orders.
+        capital_fields = {"spot_initial_balance", "futures_initial_balance"}
+        if set(values) & capital_fields:
+            has_open_positions = bool(self.simulator.spot_positions or self.simulator.futures_positions)
+            has_open_orders = bool(self.simulator.open_orders)
+            if has_open_positions or has_open_orders:
+                raise ValueError("Virtual capital cannot be changed while positions or orders are open")
+            if "spot_initial_balance" in values:
+                delta = float(values["spot_initial_balance"]) - self.simulator.initial_spot_balance
+                self.simulator.initial_spot_balance = float(values["spot_initial_balance"])
+                self.simulator.spot_balance += delta
+            if "futures_initial_balance" in values:
+                delta = float(values["futures_initial_balance"]) - self.simulator.initial_futures_balance
+                self.simulator.initial_futures_balance = float(values["futures_initial_balance"])
+                self.simulator.futures_balance += delta
+
+        risk = self.risk_manager
+        mapping = {
+            "risk_per_trade_pct": "max_risk_pct",
+            "risk_max_daily_loss_pct": "max_daily_loss_pct",
+            "risk_max_total_open_pct": "max_open_risk_pct",
+            "risk_max_leverage": "max_leverage",
+            "max_spot_positions": "max_spot_positions",
+            "max_futures_positions": "max_futures_positions",
+        }
+        for setting, attribute in mapping.items():
+            if setting in values:
+                setattr(risk, attribute, values[setting])
+
+        # Keep runtime values in sync with the UI and persist restart-required
+        # choices for the next explicit restart.
+        self.repo.save_app_settings(values)
+        result = self.get_settings()
+        result["restart_required"] = restart_required
+        return result
 
     # ===== Health =====
 
