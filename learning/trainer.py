@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -67,13 +68,13 @@ class ModelTrainer:
     def _train_final_models(self, X: np.ndarray, y: np.ndarray, version: str) -> dict[str, Any]:
         """Train final models on full dataset and save."""
         # Train RF
-        rf = RandomForestClassifier(n_estimators=300, max_depth=12, random_state=42, n_jobs=-1)
+        rf = RandomForestClassifier(n_estimators=200, max_depth=12, random_state=42, n_jobs=2)
         rf.fit(X, y)
 
         # Train XGBoost
         xgb_model = xgb.XGBClassifier(
-            n_estimators=300, max_depth=8, learning_rate=0.05,
-            random_state=42, n_jobs=-1, eval_metric="mlogloss"
+            n_estimators=200, max_depth=8, learning_rate=0.05,
+            random_state=42, n_jobs=2, eval_metric="mlogloss"
         )
         xgb_model.fit(X, y)
 
@@ -90,7 +91,10 @@ class ModelTrainer:
         xgb_model.save_model(str(xgb_path))
         joblib.dump(scaler, scaler_path)
 
-        # Update symlinks to latest
+        # Train the online River model as the incremental-learning leg of the hybrid.
+        self.train_river_online(X, y, version=version)
+
+        # Update portable "latest" model copies after all artifacts are written.
         self._update_latest_symlinks(version)
 
         # Calculate training metrics
@@ -121,18 +125,18 @@ class ModelTrainer:
         return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
     def _update_latest_symlinks(self, version: str) -> None:
-        """Update 'latest' symlinks to point to new version."""
+        """Update portable latest-model copies (works without Windows symlink privileges)."""
         targets = {
             "rf_model.pkl": f"rf_{version}.pkl",
             "xgb_model.json": f"xgb_{version}.json",
             "scaler.pkl": f"scaler_{version}.pkl",
+            "river_model.pkl": f"river_{version}.pkl",
         }
         for alias, filename in targets.items():
-            target = self.model_dir / alias
-            if target.exists() or target.is_symlink():
-                target.unlink()
-            # Relative targets keep model bundles portable across machines.
-            target.symlink_to(filename)
+            source = self.model_dir / filename
+            if not source.is_file():
+                continue
+            shutil.copy2(source, self.model_dir / alias)
 
     def _register_model(self, version: str, model_type: str, metrics: dict, file_path: str) -> None:
         """Register model in database."""
@@ -154,7 +158,7 @@ class ModelTrainer:
         with open(val_dir / f"validation_{version}.json", "w") as f:
             json_lib.dump(validation, f, indent=2)
 
-    def train_river_online(self, X: np.ndarray, y: np.ndarray) -> compose.Pipeline | None:
+    def train_river_online(self, X: np.ndarray, y: np.ndarray, version: str | None = None) -> compose.Pipeline | None:
         """Train River online learning model for incremental updates."""
         try:
             model = compose.Pipeline(
@@ -170,7 +174,7 @@ class ModelTrainer:
                 model.learn_one(dict(enumerate(xi)), yi)
 
             # Save River model
-            version = self._generate_version()
+            version = version or self._generate_version()
             river_path = self.model_dir / f"river_{version}.pkl"
             joblib.dump(model, river_path)
 
