@@ -125,7 +125,7 @@ class Simulator:
         requested = signal.get("leverage", 1.0)
         if isinstance(requested, bool) or not isinstance(requested, (int, float)):
             return 0.0
-        if not isinstance(requested, (int, float)) or requested < 1:
+        if not isinstance(requested, (int, float)) or not math.isfinite(requested) or requested < 1:
             return 0.0
         if market == "SPOT":
             return 1.0
