@@ -601,9 +601,16 @@ class Orchestrator:
         self._update_health()
         logger.info("BlackMarket AI running")
         # Main loop - keep running until stopped
+        websocket_refresh_counter = 0
         while self._running:
             await asyncio.sleep(60)
             self._update_health()
+            websocket_refresh_counter += 1
+            # Recompute the most-liquid symbol subscriptions every five minutes.
+            # This also recovers gracefully if the initial REST scan was slow and
+            # no symbols were available during the first WebSocket startup.
+            if websocket_refresh_counter % 5 == 0:
+                await self._start_market_websockets()
             # Periodic persistence; watchdog heartbeats come from successful analysis cycles.
             await self._persist_state()
 
