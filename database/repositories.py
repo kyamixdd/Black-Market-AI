@@ -409,6 +409,34 @@ class Repository:
                 session.add(SimulatorStateModel(state_id="default", payload=payload))
             session.commit()
 
+    def get_simulator_state_record(self) -> tuple[dict[str, Any], datetime | None] | None:
+        """Return a paper-account snapshot and its durable update timestamp."""
+        with self._get_session() as session:
+            record = session.get(SimulatorStateModel, "default")
+            if not record:
+                return None
+            try:
+                state = json.loads(record.payload)
+            except (TypeError, json.JSONDecodeError):
+                logger.exception("Stored simulator state is malformed")
+                return None
+            if not isinstance(state, dict):
+                return None
+            return state, record.updated_at
+
+    def get_latest_account_event_timestamp(self) -> datetime | None:
+        """Get the latest durable event that changes paper account state."""
+        account_events = (
+            "POSITION_OPENED", "POSITION_CLOSED", "ORDER_PLACED",
+            "ORDER_FILLED", "TRADE_REJECTED",
+        )
+        with self._get_session() as session:
+            return session.scalar(
+                select(func.max(SystemEventModel.timestamp)).where(
+                    SystemEventModel.event_type.in_(account_events)
+                )
+            )
+
     def get_simulator_state(self) -> dict[str, Any] | None:
         with self._get_session() as session:
             record = session.get(SimulatorStateModel, "default")
