@@ -532,6 +532,7 @@ class SettingsResponse(BaseModel):
     telegram_enabled: bool
     telegram_bot_token_configured: bool
     telegram_chat_id_configured: bool
+    restart_required: list[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
