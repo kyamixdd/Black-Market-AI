@@ -245,6 +245,7 @@ async def event_stream():
     """Authenticated Server-Sent Events stream for browser clients."""
     if orchestrator is None:
         raise HTTPException(status_code=503, detail="Backend is starting")
+    event_bus = orchestrator.event_bus
     queue: asyncio.Queue = asyncio.Queue(maxsize=512)
 
     async def on_event(event):
@@ -262,20 +263,20 @@ async def event_stream():
             except asyncio.QueueFull:
                 logger.warning("Dropping dashboard SSE event because its queue is full")
 
-    orchestrator.event_bus.subscribe_all(on_event)
+    event_bus.subscribe_all(on_event)
 
     async def stream():
         try:
-            yield "retry: 3000\\n\\n"
+            yield "retry: 3000\n\n"
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15)
-                    yield "data: " + json.dumps(event, default=str, separators=(",", ":")) + "\\n\\n"
+                    yield "data: " + json.dumps(event, default=str, separators=(",", ":")) + "\n\n"
                     queue.task_done()
                 except asyncio.TimeoutError:
-                    yield ": keep-alive\\n\\n"
+                    yield ": keep-alive\n\n"
         finally:
-            subscribers = orchestrator.event_bus._subscribers.get("*", [])
+            subscribers = event_bus._subscribers.get("*", [])
             if on_event in subscribers:
                 subscribers.remove(on_event)
 
