@@ -40,8 +40,6 @@ class Predictor:
                 self.rf_model = joblib.load(rf_path)
                 self.xgb_model = xgb.XGBClassifier()
                 self.xgb_model.load_model(str(xgb_path))
-                if scaler_path.exists():
-                    self.scaler = joblib.load(scaler_path)
                 self.is_trained = True
                 logger.info("Loaded existing models")
             except Exception as exc:
