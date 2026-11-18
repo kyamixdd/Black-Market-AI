@@ -14,9 +14,15 @@ class RiskManager:
         self.max_futures_positions = max_futures_positions
 
     def check_daily_loss(self, daily_pnl: float, total_balance: float) -> bool:
+        """Allow entries unless realized losses reach the configured daily cap.
+
+        Profits must not consume the loss allowance; only the negative portion
+        of daily P&L represents daily loss.
+        """
         if total_balance <= 0:
             return False
-        return abs(daily_pnl) / total_balance * 100 < self.max_daily_loss_pct
+        daily_loss = max(0.0, -daily_pnl)
+        return daily_loss / total_balance * 100 < self.max_daily_loss_pct
 
     def check_position_limit(self, positions: dict, max_positions: int) -> bool:
         """Check if max positions limit is reached."""
@@ -39,7 +45,7 @@ class RiskManager:
         """Calculate position size based on risk per trade."""
         if max_risk_pct is None:
             max_risk_pct = self.max_risk_pct
-        if risk_amount <= 0:
+        if balance <= 0 or risk_amount <= 0 or max_risk_pct <= 0:
             return 0.0
         return balance * (max_risk_pct / 100.0) / risk_amount
 
