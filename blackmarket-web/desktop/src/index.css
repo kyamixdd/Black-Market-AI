@@ -1,0 +1,79 @@
+:root {
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  color: #eeeeee;
+  background: #101112;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-optical-sizing: auto;
+
+  --bg: #101112;
+  --panel: #141516;
+  --panel-raised: #191a1c;
+  --border: #303235;
+  --grid: #25272a;
+  --text: #eeeeee;
+  --secondary: #999da2;
+  --muted: #666a70;
+  --positive: #a8d9c0;
+  --negative: #d99ca5;
+  --mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", Consolas, monospace;
+
+  color-scheme: dark;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 760px;
+  height: 100%;
+  min-height: 540px;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--bg);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 1px solid #858a90;
+  outline-offset: 2px;
+}
+
+::selection {
+  color: #101112;
+  background: #a8d9c0;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3a3d40;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
