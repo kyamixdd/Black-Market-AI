@@ -271,16 +271,18 @@ async def health_check():
     market_data_active = bool(
         orchestrator.scanner._running and orchestrator.has_fresh_market_data()
     )
+    last_ws_message_at = getattr(orchestrator, "_last_ws_message_at", None)
+    exchange_ws_connected = (
+        last_ws_message_at is not None
+        and asyncio.get_running_loop().time() - last_ws_message_at < 120
+    )
     return {
         "status": health.get("status", "unknown"),
         "backend_ready": bool(db is not None and market_data_active),
         # This is the local dashboard WebSocket service. Exchange market
         # stream health is reported separately so REST-only fallback stays usable.
         "websocket_connected": bool(ws_manager and ws_manager.get_stats().get("running")),
-        "exchange_websocket_connected": bool(
-            orchestrator._last_ws_message_at
-            and asyncio.get_running_loop().time() - orchestrator._last_ws_message_at < 120
-        ),
+        "exchange_websocket_connected": exchange_ws_connected,
         "database_connected": db is not None,
         "market_data_active": market_data_active,
         "learning_active": bool(AUTO_MODEL_TRAINING and any(
