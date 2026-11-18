@@ -50,7 +50,7 @@ SCAN_ALL_ELIGIBLE_SYMBOLS = _env_bool("SCAN_ALL_ELIGIBLE_SYMBOLS", True)
 SPOT_ENABLED = _env_bool("SPOT_ENABLED", True)
 USDM_FUTURES_ENABLED = _env_bool("USDM_FUTURES_ENABLED", True)
 
-TIMEFRAMES = _env_str("TIMEFRAMES", "1m,3m,5m,15m,30m,1h,4h,1d,1w").split(",")
+TIMEFRAMES = [tf.strip() for tf in _env_str("TIMEFRAMES", "1m,3m,5m,15m,30m,1h,4h,1d,1w").split(",") if tf.strip()]
 
 # --- Paper capital ---
 # The configured virtual capital is the total account budget. When both markets
