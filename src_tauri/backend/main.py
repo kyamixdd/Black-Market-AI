@@ -267,7 +267,7 @@ async def health_check():
             "version": "1.0.0",
         }
     health = orchestrator.health_monitor.get_status()
-    from config import AUTO_MODEL_TRAINING, PAPER_TRADING_ENABLED, SPOT_ENABLED, USDM_FUTURES_ENABLED
+    from config import AUTO_MODEL_TRAINING, PAPER_TRADING_ENABLED
     market_data_active = bool(
         orchestrator.scanner._running and orchestrator.has_fresh_market_data()
     )
