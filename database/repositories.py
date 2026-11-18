@@ -424,6 +424,18 @@ class Repository:
                 return None
             return state, record.updated_at
 
+    def get_latest_account_record_timestamp(self) -> datetime | None:
+        """Return the newest durable position, order, or trade record timestamp."""
+        with self._get_session() as session:
+            timestamps = [
+                session.scalar(select(func.max(PaperPositionModel.opened_at))),
+                session.scalar(select(func.max(PaperPositionModel.closed_at))),
+                session.scalar(select(func.max(PaperOrderModel.updated_at))),
+                session.scalar(select(func.max(TradeHistoryModel.closed_at))),
+            ]
+            present = [value for value in timestamps if value is not None]
+            return max(present) if present else None
+
     def get_latest_account_event_timestamp(self) -> datetime | None:
         """Get the latest durable event that changes paper account state."""
         account_events = (
