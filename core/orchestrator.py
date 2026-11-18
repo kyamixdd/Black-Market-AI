@@ -457,12 +457,7 @@ class Orchestrator:
                             ])
                     signals = await self.intelligence.analyze_symbol(symbol, market)
                     await self._record_prediction(symbol, market, signals)
-                    for signal in signals:
-                        await self.event_bus.publish(make_event(
-                            EventType.SIGNAL_PROPOSED,
-                            "intelligence",
-                            **signal,
-                        ))
+                    await self.intelligence.process_signals(signals)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
