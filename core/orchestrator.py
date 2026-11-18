@@ -21,6 +21,7 @@ from config import (
     TIMEFRAMES,
     MAX_CONCURRENT_SCANS,
     MAX_STREAMS_PER_CONNECTION,
+    MAX_WEBSOCKET_CONNECTIONS,
 )
 from core.event_bus import EventBus
 from core.disaster_recovery import create_disaster_recovery_orchestrator
@@ -267,12 +268,94 @@ class Orchestrator:
         return False
 
     async def _on_exchange_ws_message(self, message: dict[str, Any]) -> None:
-        """Convert Binance combined ticker streams into normal market-data events."""
+        """Feed ticker and live kline streams into the shared market-data pipeline."""
         data = message.get("data", message) if isinstance(message, dict) else {}
-        if not isinstance(data, dict) or data.get("e") != "24hrTicker":
+        if not isinstance(data, dict):
+            return
+        market = message.get("_market", "SPOT")
+
+        # Binance kline streams deliver both updates to the forming candle and
+        # final closed candles. Closed candles are persisted for reproducible ML.
+        if data.get("e") == "kline":
+            kline = data.get("k")
+            symbol = data.get("s")
+            if not isinstance(kline, dict) or not symbol:
+                return
+            timeframe = kline.get("i")
+            if timeframe not in self._analysis_timeframes:
+                return
+            try:
+                open_time = int(kline["t"])
+                close_time = int(kline["T"])
+                open_price = float(kline["o"])
+                high = float(kline["h"])
+                low = float(kline["l"])
+                close = float(kline["c"])
+                volume = float(kline["v"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return
+            values = (open_price, high, low, close, volume)
+            if (
+                not all(math.isfinite(value) for value in values)
+                or min(open_price, high, low, close) <= 0
+                or volume < 0
+                or high < max(open_price, close, low)
+                or low > min(open_price, close)
+            ):
+                return
+            self._ws_connected = True
+            self._last_ws_message_at = asyncio.get_running_loop().time()
+            is_closed = bool(kline.get("x"))
+            if is_closed:
+                self.candle_manager.add_candle(
+                    market, symbol, timeframe, open_time, open_price,
+                    high, low, close, volume, close_time,
+                )
+                self.repo.save_candles([{
+                    "symbol": symbol,
+                    "market": market,
+                    "timeframe": timeframe,
+                    "open_time": open_time,
+                    "open": open_price,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": volume,
+                    "close_time": close_time,
+                }])
+            else:
+                updated = self.candle_manager.update_current_candle(
+                    market, symbol, timeframe, open_time, open_price,
+                    high, low, close, volume, close_time,
+                )
+                if not updated:
+                    self.candle_manager.add_candle(
+                        market, symbol, timeframe, open_time, open_price,
+                        high, low, close, volume, close_time,
+                    )
+            await self.event_bus.publish(make_event(
+                EventType.MARKET_DATA,
+                "binance_kline_websocket",
+                symbol=symbol,
+                market=market,
+                price=close,
+                candle={
+                    "timeframe": timeframe,
+                    "open_time": open_time,
+                    "close_time": close_time,
+                    "open": open_price,
+                    "high": high,
+                    "low": low,
+                    "close": close,
+                    "volume": volume,
+                    "closed": is_closed,
+                },
+            ))
+            return
+
+        if data.get("e") != "24hrTicker":
             return
         symbol = data.get("s")
-        market = message.get("_market", "SPOT")
         try:
             price = float(data.get("c", 0))
             volume = float(data.get("q", 0))
@@ -295,9 +378,19 @@ class Orchestrator:
         ))
 
     async def _start_market_websockets(self) -> None:
-        """Subscribe to the most liquid eligible symbols; REST still covers the full universe."""
+        """Subscribe to ticker and multi-timeframe kline streams within connection limits."""
         spot_streams: list[str] = []
         futures_streams: list[str] = []
+        enabled_markets = int(SPOT_ENABLED) + int(USDM_FUTURES_ENABLED)
+        streams_per_symbol = 1 + len(self._analysis_timeframes)
+        symbol_limit = max(
+            1,
+            (MAX_WEBSOCKET_CONNECTIONS * MAX_STREAMS_PER_CONNECTION)
+            // max(1, enabled_markets * streams_per_symbol),
+        )
+        # Keep a bounded high-liquidity live stream set. REST scanning and
+        # historical backfill continue to cover the complete eligible universe.
+        symbol_limit = min(50, symbol_limit)
         for market, enabled, target in (
             ("SPOT", SPOT_ENABLED, spot_streams),
             ("FUTURES", USDM_FUTURES_ENABLED, futures_streams),
@@ -306,15 +399,21 @@ class Orchestrator:
                 continue
             tickers = self.cache.get_market_tickers(market)
             tickers.sort(key=lambda item: float(item.get("volume_24h") or 0.0), reverse=True)
-            target.extend(
-                f"{item['symbol'].lower()}@ticker"
-                for item in tickers[:100]
+            symbols = [
+                item["symbol"].lower()
+                for item in tickers[:symbol_limit]
                 if item.get("symbol")
-            )
+            ]
+            for symbol in symbols:
+                target.append(f"{symbol}@ticker")
+                target.extend(
+                    f"{symbol}@kline_{timeframe}"
+                    for timeframe in self._analysis_timeframes
+                )
         await self.ws_manager.start(spot_streams, futures_streams)
         logger.info(
-            "Exchange WebSocket subscriptions started: spot=%d futures=%d",
-            len(spot_streams), len(futures_streams),
+            "Exchange WebSocket subscriptions started: spot=%d futures=%d symbols_per_market=%d timeframes=%d",
+            len(spot_streams), len(futures_streams), symbol_limit, len(self._analysis_timeframes),
         )
 
     async def _on_market_data(self, event) -> None:
