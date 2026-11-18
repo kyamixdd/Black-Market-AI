@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import math
@@ -627,7 +628,6 @@ class Orchestrator:
         if not self.integrity.is_symbol_valid(market, symbol):
             return
         # Exchange candle timestamps are wall-clock epoch milliseconds.
-        from datetime import datetime, timezone
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         ohlc_data: dict[str, dict[str, np.ndarray]] = {}
