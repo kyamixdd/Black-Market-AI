@@ -483,15 +483,18 @@ impl BackendSupervisor {
         }
 
         // Tauri-launched processes do not inherit Python's dotenv loader, so read
-        // the project .env directly when a shared token was configured there.
+        // the selected application/project .env directly.
         if let Some(dotenv_path) = self.dotenv_path(project_root) {
             if let Ok(contents) = fs::read_to_string(&dotenv_path) {
-            for line in contents.lines() {
-                let Some((key, value)) = line.split_once('=') else { continue };
-                if key.trim() == "BLACKMARKET_API_TOKEN" {
-                    let value = value.trim().trim_matches('"').trim_matches('\'');
-                    if !value.is_empty() {
-                        return validate_api_token(value);
+                for line in contents.lines() {
+                    let Some((key, value)) = line.split_once('=') else {
+                        continue;
+                    };
+                    if key.trim() == "BLACKMARKET_API_TOKEN" {
+                        let value = value.trim().trim_matches('"').trim_matches('\'');
+                        if !value.is_empty() {
+                            return validate_api_token(value);
+                        }
                     }
                 }
             }
