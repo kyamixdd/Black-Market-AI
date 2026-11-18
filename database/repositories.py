@@ -16,6 +16,7 @@ from .models import (
     ModelRegistryModel,
     NotificationModel,
     PaperOrderModel,
+    ProcessedEventModel,
     PaperPositionModel,
     PredictionModel,
     SignalModel,
@@ -503,6 +504,23 @@ class Repository:
             session.add(ev)
             session.commit()
             return ev.event_id
+
+    def get_processed_event_ids(self, limit: int = 100000) -> set[str]:
+        with self._get_session() as session:
+            stmt = select(ProcessedEventModel.event_id).order_by(
+                ProcessedEventModel.processed_at.desc()
+            ).limit(limit)
+            return set(session.scalars(stmt).all())
+
+    def event_processed(self, event_id: str) -> bool:
+        with self._get_session() as session:
+            return session.get(ProcessedEventModel, event_id) is not None
+
+    def mark_event_processed(self, event_id: str) -> None:
+        with self._get_session() as session:
+            if session.get(ProcessedEventModel, event_id) is None:
+                session.add(ProcessedEventModel(event_id=event_id))
+                session.commit()
 
     def update_system_event_status(self, event_id: str, status: str) -> bool:
         """Update a persisted queue event's status without losing its payload."""
