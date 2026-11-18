@@ -550,3 +550,16 @@ def test_simulator_rejects_short_positions_on_spot_market():
     valid, reason = simulator.validate_new_position(signal)
     assert valid is False
     assert "does not support short" in reason
+
+
+def test_limit_order_fill_never_worsens_limit_price():
+    from paper_trading.fee_calculator import FeeCalculator
+
+    calculator = FeeCalculator()
+    buy_fill = calculator.get_fill_price("SPOT", "BUY", "LIMIT", 100.0, 1.0)
+    sell_fill = calculator.get_fill_price("SPOT", "SELL", "LIMIT", 100.0, 1.0)
+    market_buy_fill = calculator.get_fill_price("SPOT", "BUY", "MARKET", 100.0, 1.0)
+
+    assert buy_fill == 100.0
+    assert sell_fill == 100.0
+    assert market_buy_fill > 100.0
