@@ -128,6 +128,13 @@ class Orchestrator:
         # Discover fresh market universe
         result = await self._discovery.discover_all()
         logger.info("Discovered: spot=%d, futures=%d", result["spot"], result["futures"])
+        if not (
+            (SPOT_ENABLED and self.registry.count("SPOT") > 0)
+            or (USDM_FUTURES_ENABLED and self.registry.count("FUTURES") > 0)
+        ):
+            raise RuntimeError(
+                "No eligible Binance symbols are available. Check network access and enabled markets."
+            )
         # Persist symbols
         self.repo.save_symbols(self.registry.to_dicts())
         # Setup event persistence (critical events to SQLite for recovery)
