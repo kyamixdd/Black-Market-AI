@@ -25,6 +25,7 @@ class DataIntegrityGuardian:
         """Check if the latest candle for a symbol is fresh."""
         series = self.candles.get_series(market, symbol, timeframe, limit=1)
         if not series:
+            self._update_status(market, symbol, "freshness", False, f"Missing {timeframe} candles")
             return False
 
         latest = series[-1]
@@ -38,8 +39,10 @@ class DataIntegrityGuardian:
 
         if not is_fresh:
             logger.warning("Data stale for %s %s %s: delay=%.1fs", market, symbol, timeframe, delay_sec)
-            self._update_status(market, symbol, "freshness", False, f"Stale {timeframe} data")
-
+        self._update_status(
+            market, symbol, "freshness", is_fresh,
+            None if is_fresh else f"Stale {timeframe} data",
+        )
         return is_fresh
 
     def check_continuity(self, market: str, symbol: str, timeframe: str) -> bool:
@@ -49,6 +52,7 @@ class DataIntegrityGuardian:
             logger.warning("Data gap for %s %s %s: %d missing candles", market, symbol, timeframe, len(missing))
             self._update_status(market, symbol, "continuity", False, f"Gap in {timeframe} data")
             return False
+        self._update_status(market, symbol, "continuity", True)
         return True
 
     def validate_ticker_consistency(self, market: str, symbol: str, ticker_price: float) -> bool:
@@ -66,6 +70,7 @@ class DataIntegrityGuardian:
                          market, symbol, ticker_price, last_close, diff_pct * 100)
             self._update_status(market, symbol, "consistency", False, f"Ticker inconsistency: {diff_pct:.2%}")
             return False
+        self._update_status(market, symbol, "consistency", True)
         return True
 
     def detect_anomalies(self, market: str, symbol: str, timeframe: str) -> bool:
@@ -88,25 +93,20 @@ class DataIntegrityGuardian:
                          market, symbol, timeframe, move, last_atr)
             self._update_status(market, symbol, "anomaly", False, "Price spike detected")
             return False
+        self._update_status(market, symbol, "anomaly", True)
         return True
 
     def is_symbol_valid(self, market: str, symbol: str) -> bool:
         """Determine if a symbol is valid for trading/signaling."""
         status = self._get_status(market, symbol)
 
-        # Check if any health flag is False
-        if not status.get("healthy", True):
-            return False
-
-        # Perform freshness check on primary timeframe (1h)
-        if not self.validate_freshness(market, symbol, "1h"):
-            return False
-
-        # Perform continuity check on primary timeframe (1h)
-        if not self.check_continuity(market, symbol, "1h"):
-            return False
-
-        return True
+        # Re-run checks before consulting the aggregate status so a symbol can
+        # recover automatically after stale or incomplete candles are repaired.
+        fresh = self.validate_freshness(market, symbol, "1h")
+        continuous = self.check_continuity(market, symbol, "1h")
+        anomaly_free = self.detect_anomalies(market, symbol, "1h")
+        status = self._get_status(market, symbol)
+        return fresh and continuous and anomaly_free and status.get("healthy", True)
 
     def _update_status(self, market: str, symbol: str, check_type: str,
                         is_healthy: bool, message: str | None = None) -> None:
