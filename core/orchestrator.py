@@ -154,6 +154,7 @@ class Orchestrator:
         self.event_bus.subscribe(EventType.POSITION_OPENED, self._on_position_opened)
         self.event_bus.subscribe(EventType.ORDER_PLACED, self._on_order_placed)
         self.event_bus.subscribe(EventType.ORDER_FILLED, self._on_order_filled)
+        self.event_bus.subscribe(EventType.TRADE_REJECTED, self._on_trade_rejected)
         # Risk alerts
         self.event_bus.subscribe(EventType.RISK_ALERT, self._on_risk_alert)
         # System health
@@ -241,6 +242,12 @@ class Orchestrator:
     async def _on_order_filled(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
         await self._persist_state()
+
+    async def _on_trade_rejected(self, event) -> None:
+        order = event.payload.get("order")
+        if order:
+            self._persist_paper_order(order)
+            await self._persist_state()
 
     def _persist_paper_order(self, order: dict[str, Any] | None) -> None:
         if not order:
