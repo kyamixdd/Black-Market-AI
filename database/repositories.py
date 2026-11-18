@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from .models import (
     CandleModel,
+    AppSettingModel,
     MarketSnapshotModel,
     ModelRegistryModel,
     NotificationModel,
@@ -34,6 +35,31 @@ class Repository:
 
     def _get_session(self) -> Session:
         return self._session_maker()
+
+    # --- Persistent application settings ---
+    def get_app_settings(self) -> dict[str, Any]:
+        """Return all persisted settings as decoded JSON values."""
+        with self._get_session() as session:
+            rows = session.scalars(select(AppSettingModel)).all()
+            result: dict[str, Any] = {}
+            for row in rows:
+                try:
+                    result[row.key] = json.loads(row.value)
+                except (TypeError, json.JSONDecodeError):
+                    logger.warning("Ignoring malformed persisted setting: %s", row.key)
+            return result
+
+    def save_app_settings(self, settings: dict[str, Any]) -> None:
+        """Atomically upsert a set of JSON-serializable settings."""
+        with self._get_session() as session:
+            for key, value in settings.items():
+                row = session.get(AppSettingModel, key)
+                encoded = json.dumps(value, separators=(",", ":"), allow_nan=False)
+                if row is None:
+                    session.add(AppSettingModel(key=key, value=encoded))
+                else:
+                    row.value = encoded
+            session.commit()
 
     # --- Symbol Repo ---
     def save_symbols(self, symbols: list[dict[str, Any]]) -> int:
