@@ -305,6 +305,23 @@ class Repository:
             stmt = select(StrategyMetricsModel)
             return list(session.scalars(stmt).all())
 
+    def get_strategy_weights(self) -> dict[str, float]:
+        """Load persisted global adaptive strategy weights."""
+        with self._get_session() as session:
+            stmt = select(StrategyMetricsModel).where(StrategyMetricsModel.market == "ALL")
+            return {row.strategy: float(row.weight) for row in session.scalars(stmt).all()}
+
+    def save_strategy_weight(self, strategy: str, weight: float) -> None:
+        """Persist the current adaptive weight independently of market metrics."""
+        with self._get_session() as session:
+            record = session.get(StrategyMetricsModel, (strategy, "ALL"))
+            if record:
+                record.weight = float(weight)
+                record.last_updated = datetime.now(timezone.utc)
+            else:
+                session.add(StrategyMetricsModel(strategy=strategy, market="ALL", weight=float(weight)))
+            session.commit()
+
     def save_model_registry(self, record: dict[str, Any]) -> str:
         with self._get_session() as session:
             rec_dict = dict(record)
