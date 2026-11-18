@@ -37,8 +37,10 @@ class DataIntegrityGuardian:
         delay_ms = now_ms - latest["close_time"]
         delay_sec = delay_ms / 1000
 
-        # Reject exchange timestamps that are materially ahead of the local clock.
-        if delay_ms < -self._max_clock_skew:
+        # Exchange klines include the currently forming candle, whose close_time
+        # is naturally in the future by up to one full timeframe.
+        timeframe_ms = TIMEFRAME_SECONDS.get(timeframe, 60) * 1000
+        if -delay_ms > timeframe_ms + self._max_clock_skew:
             self._update_status(market, symbol, "freshness", False, f"Future-dated {timeframe} candle")
             return False
 
