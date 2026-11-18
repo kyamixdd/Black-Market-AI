@@ -729,7 +729,9 @@ class OrchestratorBridge:
         # choices for the next explicit restart.
         self.repo.save_app_settings(values)
         if set(values) & capital_fields:
-            self.repo.save_simulator_state(self.simulator.get_state_snapshot())
+            snapshot = self.simulator.get_state_snapshot()
+            snapshot["closed_trades"] = []
+            self.repo.save_simulator_state(snapshot)
         result = self.get_settings()
         result["restart_required"] = restart_required
         return result
