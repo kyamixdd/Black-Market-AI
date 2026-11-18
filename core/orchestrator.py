@@ -178,6 +178,9 @@ class Orchestrator:
             price = self.cache.get_price(market, symbol)
         mark_price = payload.get("mark_price")
         funding_rate = payload.get("funding_rate")
+        volume_24h = payload.get("volume_24h")
+        if symbol and isinstance(volume_24h, (int, float)) and volume_24h >= 0:
+            self.simulator.update_market_volume(market, symbol, float(volume_24h))
         if symbol and isinstance(price, (int, float)) and price > 0:
             await self.simulator.update_prices(
                 market,
