@@ -100,7 +100,6 @@ def _api_host() -> str:
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     global orchestrator, db, bridge, ws_manager
-    event_task: asyncio.Task | None = None
     orchestrator_task: asyncio.Task | None = None
 
     logger.info("Starting BlackMarket AI Backend Adapter...")
@@ -125,7 +124,6 @@ async def lifespan(app: FastAPI):
     # Create WebSocket manager
     ws_manager = WebSocketManager(orchestrator.event_bus)
     await ws_manager.start()
-    event_task = asyncio.create_task(orchestrator.event_bus.run(), name="blackmarket-event-bus")
     orchestrator_task = asyncio.create_task(orchestrator.run(), name="blackmarket-orchestrator")
 
     logger.info("BlackMarket AI Backend Adapter started")
@@ -139,9 +137,6 @@ async def lifespan(app: FastAPI):
         if orchestrator_task and not orchestrator_task.done():
             orchestrator_task.cancel()
             await asyncio.gather(orchestrator_task, return_exceptions=True)
-        if event_task and not event_task.done():
-            event_task.cancel()
-            await asyncio.gather(event_task, return_exceptions=True)
         if ws_manager:
             await ws_manager.shutdown()
         if db:
@@ -270,14 +265,18 @@ async def health_check():
             "version": "1.0.0",
         }
     health = orchestrator.health_monitor.get_status()
+    from config import AUTO_MODEL_TRAINING, PAPER_TRADING_ENABLED
     return {
         "status": health.get("status", "unknown"),
-        "backend_ready": True,
-        "websocket_connected": bool(ws_manager and ws_manager.get_stats().get("running")),
+        "backend_ready": bool(db is not None and orchestrator.scanner._running),
+        "websocket_connected": bool(orchestrator._ws_connected),
         "database_connected": db is not None,
         "market_data_active": orchestrator.scanner._running,
-        "learning_active": orchestrator.intelligence.predictor.is_trained,
-        "paper_trading_active": True,
+        "learning_active": bool(AUTO_MODEL_TRAINING and any(
+            task.get_name() == "blackmarket-learning" and not task.done()
+            for task in asyncio.all_tasks()
+        )),
+        "paper_trading_active": PAPER_TRADING_ENABLED,
         "uptime_seconds": health.get("metrics", {}).get("uptime_seconds", 0.0),
         "version": "1.0.0",
     }
