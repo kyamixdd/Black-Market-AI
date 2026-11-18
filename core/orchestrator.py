@@ -17,6 +17,8 @@ from config import (
     USDM_FUTURES_ENABLED,
     PREDICTION_HORIZON_MINUTES,
     TIMEFRAMES,
+    MAX_CONCURRENT_SCANS,
+    MAX_STREAMS_PER_CONNECTION,
 )
 from core.event_bus import EventBus
 from core.disaster_recovery import create_disaster_recovery_orchestrator
@@ -58,7 +60,7 @@ class Orchestrator:
         self.cache: MarketCache = MarketCache()
         self.spot_client: SpotClient = SpotClient(self.rate_limiter)
         self.futures_client: FuturesClient = FuturesClient(self.rate_limiter)
-        self.ws_manager: WebSocketManager = WebSocketManager(self.rate_limiter)
+        self.ws_manager: WebSocketManager = WebSocketManager(self.rate_limiter, max_streams_per_conn=MAX_STREAMS_PER_CONNECTION)
         self.ws_manager.add_handler(self._on_exchange_ws_message)
         self.candle_manager: CandleManager = CandleManager()
         self.scanner: Scanner = Scanner(self.event_bus, self.registry, self.cache,
@@ -435,7 +437,7 @@ class Orchestrator:
         Ticker discovery covers every eligible symbol. Candle-heavy analysis is
         deliberately batched to respect public exchange rate limits on a desktop PC.
         """
-        semaphore = asyncio.Semaphore(4)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_SCANS)
 
         async def analyze_one(market: str, symbol: str) -> None:
             async with semaphore:
