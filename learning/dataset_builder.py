@@ -1,6 +1,7 @@
 """Dataset builder: constructs feature/target datasets from historical predictions and outcomes."""
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -8,7 +9,6 @@ import numpy as np
 from sqlalchemy import select
 
 from config import WALK_FORWARD_MIN_SAMPLES
-from database.connection import get_session_maker
 from database.models import CandleModel, PredictionModel
 from database.repositories import Repository
 from learning.feature_engine import FeatureEngine
@@ -22,7 +22,7 @@ class DatasetBuilder:
     def __init__(self, repo: Repository, feature_engine: FeatureEngine | None = None):
         self.repo = repo
         self.feature_engine = feature_engine or FeatureEngine()
-        self.session_maker = get_session_maker()
+        self.session_maker = repo._session_maker
 
     def build_dataset(self, min_samples: int = WALK_FORWARD_MIN_SAMPLES) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -32,7 +32,13 @@ class DatasetBuilder:
         predictions = self.repo.get_predictions_history(limit=10000)
 
         # Filter to resolved predictions with outcomes
-        resolved = [p for p in predictions if p.is_correct is not None]
+        resolved = [
+            p for p in predictions
+            if p.is_correct is not None and p.actual_outcome in {"DOWN", "FLAT", "UP"}
+        ]
+        # The repository returns newest-first; chronological order is mandatory
+        # for TimeSeriesSplit or the validation folds would train on the future.
+        resolved.sort(key=lambda p: p.created_at)
         logger.info("Found %d resolved predictions out of %d total", len(resolved), len(predictions))
 
         if len(resolved) < min_samples:
@@ -45,7 +51,10 @@ class DatasetBuilder:
         for pred in resolved:
             try:
                 features = self._build_features_for_prediction(pred)
-                if features is not None:
+                if features is not None and features.ndim == 1 and features.size > 0 and np.isfinite(features).all():
+                    if X_list and features.shape != X_list[0].shape:
+                        logger.warning("Skipping prediction %s with inconsistent feature shape %s", pred.prediction_id, features.shape)
+                        continue
                     X_list.append(features)
                     y_list.append(self._outcome_to_class(pred.actual_outcome))
             except Exception as exc:
@@ -69,6 +78,16 @@ class DatasetBuilder:
         if not ohlc_data:
             return None
 
+        # Use the exact features recorded at prediction time. Recomputing them
+        # from later-refreshed candles can silently change training inputs.
+        stored = getattr(pred, "feature_values", None)
+        if stored:
+            try:
+                values = np.asarray(json.loads(stored), dtype=np.float32)
+                if values.ndim == 1 and values.size and np.isfinite(values).all():
+                    return values
+            except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("Stored feature vector is invalid for %s; rebuilding from candles", pred.prediction_id)
         return self.feature_engine.build_features(pred.symbol, pred.market, ohlc_data)
 
     def _get_ohlc_data(self, symbol: str, market: str, timestamp_ms: int,
