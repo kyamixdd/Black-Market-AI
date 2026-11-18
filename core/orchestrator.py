@@ -405,8 +405,7 @@ class Orchestrator:
         # Main loop - keep running until stopped
         while self._running:
             await asyncio.sleep(60)
-            self.disaster_recovery.watchdog.heartbeat()
-            # Periodic persistence
+            # Periodic persistence; watchdog heartbeats come from successful analysis cycles.
             await self._persist_state()
 
     async def _analysis_loop(self) -> None:
