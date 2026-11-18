@@ -174,7 +174,7 @@ impl BackendSupervisor {
             }
         };
         let log_path = self.backend_log_path();
-        let api_token = match self.load_api_token() {
+        let api_token = match self.load_api_token(&project_root) {
             Ok(token) => token,
             Err(error) => {
                 self.fail(
@@ -458,7 +458,31 @@ impl BackendSupervisor {
         }
     }
 
-    fn load_api_token(&self) -> Result<String, String> {
+    fn load_api_token(&self, project_root: &Path) -> Result<String, String> {
+        // Prefer an explicitly configured shared token so the local engine can
+        // authenticate requests from the hosted dashboard. Never log this value.
+        if let Ok(token) = env::var("BLACKMARKET_API_TOKEN") {
+            if !token.trim().is_empty() {
+                return validate_api_token(token.trim());
+            }
+        }
+
+        // Tauri-launched processes do not inherit Python's dotenv loader, so read
+        // the project .env directly when a shared token was configured there.
+        let dotenv_path = project_root.join(".env");
+        if let Ok(contents) = fs::read_to_string(&dotenv_path) {
+            for line in contents.lines() {
+                let Some((key, value)) = line.split_once('=') else { continue };
+                if key.trim() == "BLACKMARKET_API_TOKEN" {
+                    let value = value.trim().trim_matches('"').trim_matches('\'');
+                    if !value.is_empty() {
+                        return validate_api_token(value);
+                    }
+                }
+            }
+        }
+
+        // Standalone desktop use still gets a private per-install token.
         let data_dir = self
             .app_data_dir
             .as_ref()
@@ -482,11 +506,7 @@ impl BackendSupervisor {
             }
             Err(error) => return Err(error.to_string()),
         };
-        let token = token.trim().to_owned();
-        if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err("The stored token file is invalid.".to_owned());
-        }
-        Ok(token)
+        validate_api_token(token.trim())
     }
 
     fn backend_log_path(&self) -> PathBuf {
@@ -642,6 +662,17 @@ fn probe_health() -> Probe {
         return Probe::Unavailable;
     }
     parse_health_response(&response)
+}
+
+fn validate_api_token(token: &str) -> Result<String, String> {
+    if !(32..=128).contains(&token.len())
+        || !token.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(
+            "The API token must contain 32 to 128 hexadecimal characters.".to_owned(),
+        );
+    }
+    Ok(token.to_owned())
 }
 
 fn parse_health_response(response: &str) -> Probe {
