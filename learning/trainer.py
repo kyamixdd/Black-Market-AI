@@ -122,11 +122,17 @@ class ModelTrainer:
 
     def _update_latest_symlinks(self, version: str) -> None:
         """Update 'latest' symlinks to point to new version."""
-        for name in ["rf_model.pkl", "xgb_model.json", "scaler.pkl"]:
-            target = self.model_dir / name
+        targets = {
+            "rf_model.pkl": f"rf_{version}.pkl",
+            "xgb_model.json": f"xgb_{version}.json",
+            "scaler.pkl": f"scaler_{version}.pkl",
+        }
+        for alias, filename in targets.items():
+            target = self.model_dir / alias
             if target.exists() or target.is_symlink():
                 target.unlink()
-            target.symlink_to(self.model_dir / name.replace(".", f"_{version}."))
+            # Relative targets keep model bundles portable across machines.
+            target.symlink_to(filename)
 
     def _register_model(self, version: str, model_type: str, metrics: dict, file_path: str) -> None:
         """Register model in database."""
@@ -193,7 +199,8 @@ class ModelTrainer:
             active = session.scalars(stmt).first()
 
         if not active:
-            return {"status": "no_active_model", "action": "train"}
+            logger.info("No active model found; starting the initial training attempt")
+            return self.train_and_validate()
 
         days_since = (datetime.now(timezone.utc) - active.trained_at).days
         if days_since >= MODEL_RETRAIN_MIN_DAYS:
