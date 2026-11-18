@@ -22,8 +22,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from dotenv import load_dotenv
 
 config_dir = Path(os.environ.get("BLACKMARKET_CONFIG_DIR", PROJECT_ROOT))
-config_path = config_dir / ".env"
-load_dotenv(config_path if config_path.is_file() else PROJECT_ROOT / ".env")
+config_path = Path(os.environ.get("BLACKMARKET_ENV_FILE", config_dir / ".env"))
+if not config_path.is_file():
+    config_path = PROJECT_ROOT / ".env"
+load_dotenv(config_path if config_path.is_file() else None)
 
 from config import DATABASE_URL, LOG_LEVEL
 from core.config_validator import validate_config_or_exit
