@@ -133,3 +133,15 @@ def test_settings_update_rejects_capital_change_with_open_positions():
 
     with pytest.raises(ValueError, match="cannot be changed while positions or orders are open"):
         bridge.update_settings({"spot_initial_balance": 400.0})
+
+
+def test_settings_request_rejects_unsafe_values_and_invalid_timeframes():
+    from pydantic import ValidationError
+    from src_tauri.backend.api.routes.schemas import SettingsRequest
+
+    with pytest.raises(ValidationError):
+        SettingsRequest(risk_max_leverage=100)
+    with pytest.raises(ValidationError):
+        SettingsRequest(timeframes=["1m", "unsupported"])
+    with pytest.raises(ValidationError):
+        SettingsRequest(unrecognized_setting=True)
