@@ -14,7 +14,7 @@ class LiquidationEngine:
         leverage = position.get("leverage", 1.0)
         mmr = self.DEFAULT_MMR
 
-        if position["side"] == "LONG":
+        if position["side"] in ("LONG", "BUY"):
             # Long liquidation: mark_price <= entry * (1 - 1/leverage + mmr)
             return position["entry_price"] * (1 - (1 / leverage) + mmr)
         else:
