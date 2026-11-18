@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -18,7 +19,7 @@ from config import (
 )
 from core.event_bus import EventBus
 from core.event_models import EventType, make_event
-from paper_trading.fee_calculator import FeeCalculator
+from paper_trading.fee_calculator import FeeCalculator, FUTURES_TAKER, SPOT_TAKER
 from paper_trading.funding_calculator import FundingCalculator
 from paper_trading.liquidation_engine import LiquidationEngine
 from paper_trading.pnl_calculator import PnLCalculator
@@ -72,11 +73,11 @@ class Simulator:
         total = 0.0
         for pos in self.spot_positions.values():
             if pos.get("stop_loss"):
-                risk = abs(pos["entry_price"] - pos["stop_loss"]) * pos["amount"]
+                risk = abs(pos["entry_price"] - pos["stop_loss"]) * pos["amount"] * pos.get("leverage", 1.0)
                 total += risk
         for pos in self.futures_positions.values():
             if pos.get("stop_loss"):
-                risk = abs(pos["entry_price"] - pos["stop_loss"]) * pos["amount"]
+                risk = abs(pos["entry_price"] - pos["stop_loss"]) * pos["amount"] * pos.get("leverage", 1.0)
                 total += risk
         return total
 
@@ -99,12 +100,17 @@ class Simulator:
             return 1.0
         return self.risk_manager.validate_leverage(market, float(requested))
 
-    def _calculate_quantity(self, balance: float, risk_distance: float, leverage: float) -> float:
-        if balance <= 0 or risk_distance <= 0 or leverage <= 0:
+    def _calculate_quantity(
+        self, balance: float, risk_distance: float, leverage: float,
+        entry_price: float, market: str,
+    ) -> float:
+        if balance <= 0 or risk_distance <= 0 or leverage <= 0 or entry_price <= 0:
             return 0.0
-        # PnL is leverage-adjusted in this simulator, so reduce base quantity
-        # proportionally to keep stop-loss risk at the configured account %.
-        return balance * (RISK_PER_TRADE_PCT / 100.0) / (risk_distance * leverage)
+        risk_quantity = balance * (RISK_PER_TRADE_PCT / 100.0) / (risk_distance * leverage)
+        fee_rate = SPOT_TAKER if market == "SPOT" else FUTURES_TAKER
+        capital_per_unit = entry_price * (1.0 + fee_rate * leverage)
+        capital_quantity = balance / capital_per_unit
+        return min(risk_quantity, capital_quantity)
 
     def validate_new_position(self, signal: dict[str, Any]) -> tuple[bool, str]:
         market = signal.get("market")
@@ -123,13 +129,27 @@ class Simulator:
         if (
             isinstance(entry, bool) or isinstance(stop_loss, bool)
             or not isinstance(entry, (int, float)) or not isinstance(stop_loss, (int, float))
-            or not __import__("math").isfinite(entry) or not __import__("math").isfinite(stop_loss)
+            or not math.isfinite(entry) or not math.isfinite(stop_loss)
             or entry <= 0 or stop_loss <= 0
         ):
             return False, "Invalid entry or stop-loss price"
         risk_amount = abs(float(entry) - float(stop_loss))
         if risk_amount <= 0:
             return False, "Invalid stop loss"
+        take_profits = signal.get("take_profit")
+        if not isinstance(take_profits, (list, tuple)) or not take_profits:
+            return False, "At least one take-profit target is required"
+        if any(
+            isinstance(target, bool) or not isinstance(target, (int, float))
+            or not math.isfinite(target) or target <= 0
+            for target in take_profits
+        ):
+            return False, "Invalid take-profit target"
+        is_long = direction in ("LONG", "BUY")
+        if is_long and not (stop_loss < entry < min(take_profits)):
+            return False, "Invalid LONG/BUY stop-loss or take-profit ordering"
+        if not is_long and not (max(take_profits) < entry < stop_loss):
+            return False, "Invalid SHORT/SELL stop-loss or take-profit ordering"
         leverage = self._effective_leverage(signal)
         if leverage < 1:
             return False, "Invalid leverage"
@@ -162,7 +182,7 @@ class Simulator:
 
         # Risk manager check
         balance = self.get_balance(market)
-        qty = self._calculate_quantity(balance, risk_amount, leverage)
+        qty = self._calculate_quantity(balance, risk_amount, leverage, float(entry), market)
         if qty <= 0:
             return False, "Calculated quantity is zero"
         # Leverage
@@ -183,7 +203,7 @@ class Simulator:
         balance = self.get_balance(market)
         risk_amount = abs(signal["entry"] - signal["stop_loss"])
         leverage = self._effective_leverage(signal)
-        qty = self._calculate_quantity(balance, risk_amount, leverage)
+        qty = self._calculate_quantity(balance, risk_amount, leverage, float(signal["entry"]), market)
 
         # Get realistic fill price with spread and slippage
         volume_24h = self._get_volume_24h(market, signal["symbol"])
@@ -193,8 +213,11 @@ class Simulator:
             qty, leverage, volume_24h
         )
 
-        # Deduct fees upfront
+        margin = qty * fill_price
         fee = self.fee_calc.calculate(market, signal["direction"], qty, fill_price, leverage)
+        if margin + fee > balance:
+            logger.warning("Insufficient %s paper balance for %s", market, signal["symbol"])
+            return None
         position_id = f"POS-{uuid.uuid4().hex[:8].upper()}"
         position = {
             "position_id": position_id,
@@ -210,6 +233,7 @@ class Simulator:
             "unrealized_pnl": 0.0,
             "realized_pnl": 0.0,
             "fees_paid": fee,
+            "margin": margin,
             "status": "OPEN",
             "opened_at": datetime.now(timezone.utc),
             "order_type": order_type,
@@ -218,10 +242,10 @@ class Simulator:
         }
         if market == "SPOT":
             self.spot_positions[position_id] = position
-            self.spot_balance -= fee
+            self.spot_balance -= margin + fee
         else:
             self.futures_positions[position_id] = position
-            self.futures_balance -= fee
+            self.futures_balance -= margin + fee
         await self.event_bus.publish(make_event(
             EventType.POSITION_OPENED, "simulator",
             symbol=signal["symbol"], market=market, position=position
@@ -333,7 +357,10 @@ class Simulator:
 
         pnl = self.pnl_calc.realized(position, fill_price)
         fee = self.fee_calc.calculate(market, position["side"], position["amount"], fill_price, position["leverage"])
-        balance_delta = pnl - fee
+        margin = float(position.get("margin", position["entry_price"] * position["amount"]))
+        if reason == "LIQUIDATION" and market == "FUTURES":
+            pnl = max(pnl, -margin)
+        balance_delta = margin + pnl - fee
         trade_pnl = pnl - position.get("fees_paid", 0.0) - fee
         position["status"] = "CLOSED"
         position["closed_at"] = datetime.now(timezone.utc)
