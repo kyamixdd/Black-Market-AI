@@ -252,7 +252,10 @@ async def test_paper_trading_funding():
     position = sim.futures_positions[pos_id]
     initial_balance = sim.futures_balance
 
-    # Apply funding
+    # Simulate a position that crossed the most recent 8-hour UTC settlement.
+    interval_ms = 8 * 3600 * 1000
+    current_bucket = (int(datetime.now(timezone.utc).timestamp() * 1000) // interval_ms) * interval_ms
+    position["last_funding_time"] = current_bucket - interval_ms
     await sim._apply_funding(position, 0.0001)  # 0.01%
 
     # Balance should decrease (longs pay when rate positive)
