@@ -236,6 +236,10 @@ class Simulator:
             "margin": margin,
             "status": "OPEN",
             "opened_at": datetime.now(timezone.utc),
+            "last_funding_time": (
+                int(datetime.now(timezone.utc).timestamp() * 1000)
+                // (8 * 3600 * 1000)
+            ) * (8 * 3600 * 1000),
             "order_type": order_type,
             "signal_id": signal.get("signal_id"),
             "strategy": signal.get("strategy", "UNKNOWN"),
@@ -330,20 +334,28 @@ class Simulator:
 
     async def _apply_funding(self, position: dict, funding_rate: float) -> None:
         """Apply funding payment to futures position."""
-        # Track last funding time to avoid double-paying
-        current_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        last_funding = position.get("last_funding_time", 0)
-
-        # Only apply if enough time has passed (8 hours)
-        if current_time_ms - last_funding < 8 * 3600 * 1000:
+        interval_ms = 8 * 3600 * 1000
+        current_bucket = (
+            int(datetime.now(timezone.utc).timestamp() * 1000) // interval_ms
+        ) * interval_ms
+        last_funding = int(position.get("last_funding_time", current_bucket))
+        if current_bucket <= last_funding:
             return
 
-        payment = self.funding_calc.calculate(position, funding_rate)
-        position["fees_paid"] += payment
-        position["last_funding_time"] = current_time_ms
-        if position["market"] == "FUTURES":
-            self.futures_balance -= payment
-        logger.debug("Funding payment for %s: %.4f (rate: %.6f)", position["symbol"], payment, funding_rate)
+        # Catch up missed settlement boundaries after a temporary disconnect.
+        # The latest observed rate is used for missed intervals because historical
+        # funding rates are not currently stored by the market data layer.
+        settlements = (current_bucket - last_funding) // interval_ms
+        for _ in range(settlements):
+            payment = self.funding_calc.calculate(position, funding_rate)
+            position["fees_paid"] += payment
+            if position["market"] == "FUTURES":
+                self.futures_balance -= payment
+        position["last_funding_time"] = current_bucket
+        logger.debug(
+            "Applied %d funding settlement(s) for %s at rate %.6f",
+            settlements, position["symbol"], funding_rate,
+        )
 
     async def _close_position(self, position: dict, exit_price: float, reason: str) -> None:
         market = position["market"]
