@@ -39,7 +39,7 @@ export default function Dashboard(){
    catch(e){setError(e instanceof Error?e.message:"Unable to load data");}
    finally{setBusy(false);}
  },[section]);
- useEffect(()=>{void load();const timer=window.setInterval(()=>void load(),15000);return()=>window.clearInterval(timer);},[load]);
+ useEffect(()=>{void load();const timer=window.setInterval(()=>{if(section!=="Settings")void load();},15000);return()=>window.clearInterval(timer);},[load,section]);
  async function logout(){await fetch("/api/logout",{method:"POST"});location.assign("/login");}
  const entries=Object.entries(data).filter(([key])=>(endpoints[section]||[]).includes(key));
  return <main className="app-shell">
