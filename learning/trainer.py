@@ -59,9 +59,20 @@ class ModelTrainer:
         # 3. If validation passes, train final models on full dataset
         if validation["ensemble_passes"]:
             version = self._generate_version()
-            train_result = self._train_final_models(X, y, version)
+            try:
+                train_result = self._train_final_models(X, y, version)
+            except Exception:
+                logger.exception("Candidate model training failed for version %s", version)
+                return {
+                    "status": "training_failed",
+                    "version": version,
+                    "validation": validation,
+                    "samples": int(len(X)),
+                }
             train_result["validation"] = validation
             train_result["version"] = version
+            if train_result.get("status") == "training_failed":
+                return train_result
             train_result["status"] = "trained"
             return train_result
         else:
@@ -102,7 +113,10 @@ class ModelTrainer:
         joblib.dump(scaler, scaler_path)
 
         # Train the online River model as the incremental-learning leg of the hybrid.
-        self.train_river_online(X, y, version=version)
+        river_model = self.train_river_online(X, y, version=version)
+        river_path = self.model_dir / f"river_{version}.pkl"
+        if river_model is None or not river_path.is_file():
+            raise RuntimeError("River online model training did not produce its required artifact")
 
         # Keep this versioned candidate inactive until economic promotion validation.
         # Calculate training metrics
@@ -125,7 +139,7 @@ class ModelTrainer:
         logger.info("Models trained and saved: version=%s, samples=%d", version, len(X))
         return {
             "metrics": metrics,
-            "model_paths": {"rf": str(rf_path), "xgb": str(xgb_path), "scaler": str(scaler_path)},
+            "model_paths": {"rf": str(rf_path), "xgb": str(xgb_path), "scaler": str(scaler_path), "river": str(river_path)},
         }
 
     def _generate_version(self) -> str:
@@ -138,6 +152,7 @@ class ModelTrainer:
             self.model_dir / f"rf_{version}.pkl",
             self.model_dir / f"xgb_{version}.json",
             self.model_dir / f"scaler_{version}.pkl",
+            self.model_dir / f"river_{version}.pkl",
         )
         if not all(path.is_file() for path in required):
             raise FileNotFoundError(f"Model version {version} is missing required artifacts")
