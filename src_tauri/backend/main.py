@@ -170,7 +170,7 @@ async def lifespan(app: FastAPI):
         _apply_persisted_settings(db)
         integrity = db.integrity_check()
         if integrity.lower() != "ok":
-            raise RuntimeError(f"SQLite database integrity check failed: {integrity}")
+            raise RuntimeError(f"Database integrity check failed: {integrity}")
 
         # Initialize the trading engine and local API adapters.
         orchestrator = Orchestrator(db)
@@ -394,7 +394,10 @@ async def health_check():
     )
     return {
         "status": health.get("status", "unknown"),
-        "backend_ready": bool(database_connected and market_data_active),
+        # API/database readiness is independent of exchange availability.
+        # Market data is reported separately so a provider outage does not
+        # make the hosted control plane inaccessible.
+        "backend_ready": bool(database_connected and orchestrator is not None),
         # This is the local dashboard WebSocket service. Exchange market
         # stream health is reported separately so REST-only fallback stays usable.
         "websocket_connected": bool(ws_manager and ws_manager.get_stats().get("running")),
