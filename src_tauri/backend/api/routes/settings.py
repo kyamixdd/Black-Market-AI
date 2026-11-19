@@ -18,7 +18,7 @@ async def get_settings():
 
 @router.post("", response_model=SettingsResponse)
 async def update_settings(request: SettingsRequest):
-    """Reject updates until a validated configuration persistence path exists."""
+    """Persist validated operator settings through the shared backend bridge."""
     bridge = get_bridge()
     updates = {k: v for k, v in request.model_dump().items() if v is not None}
     try:
