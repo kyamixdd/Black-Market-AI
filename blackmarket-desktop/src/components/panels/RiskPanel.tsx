@@ -40,18 +40,18 @@ export const RiskPanel: React.FC = () => {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'NORMAL': return 'text-green-400';
-      case 'WARNING': return 'text-yellow-400';
-      case 'CRITICAL': return 'text-red-400';
+      case 'NORMAL': return 'text-gray-200';
+      case 'WARNING': return 'text-gray-200';
+      case 'CRITICAL': return 'text-gray-200';
       default: return 'text-gray-400';
     }
   };
 
   const getStatusDot = (status: string) => {
     switch (status) {
-      case 'NORMAL': return 'bg-green-400';
-      case 'WARNING': return 'bg-yellow-400';
-      case 'CRITICAL': return 'bg-red-400';
+      case 'NORMAL': return 'bg-gray-200';
+      case 'WARNING': return 'bg-gray-200';
+      case 'CRITICAL': return 'bg-gray-200';
       default: return 'bg-gray-400';
     }
   };
@@ -92,7 +92,7 @@ export const RiskPanel: React.FC = () => {
                 cy="96"
                 r="80"
                 fill="none"
-                stroke="#3b82f6"
+                stroke="#bfc3c5"
                 strokeWidth="8"
                 strokeDasharray={`${(data.current_exposure_pct / 100) * 502.65} 502.65`}
                 strokeLinecap="round"
@@ -105,7 +105,7 @@ export const RiskPanel: React.FC = () => {
                 cy="96"
                 r="68"
                 fill="none"
-                stroke="#fbbf24"
+                stroke="#858a8f"
                 strokeWidth="6"
                 strokeDasharray={`${(data.used_risk_capacity_pct / 100) * 427.26} 427.26`}
                 strokeLinecap="round"

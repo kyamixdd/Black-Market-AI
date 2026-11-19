@@ -51,16 +51,20 @@ class OutcomeLabeler:
     def _evaluate_prediction(self, pred: PredictionModel) -> dict[str, Any] | None:
         """Evaluate a single prediction's outcome."""
         # Check if enough time has passed
-        created_ms = int(pred.created_at.timestamp() * 1000)
-        horizon_ms = self.horizon_minutes * 60 * 1000
+        created_at = pred.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        created_ms = int(created_at.timestamp() * 1000)
+        horizon_ms = int(pred.horizon_minutes or self.horizon_minutes) * 60 * 1000
         current_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         if current_ms - created_ms < horizon_ms:
             return None  # Horizon not yet complete
 
         # Get market data at evaluation time
-        entry_price = self._get_price_at_time(pred.symbol, pred.market, created_ms)
-        exit_price = self._get_price_at_time(pred.symbol, pred.market, created_ms + horizon_ms)
+        timeframe = pred.timeframe if pred.timeframe in {"1m", "1h"} else "1m"
+        entry_price = self._get_price_at_time(pred.symbol, pred.market, created_ms, timeframe)
+        exit_price = self._get_price_at_time(pred.symbol, pred.market, created_ms + horizon_ms, timeframe)
 
         if entry_price is None or exit_price is None:
             return None
@@ -92,9 +96,10 @@ class OutcomeLabeler:
             "evaluation_notes": eval_notes
         }
 
-    def _get_price_at_time(self, symbol: str, market: str, timestamp_ms: int) -> float | None:
+    def _get_price_at_time(self, symbol: str, market: str, timestamp_ms: int,
+                           timeframe: str = "1m") -> float | None:
         """Get price for symbol at specific timestamp from candles."""
-        # Try to get from 1m candles
+        # Use the prediction's source timeframe when resolving outcomes.
         from database.connection import get_session_maker
         session_maker = get_session_maker()
         from sqlalchemy import select
@@ -107,7 +112,7 @@ class OutcomeLabeler:
                 .where(
                     CandleModel.symbol == symbol,
                     CandleModel.market == market,
-                    CandleModel.timeframe == "1m",
+                    CandleModel.timeframe == timeframe,
                     CandleModel.open_time <= timestamp_ms,
                 )
                 .order_by(CandleModel.open_time.desc())

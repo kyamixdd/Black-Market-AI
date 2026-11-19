@@ -337,6 +337,11 @@ class LearningStatusResponse(BaseModel):
     predictions_resolved: int
     accuracy: float
     recent_predictions: list[PredictionResponse]
+    training_state: str = "waiting"
+    training_samples: int = 0
+    last_training_at: str | None = None
+    last_cycle_status: str = "waiting"
+    river_updates: int = 0
 
 
 class ModelRegistryResponse(BaseModel):

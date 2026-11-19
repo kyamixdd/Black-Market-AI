@@ -86,11 +86,11 @@ export const MarketChart: React.FC<MarketChartProps> = ({
 
     // Create main candlestick series
     const candleSeries = chart.addCandlestickSeries({
-      upColor: '#a8d9c0',
-      downColor: '#d99ca5',
+      upColor: '#d9dbdc',
+      downColor: '#141516',
       borderVisible: false,
-      wickUpColor: '#a8d9c0',
-      wickDownColor: '#d99ca5',
+      wickUpColor: '#d9dbdc',
+      wickDownColor: '#d9dbdc',
       priceScaleId: 'right',
     });
 
@@ -141,7 +141,7 @@ export const MarketChart: React.FC<MarketChartProps> = ({
         const volumeData = data.candles.map((c: any) => ({
           time: c.open_time / 1000,
           value: c.volume,
-          color: c.close >= c.open ? '#a8d9c0' : '#d99ca5',
+          color: c.close >= c.open ? '#d9dbdc' : '#777c81',
         }));
         volumeSeriesRef.current?.setData(volumeData);
 

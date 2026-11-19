@@ -284,11 +284,13 @@ function PanelHeading({
 }
 
 function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return <div className="stat"><span>{label}</span><b className={tone}>{value}</b></div>
+  const alertNumber = /\b(SELL|LOW|RISK|ALERT)\b/i.test(label)
+  return <div className="stat"><span>{label}</span><b className={`${tone ?? ''}${alertNumber ? ' alert-digit' : ''}`.trim()}>{value}</b></div>
 }
 
 function App() {
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+  const hasBootstrappedRef = useRef(false)
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [searchValue, setSearchValue] = useState('BTCUSDT')
   const [marketType, setMarketType] = useState<'SPOT' | 'FUTURES'>('SPOT')
@@ -536,6 +538,16 @@ function App() {
         requestJson<unknown>(`/markets/${encodeURIComponent(symbol)}/candles${candleQuery}`),
       ])
       if (!active) return
+      const emptyCandleSeries = typeof candlePayload === 'object'
+        && candlePayload !== null
+        && 'candles' in candlePayload
+        && Array.isArray(candlePayload.candles)
+        && candlePayload.candles.length === 0
+      if (!snapshotPayload && emptyCandleSeries && symbol !== 'BTCUSDT') {
+        setSearchValue('BTCUSDT')
+        setSymbol('BTCUSDT')
+        return
+      }
       const assessment = assessMarketData(snapshotPayload, candlePayload, symbol, marketType)
       const marketDataIsUsable = assessment.dataLoaded
       setData((current) => {
@@ -733,6 +745,9 @@ function App() {
   const marketReady = marketDataLoaded && currentMarketDataStatus === 'ready'
   const analyticsReady = loadedAnalyticsKey === currentAnalyticsKey
   const appReady = apiReady && websocketInitialized && marketDataLoaded && analyticsReady
+  useEffect(() => {
+    if (appReady) hasBootstrappedRef.current = true
+  }, [appReady])
   const visibleMarket = marketDataLoaded ? data.market : null
   const visibleCandles = marketDataLoaded ? data.candles : []
   const visibleVolume = analyticsReady ? data.volume : null
@@ -975,7 +990,7 @@ function App() {
     }
   }
 
-  if (!appReady) {
+  if (!appReady && !hasBootstrappedRef.current) {
     const marketDataFailed = apiReady && currentMarketDataStatus === 'error'
     const marketSnapshotMissing = apiReady && currentMarketDataStatus === 'degraded' && !marketDataLoaded
     const startupFailed = startupStatus.state === 'failed'
@@ -1196,9 +1211,7 @@ function App() {
                   const change = numberValue(item.price_change_24h)
                   const activity = Math.max(0, Math.min(1, (item.volume_rank_pct ?? 0) / 100))
                   const intensity = Math.min(0.68, 0.12 + Math.min(Math.abs(change ?? 0) / 20, 0.36) + activity * 0.2)
-                  const color = change === undefined
-                    ? `rgba(174, 181, 188, ${intensity})`
-                    : change >= 0 ? `rgba(168, 217, 192, ${intensity})` : `rgba(217, 156, 165, ${intensity})`
+                  const color = `rgba(174, 181, 188, ${intensity})`
                   const title = `${item.symbol ?? 'Market'} ${item.market ?? ''} · 24h ${formatChange(change)} · relative strength ${formatChange(item.relative_strength_pct ?? undefined)} · volume rank ${metricText(item.volume_rank_pct)}% · volatility ${item.volatility_24h_pct == null ? 'unavailable' : `${metricText(item.volatility_24h_pct)}%`}`
                   return (
                     <button
@@ -1317,15 +1330,15 @@ function App() {
           <section className="panel risk-panel">
             <PanelHeading title="Risk analytics" detail={<span className={`risk-state ${riskStatus?.toLowerCase() ?? 'unknown'}`}>{riskStatus ?? 'UNAVAILABLE'}</span>} action={<button className="icon-button" aria-label="Download risk data as JSON" title={data.risk ? 'Download the loaded risk snapshot and alerts' : 'Risk data is not available'} disabled={!data.risk} onClick={downloadRiskData}><ArrowDownToLine size={14} /></button>} />
             <div className="risk-content">
-              <div className="risk-dial" style={{ background: `conic-gradient(from -90deg, #a8d9c0 0 ${riskCapacity ?? 0}%, #303336 ${riskCapacity ?? 0}% 100%)` }}>
-                <div><strong>{riskCapacity === undefined ? '—' : `${riskCapacity.toFixed(0)}%`}</strong><span>CAPACITY USED</span></div>
+              <div className="risk-dial" style={{ background: `conic-gradient(from -90deg, #d9dbdc 0 ${riskCapacity ?? 0}%, #303336 ${riskCapacity ?? 0}% 100%)` }}>
+                <div><strong className="risk-digit">{riskCapacity === undefined ? '—' : `${riskCapacity.toFixed(0)}%`}</strong><span>CAPACITY USED</span></div>
               </div>
               <div className="risk-stats">
-                <div><span>Current exposure</span><b>{formatChange(numberValue(data.risk?.current_exposure_pct))}</b></div>
-                <div><span>Open trade risk</span><b>{formatChange(numberValue(data.risk?.open_trade_risk_pct))}</b></div>
-                <div><span>Available capacity</span><b>{formatChange(numberValue(data.risk?.available_risk_capacity_pct))}</b></div>
-                <div><span>Daily loss capacity</span><b>{formatChange(numberValue(data.risk?.daily_loss_capacity_pct))}</b></div>
-                {data.risk?.unmeasured_positions ? <div className="risk-warning"><span>Positions without stop risk</span><b>{data.risk.unmeasured_positions}</b></div> : null}
+                <div><span>Current exposure</span><b className="risk-digit">{formatChange(numberValue(data.risk?.current_exposure_pct))}</b></div>
+                <div><span>Open trade risk</span><b className="risk-digit">{formatChange(numberValue(data.risk?.open_trade_risk_pct))}</b></div>
+                <div><span>Available capacity</span><b className="risk-digit">{formatChange(numberValue(data.risk?.available_risk_capacity_pct))}</b></div>
+                <div><span>Daily loss capacity</span><b className="risk-digit">{formatChange(numberValue(data.risk?.daily_loss_capacity_pct))}</b></div>
+                {data.risk?.unmeasured_positions ? <div className="risk-warning"><span>Positions without stop risk</span><b className="alert-digit">{data.risk.unmeasured_positions}</b></div> : null}
               </div>
             </div>
             <div className="risk-foot"><span>LIMITS {data.risk ? `${metricText(data.risk.max_total_open_pct)}% OPEN · ${metricText(data.risk.max_daily_loss_pct)}% DAILY` : '—'}</span><span>LOCAL RISK MANAGER</span></div>

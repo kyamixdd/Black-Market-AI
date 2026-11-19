@@ -21,7 +21,19 @@ class CandleManager:
     def __init__(self):
         self._candles: dict[tuple, list[dict]] = defaultdict(list)
         self._max_per_series = 500
-        self._last_open_time: dict[tuple, int] = {}
+
+    @staticmethod
+    def _find_candle_index(series: list[dict], open_time: int) -> int:
+        """Find the sorted insertion point for an open timestamp."""
+        low = 0
+        high = len(series)
+        while low < high:
+            middle = (low + high) // 2
+            if series[middle]["open_time"] < open_time:
+                low = middle + 1
+            else:
+                high = middle
+        return low
 
     def add_candle(self, market: str, symbol: str, timeframe: str,
                    open_time: int, open_: float, high: float, low: float,
@@ -29,19 +41,20 @@ class CandleManager:
         """Add a candle, deduplicate by open_time. Returns True if added, False if duplicate."""
         key = (market, symbol, timeframe)
 
-        # Deduplication: skip if same open_time already exists
-        if self._last_open_time.get(key) == open_time:
+        series = self._candles[key]
+        index = self._find_candle_index(series, open_time)
+        if index < len(series) and series[index]["open_time"] == open_time:
             return False
 
-        self._candles[key].append({
+        candle = {
             "open_time": open_time, "open": open_, "high": high,
             "low": low, "close": close, "volume": volume,
             "close_time": close_time or open_time + TIMEFRAME_SECONDS.get(timeframe, 60) * 1000 - 1,
-        })
-        self._last_open_time[key] = open_time
+        }
+        series.insert(index, candle)
 
-        if len(self._candles[key]) > self._max_per_series:
-            self._candles[key] = self._candles[key][-self._max_per_series:]
+        if len(series) > self._max_per_series:
+            del series[:-self._max_per_series]
         return True
 
     def update_current_candle(self, market: str, symbol: str, timeframe: str,
@@ -50,9 +63,10 @@ class CandleManager:
         """Replace the current unclosed candle when a REST refresh has newer values."""
         key = (market, symbol, timeframe)
         series = self._candles.get(key, [])
-        if not series or series[-1]["open_time"] != open_time:
+        index = self._find_candle_index(series, open_time)
+        if index >= len(series) or series[index]["open_time"] != open_time:
             return False
-        series[-1] = {
+        series[index] = {
             "open_time": open_time,
             "open": open_,
             "high": high,
@@ -130,7 +144,6 @@ class CandleManager:
 
     def clear(self) -> None:
         self._candles.clear()
-        self._last_open_time.clear()
 
     async def collect_historical(self, spot_client, futures_client, market: str, symbol: str,
                                   timeframe: str, limit: int = 500) -> int:

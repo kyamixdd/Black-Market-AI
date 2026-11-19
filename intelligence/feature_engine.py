@@ -16,7 +16,7 @@ class FeatureEngine:
         # Timeframe priorities
         for tf in ["15m", "1h", "4h", "1d"]:
             if tf not in ohlc_data:
-                features.extend([0.0] * 12)
+                features.extend([0.0] * 9)
                 continue
             data = ohlc_data[tf]
             closes = data["close"]
@@ -24,7 +24,7 @@ class FeatureEngine:
             lows = data["low"]
             volumes = data["volume"]
             if len(closes) < 20:
-                features.extend([0.0] * 12)
+                features.extend([0.0] * 9)
                 continue
             price = closes[-1]
             rsi = MomentumAnalyzer.rsi(closes)

@@ -1451,5 +1451,14 @@ Use the official Tauri Windows prerequisites at https://v2.tauri.app/start/prere
 - This is **not a self-contained installer**: the bundle contains the app and Python source but not a Python runtime or Python dependencies. Runtime verification used the existing project `.venv` through `BLACKMARKET_PYTHON`; another computer must have Python 3.10+ and the backend requirements installed/configured.
 - Native title/window existence and OS close behavior were checked, but custom React window-control clicks and visual comparison were not manually exercised.
 - Unexpected forced process-crash/restart remains unverified. Production Binance scanning continues to use public REST polling; exchange stream subscriptions are not configured. Watchdog stalls are logged but not automatically restarted.
+
+## Historical candle rendering follow-up (2026-11-19)
+
+- Confirmed the active dashboard chart is `blackmarket-desktop/src/components/charts/LiveMarketChart.tsx`; the legacy `MarketChart.tsx` is not mounted by the dashboard.
+- Live Binance API matrix for BTCUSDT passed backend validity checks across Spot/Futures and all nine timeframes: each response is ascending, unique, and passes OHLC invariants with finite volume. Counts: 500 per combination except weekly (Spot 484, Futures 377).
+- Changed the active chart's down-candle fill from the chart background to gray so candle bodies remain visible while retaining a grayscale palette.
+- Rebase the chart series with `setData()` when a bounded data window advances or changes size; `update()` cannot evict an old bar from a fixed-size sliding window.
+- Removed full-screen startup card for subsequent market/timeframe/data transitions after the initial dashboard bootstrap; initial startup still uses the existing readiness card.
+- Frontend `npm test` passed (4 tests); `npm run build` passed. Desktop accessibility tree confirmed BTCUSDT Spot 4h / 500 candles / READY. Desktop screenshot capture timed out, so visual appearance and Futures UI switching were not confirmed in this run.
 - The 200 full-suite warnings remain third-party FastAPI/Starlette `asyncio.iscoroutinefunction` deprecations and one Starlette TestClient AnyIO `BlockingPortal` deprecation; no warning suppression was added.
 - The runtime smoke test used a fresh temporary app-data database on this host. It did not modify the source project database, models, or the user's private `.env`.

@@ -146,6 +146,34 @@ class Repository:
             return session.get(SignalModel, signal_id)
 
     # --- Prediction Repo ---
+    def save_candles(self, symbol: str, market: str, timeframe: str,
+                     candles: list[dict[str, Any]]) -> int:
+        """Upsert validated OHLC candles used by charting and outcome evaluation."""
+        if not candles:
+            return 0
+        with self._get_session() as session:
+            for candle in candles:
+                key = (symbol, market, timeframe, int(candle["open_time"]))
+                row = session.get(CandleModel, key)
+                values = {
+                    "open": float(candle["open"]),
+                    "high": float(candle["high"]),
+                    "low": float(candle["low"]),
+                    "close": float(candle["close"]),
+                    "volume": float(candle.get("volume", 0.0)),
+                    "close_time": int(candle["close_time"]),
+                }
+                if row is None:
+                    session.add(CandleModel(
+                        symbol=symbol, market=market, timeframe=timeframe,
+                        open_time=key[3], **values,
+                    ))
+                else:
+                    for name, value in values.items():
+                        setattr(row, name, value)
+            session.commit()
+        return len(candles)
+
     def save_prediction(self, pred: dict[str, Any]) -> str:
         with self._get_session() as session:
             existing = session.get(PredictionModel, pred["prediction_id"])
@@ -327,6 +355,12 @@ class Repository:
                 .limit(1)
             )
             return session.scalars(stmt).first()
+
+    def get_model_registry(self) -> list[ModelRegistryModel]:
+        """Return registered models in most recently trained order."""
+        with self._get_session() as session:
+            stmt = select(ModelRegistryModel).order_by(ModelRegistryModel.trained_at.desc())
+            return list(session.scalars(stmt).all())
 
     def promote_model(self, version: str) -> None:
         with self._get_session() as session:

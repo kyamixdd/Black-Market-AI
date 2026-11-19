@@ -476,22 +476,28 @@ class OrchestratorBridge:
     def get_learning_status(self) -> dict:
         """Get learning engine status."""
         predictor = self.intelligence.predictor
-        from database.repositories import Repository
-        preds = self.repo.get_predictions_history(100)
+        preds = self.repo.get_predictions_history(10000)
         resolved = [p for p in preds if p.is_correct is not None]
         correct = [p for p in resolved if p.is_correct]
         accuracy = len(correct) / len(resolved) * 100 if resolved else 0
+        learning_service = getattr(self.orch, "learning_service", None)
+        state = getattr(learning_service, "state", "waiting")
 
         return {
-            "model_status": "Ready" if predictor.is_trained else "Not Trained",
+            "model_status": "Trained" if predictor.is_trained else "Training" if state in {"bootstrapping", "training"} else "Not Trained",
             "version": predictor.version if predictor.is_trained else None,
             "rf_loaded": predictor.rf_model is not None,
             "xgb_loaded": predictor.xgb_model is not None,
-            "river_available": True,
+            "river_available": predictor.river_model is not None,
             "predictions_total": len(preds),
             "predictions_resolved": len(resolved),
             "accuracy": accuracy,
             "recent_predictions": self.get_recent_predictions(10),
+            "training_state": state,
+            "training_samples": getattr(learning_service, "training_samples", 0),
+            "last_training_at": getattr(learning_service, "last_training_at", None),
+            "last_cycle_status": getattr(learning_service, "last_cycle_status", "waiting"),
+            "river_updates": getattr(learning_service, "river_updates", 0),
         }
 
     def get_recent_predictions(self, limit: int = 100) -> list[dict]:
@@ -527,21 +533,29 @@ class OrchestratorBridge:
 
     def get_model_registry(self) -> list[dict]:
         """Get model registry."""
-        from database.repositories import Repository
         models = self.repo.get_model_registry()
+        def decode(value):
+            if not value:
+                return None
+            if isinstance(value, dict):
+                return value
+            try:
+                return json.loads(value)
+            except (TypeError, json.JSONDecodeError):
+                return {}
         return [
             {
                 "version": m.version,
                 "model_type": m.model_type,
                 "trained_at": m.trained_at.isoformat() if m.trained_at else None,
-                "metrics": m.metrics,
+                "metrics": decode(m.metrics) or {},
                 "file_path": m.file_path,
                 "status": m.status,
                 "is_active": m.is_active,
                 "is_champion": m.is_champion,
                 "parent_version": m.parent_version,
-                "evaluation_data": m.evaluation_data,
-                "promotion_criteria": m.promotion_criteria,
+                "evaluation_data": decode(m.evaluation_data),
+                "promotion_criteria": decode(m.promotion_criteria),
                 "rollback_checkpoint": m.rollback_checkpoint,
             }
             for m in models

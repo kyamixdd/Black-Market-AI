@@ -15,8 +15,8 @@
   --text: #eeeeee;
   --secondary: #999da2;
   --muted: #666a70;
-  --positive: #a8d9c0;
-  --negative: #d99ca5;
+  --positive: #d9dbdc;
+  --negative: #d9dbdc;
   --mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", Consolas, monospace;
 
   color-scheme: dark;
@@ -62,7 +62,7 @@ input:focus-visible {
 
 ::selection {
   color: #101112;
-  background: #a8d9c0;
+  background: #d9dbdc;
 }
 
 ::-webkit-scrollbar {

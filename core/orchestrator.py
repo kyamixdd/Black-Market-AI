@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from config import (
+    AUTO_MODEL_TRAINING,
     PAPER_TRADING_ENABLED,
     SPOT_ENABLED,
     TELEGRAM_ENABLED,
@@ -29,6 +30,7 @@ from intelligence.strategy_selector import StrategySelector
 from learning.predictor import Predictor
 from learning.performance_analyzer import PerformanceAnalyzer
 from learning.outcome_labeler import OutcomeLabeler
+from learning.live_service import LiveLearningService
 from market.candle_manager import CandleManager
 from market.data_integrity import DataIntegrityGuardian
 from market.market_cache import MarketCache
@@ -64,6 +66,9 @@ class Orchestrator:
         self.integrity: DataIntegrityGuardian = DataIntegrityGuardian(self.candle_manager)
         # Intelligence core
         self.intelligence: IntelligenceCore = IntelligenceCore(self.event_bus, self.candle_manager, self.integrity)
+        # Keep one canonical predictor for the API, live inference, and learning loop.
+        self.predictor = self.intelligence.predictor
+        self.learning_service = LiveLearningService(self)
         # Learning accountability
         self.outcome_labeler = OutcomeLabeler(self.repo, self.simulator)
         self.performance_analyzer = PerformanceAnalyzer(self.repo)
@@ -276,6 +281,13 @@ class Orchestrator:
     async def run(self) -> None:
         self._running = True
         await self.scanner.start()
+        if AUTO_MODEL_TRAINING:
+            self._tasks.append(asyncio.create_task(
+                self.learning_service.run(), name="blackmarket-live-learning"
+            ))
+        else:
+            self.learning_service.state = "disabled"
+            self.learning_service.last_cycle_status = "AUTO_MODEL_TRAINING is disabled"
         logger.info("BlackMarket AI running")
         # Main loop - keep running until stopped
         while self._running:
@@ -297,6 +309,11 @@ class Orchestrator:
     async def stop(self) -> None:
         logger.info("Shutting down...")
         self._running = False
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            self._tasks.clear()
         await self.scanner.stop()
         await self.disaster_recovery.ws_reconnection.stop()
         await self.ws_manager.stop()

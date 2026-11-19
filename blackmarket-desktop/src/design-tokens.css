@@ -1,0 +1,27 @@
+:root {
+  --bg: #0d0e10;
+  --panel: #111214;
+  --panel-raised: #17181a;
+  --border: #303235;
+  --grid: #25272a;
+  --text: #f0f1f2;
+  --secondary: #a5a8ab;
+  --muted: #72767a;
+  --positive: #d9dbdc;
+  --negative: #d9dbdc;
+  --warning: #bfc3c5;
+  --danger-digit: #f04444;
+  --accent: #d9dbdc;
+  --mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", Consolas, monospace;
+  --font-xs: 7px;
+  --font-sm: 9px;
+  --font-md: 11px;
+  --font-lg: 15px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --radius-sm: 2px;
+  --radius-card: 3px;
+  --shadow-panel: inset 0 1px 0 #ffffff05;
+}

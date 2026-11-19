@@ -121,9 +121,9 @@ class WalkForwardValidator:
     def validate_ensemble(self, X: np.ndarray, y: np.ndarray,
                           rf_params: dict | None = None, xgb_params: dict | None = None) -> dict[str, Any]:
         """Validate both RF and XGBoost, return combined results."""
-        rf_params = rf_params or {"n_estimators": 200, "max_depth": 10, "random_state": 42, "n_jobs": -1}
-        xgb_params = xgb_params or {"n_estimators": 200, "max_depth": 6, "learning_rate": 0.05,
-                                    "random_state": 42, "n_jobs": -1, "eval_metric": "mlogloss"}
+        rf_params = rf_params or {"n_estimators": 100, "max_depth": 10, "random_state": 42, "n_jobs": -1}
+        xgb_params = xgb_params or {"n_estimators": 100, "max_depth": 6, "learning_rate": 0.05,
+                                    "random_state": 42, "n_jobs": 1, "eval_metric": "mlogloss"}
 
         def rf_factory():
             return RandomForestClassifier(**rf_params)

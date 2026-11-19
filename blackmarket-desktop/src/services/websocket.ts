@@ -73,6 +73,7 @@ class WebSocketService {
     const token = getApiToken()
     if (!token) {
       this.setState('disconnected')
+      if (!this.manuallyDisconnected) this.scheduleReconnect()
       return Promise.reject(new Error('The authenticated desktop API session is unavailable.'))
     }
 
@@ -132,6 +133,7 @@ class WebSocketService {
         }
       } catch (error) {
         this.setState('disconnected')
+        if (!this.manuallyDisconnected) this.scheduleReconnect()
         reject(error)
       }
     })

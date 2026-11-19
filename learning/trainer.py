@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,13 +32,20 @@ class ModelTrainer:
         self.validator = WalkForwardValidator()
         self.model_dir = Path(MODELS_DIR)
         self.model_dir.mkdir(parents=True, exist_ok=True)
+        self.last_river_path: Path | None = None
 
-    def train_and_validate(self) -> dict[str, Any]:
+    def train_and_validate(self, X: np.ndarray | None = None, y: np.ndarray | None = None) -> dict[str, Any]:
         """Full training pipeline: build dataset, validate, train, register."""
         # 1. Build dataset
-        X, y = self.dataset_builder.build_dataset()
+        if X is None or y is None:
+            X, y = self.dataset_builder.build_dataset()
         if len(X) == 0:
             return {"status": "insufficient_data", "samples": 0}
+
+        X = np.asarray(X, dtype=np.float32)
+        y = np.asarray(y, dtype=np.int32)
+        if X.ndim != 2 or y.ndim != 1 or len(X) != len(y) or len(np.unique(y)) < 2:
+            return {"status": "insufficient_data", "samples": len(y), "reason": "invalid_or_single_class_dataset"}
 
         # 2. Walk-forward validation
         validation = self.validator.validate_ensemble(X, y)
@@ -67,19 +75,17 @@ class ModelTrainer:
     def _train_final_models(self, X: np.ndarray, y: np.ndarray, version: str) -> dict[str, Any]:
         """Train final models on full dataset and save."""
         # Train RF
-        rf = RandomForestClassifier(n_estimators=300, max_depth=12, random_state=42, n_jobs=-1)
-        rf.fit(X, y)
+        scaler = StandardScaler()
+        Xs = scaler.fit_transform(X)
+        rf = RandomForestClassifier(n_estimators=150, max_depth=12, random_state=42, n_jobs=-1)
+        rf.fit(Xs, y)
 
         # Train XGBoost
         xgb_model = xgb.XGBClassifier(
-            n_estimators=300, max_depth=8, learning_rate=0.05,
-            random_state=42, n_jobs=-1, eval_metric="mlogloss"
+            n_estimators=150, max_depth=6, learning_rate=0.05,
+            random_state=42, n_jobs=1, eval_metric="mlogloss"
         )
-        xgb_model.fit(X, y)
-
-        # Fit scaler
-        scaler = StandardScaler()
-        scaler.fit(X)
+        xgb_model.fit(Xs, y)
 
         # Save models
         rf_path = self.model_dir / f"rf_{version}.pkl"
@@ -94,8 +100,8 @@ class ModelTrainer:
         self._update_latest_symlinks(version)
 
         # Calculate training metrics
-        rf_pred = rf.predict(X)
-        xgb_pred = xgb_model.predict(X)
+        rf_pred = rf.predict(Xs)
+        xgb_pred = xgb_model.predict(Xs)
         from sklearn.metrics import accuracy_score, f1_score
         metrics = {
             "rf_accuracy": float(accuracy_score(y, rf_pred)),
@@ -121,12 +127,18 @@ class ModelTrainer:
         return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
     def _update_latest_symlinks(self, version: str) -> None:
-        """Update 'latest' symlinks to point to new version."""
-        for name in ["rf_model.pkl", "xgb_model.json", "scaler.pkl"]:
+        """Atomically copy latest model files (Windows does not guarantee symlink rights)."""
+        latest_files = {
+            "rf_model.pkl": f"rf_{version}.pkl",
+            "xgb_model.json": f"xgb_{version}.json",
+            "scaler.pkl": f"scaler_{version}.pkl",
+        }
+        for name, source_name in latest_files.items():
             target = self.model_dir / name
-            if target.exists() or target.is_symlink():
-                target.unlink()
-            target.symlink_to(self.model_dir / name.replace(".", f"_{version}."))
+            source = self.model_dir / source_name
+            temporary = target.with_suffix(target.suffix + ".tmp")
+            shutil.copy2(source, temporary)
+            temporary.replace(target)
 
     def _register_model(self, version: str, model_type: str, metrics: dict, file_path: str) -> None:
         """Register model in database."""
@@ -146,7 +158,7 @@ class ModelTrainer:
         val_dir.mkdir(parents=True, exist_ok=True)
         import json as json_lib
         with open(val_dir / f"validation_{version}.json", "w") as f:
-            json_lib.dump(validation, f, indent=2)
+            json_lib.dump(validation, f, indent=2, default=lambda value: value.item() if isinstance(value, np.generic) else str(value))
 
     def train_river_online(self, X: np.ndarray, y: np.ndarray) -> compose.Pipeline | None:
         """Train River online learning model for incremental updates."""
@@ -155,8 +167,8 @@ class ModelTrainer:
                 ("scaler", preprocessing.StandardScaler()),
                 ("model", tree.HoeffdingTreeClassifier(
                     grace_period=100,
-                    split_confidence=1e-5,
-                    tie_threshold=0.05,
+                    delta=1e-5,
+                    tau=0.05,
                 ))
             )
 
@@ -167,6 +179,15 @@ class ModelTrainer:
             version = self._generate_version()
             river_path = self.model_dir / f"river_{version}.pkl"
             joblib.dump(model, river_path)
+            self.last_river_path = river_path
+            self.repo.save_model_registry({
+                "version": f"river_{version}",
+                "model_type": "river",
+                "metrics": {"samples": int(len(X)), "features": int(X.shape[1])},
+                "file_path": str(river_path),
+                "status": "TRAINED",
+                "is_active": False,
+            })
 
             logger.info("River online model trained and saved: %s", river_path)
             return model
@@ -193,7 +214,7 @@ class ModelTrainer:
             active = session.scalars(stmt).first()
 
         if not active:
-            return {"status": "no_active_model", "action": "train"}
+            return self.train_and_validate()
 
         days_since = (datetime.now(timezone.utc) - active.trained_at).days
         if days_since >= MODEL_RETRAIN_MIN_DAYS:

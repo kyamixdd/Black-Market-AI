@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import logging
+import json
 from pathlib import Path
 
 import numpy as np
+from sqlalchemy import select
 
 from config import WALK_FORWARD_MIN_SAMPLES
 from database.connection import get_session_maker
@@ -43,7 +45,16 @@ class DatasetBuilder:
 
         for pred in resolved:
             try:
-                features = self._build_features_for_prediction(pred)
+                features = None
+                if pred.feature_values:
+                    try:
+                        vector = np.asarray(json.loads(pred.feature_values), dtype=np.float32)
+                        if vector.ndim == 1 and vector.size > 0 and np.isfinite(vector).all():
+                            features = vector
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        logger.warning("Ignoring invalid saved features for %s", pred.prediction_id)
+                if features is None:
+                    features = self._build_features_for_prediction(pred)
                 if features is not None:
                     X_list.append(features)
                     y_list.append(self._outcome_to_class(pred.actual_outcome))

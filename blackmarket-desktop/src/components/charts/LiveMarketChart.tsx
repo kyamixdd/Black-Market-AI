@@ -70,6 +70,7 @@ export function LiveMarketChart({
   const dataKeyRef = useRef('')
   const candlesRef = useRef<MarketCandle[]>([])
   const loadOlderRef = useRef(onLoadOlder)
+  const userNavigatedRef = useRef(false)
 
   useEffect(() => {
     loadOlderRef.current = onLoadOlder
@@ -126,12 +127,14 @@ export function LiveMarketChart({
     })
 
     candleSeriesRef.current = chart.addSeries(CandlestickSeries, {
-      upColor: '#d9dcde',
-      downColor: '#141516',
-      borderUpColor: '#d9dcde',
-      borderDownColor: '#d9dcde',
-      wickUpColor: '#d9dcde',
-      wickDownColor: '#d9dcde',
+      upColor: '#f1f1f1',
+      // Down candles must remain visible against the near-black chart background.
+      // Keep the palette monochrome while using a light fill for both directions.
+      downColor: '#9a9da0',
+      borderUpColor: '#f1f1f1',
+      borderDownColor: '#c7c9ca',
+      wickUpColor: '#f1f1f1',
+      wickDownColor: '#c7c9ca',
       priceLineColor: '#b5b9bc',
       lastValueVisible: true,
     })
@@ -142,14 +145,14 @@ export function LiveMarketChart({
       priceLineVisible: false,
     })
     smaSeriesRef.current = chart.addSeries(LineSeries, {
-      color: '#a8d9c0',
+      color: '#bfc3c5',
       lineWidth: 1,
       lastValueVisible: false,
       priceLineVisible: false,
       crosshairMarkerVisible: false,
     })
     emaSeriesRef.current = chart.addSeries(LineSeries, {
-      color: '#d99ca5',
+      color: '#858a8f',
       lineWidth: 1,
       lastValueVisible: false,
       priceLineVisible: false,
@@ -160,10 +163,22 @@ export function LiveMarketChart({
       scaleMargins: { top: 0.82, bottom: 0 },
     })
     chartRef.current = chart
+    const markUserNavigation = () => {
+      userNavigatedRef.current = true
+    }
+    const markPointerNavigation = (event: PointerEvent) => {
+      if (event.buttons > 0) markUserNavigation()
+    }
     const handleVisibleRange = (range: { from: number; to: number } | null) => {
-      if (range && range.from < 50) loadOlderRef.current()
+      if (range && range.from < 50 && userNavigatedRef.current) {
+        userNavigatedRef.current = false
+        loadOlderRef.current()
+      }
     }
     chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleRange)
+    container.addEventListener('pointermove', markPointerNavigation)
+    container.addEventListener('wheel', markUserNavigation, { passive: true })
+    container.addEventListener('touchmove', markUserNavigation, { passive: true })
 
     const resizeObserver = new ResizeObserver(() => {
       if (!containerRef.current || !chartRef.current) return
@@ -176,6 +191,9 @@ export function LiveMarketChart({
 
     return () => {
       resizeObserver.disconnect()
+      container.removeEventListener('pointermove', markPointerNavigation)
+      container.removeEventListener('wheel', markUserNavigation)
+      container.removeEventListener('touchmove', markUserNavigation)
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleRange)
       chart.remove()
       chartRef.current = null
@@ -194,7 +212,9 @@ export function LiveMarketChart({
 
     const key = marketChartKey(symbol, marketType, timeframe)
     const previous = candlesRef.current
-    const reset = dataKeyRef.current !== key || candles.length < previous.length
+    const reset = dataKeyRef.current !== key
+      || candles.length < previous.length
+      || (previous.length === 0 && candles.length > 0)
     const prepended = !reset
       && previous.length > 0
       && candles.length > previous.length
@@ -231,6 +251,26 @@ export function LiveMarketChart({
       if (visibleRange) chart.timeScale().setVisibleRange(visibleRange)
     } else if (candles.length) {
       const lastPreviousTime = previous.at(-1)?.time ?? 0
+      const latestTime = candles.at(-1)?.time ?? 0
+      const seriesNeedsRebase = candles.length !== previous.length
+        || latestTime !== lastPreviousTime
+        || (previous.at(-1)?.close !== candles.at(-1)?.close)
+      if (seriesNeedsRebase) {
+        // REST refreshes can roll a bounded window forward, which incremental
+        // update() cannot represent because it cannot remove the expired first bar.
+        candleSeries.setData(candles.map((candle) => ({
+          time: candle.time as UTCTimestamp,
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+        })))
+        volumeSeries.setData(candles.map((candle) => ({
+          time: candle.time as UTCTimestamp,
+          value: candle.volume ?? 0,
+          color: candle.close >= candle.open ? '#bfc3c5' : '#666b70',
+        })))
+      } else {
       for (const candle of candles) {
         if (candle.time < lastPreviousTime) continue
         candleSeries.update({
@@ -245,6 +285,7 @@ export function LiveMarketChart({
           value: candle.volume ?? 0,
           color: candle.close >= candle.open ? '#bfc3c5' : '#666b70',
         })
+      }
       }
     }
     candlesRef.current = candles

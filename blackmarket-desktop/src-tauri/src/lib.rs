@@ -1,7 +1,9 @@
 mod backend;
 
 use backend::{BackendSupervisor, StartupStatus};
-use tauri::{Manager, State};
+use tauri::{Manager, State, WebviewWindowBuilder};
+#[cfg(debug_assertions)]
+use std::path::PathBuf;
 
 #[tauri::command]
 fn backend_startup_status(supervisor: State<'_, BackendSupervisor>) -> StartupStatus {
@@ -34,6 +36,20 @@ pub fn run() {
       retry_backend_startup
     ])
     .setup(|app| {
+      let window_config = &app.config().app.windows[0];
+      let window_builder = WebviewWindowBuilder::from_config(app.handle(), window_config)?;
+      #[cfg(debug_assertions)]
+      let window_builder = {
+        let webview_profile = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+          .join("target")
+          .join("blackmarket-webview-dev");
+        std::fs::create_dir_all(&webview_profile)?;
+        window_builder.data_directory(webview_profile)
+      };
+      let window = window_builder.visible(true).build()?;
+      window.set_title("BlackMarket AI")?;
+      window.show()?;
+      window.set_focus()?;
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()

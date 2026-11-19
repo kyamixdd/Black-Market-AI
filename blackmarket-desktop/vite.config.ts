@@ -14,6 +14,11 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    // Cargo writes and locks native build artifacts here while Tauri is running.
+    // They are not frontend source and should never be part of Vite's watcher tree.
+    watch: {
+      ignored: ['**/src-tauri/target/**'],
+    },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8765',

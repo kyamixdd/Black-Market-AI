@@ -1,5 +1,5 @@
-import { Children, useMemo, useState } from 'react'
-import type { ReactNode } from 'react'
+import { useMemo, useState } from 'react'
+import { DataTable as Table, DetailCard, EmptyState, ScreenHeader, SummaryCard, TableHead } from '../components/ui/TerminalPrimitives'
 
 export type ScreenName =
   | 'Overview'
@@ -185,6 +185,11 @@ export type WorkspaceLearning = {
   predictions_total?: number
   predictions_resolved?: number
   accuracy?: number
+  training_state?: string
+  training_samples?: number
+  last_training_at?: string | null
+  last_cycle_status?: string
+  river_updates?: number
 }
 
 export type WorkspaceSettings = {
@@ -313,27 +318,6 @@ function dateOfLastCandle(candles: AnalysisCandle[]): string {
   return time === undefined ? '—' : timestamp(new Date(time * 1000).toISOString())
 }
 
-function ScreenHeader({ title, description, actions }: { title: string; description: string; actions?: ReactNode }) {
-  return (
-    <div className="workspace-header">
-      <div><h1>{title}</h1><p>{description}</p></div>
-      {actions && <div className="workspace-actions">{actions}</div>}
-    </div>
-  )
-}
-
-function SummaryCard({ label, value, detail, tone }: { label: string; value: string; detail?: string; tone?: string }) {
-  return <div className="workspace-summary-card"><span>{label}</span><strong className={tone}>{value}</strong>{detail && <small>{detail}</small>}</div>
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <div className="workspace-empty">{text}</div>
-}
-
-function DetailCard({ label, value }: { label: string; value: string }) {
-  return <div className="workspace-detail"><span>{label}</span><b>{value}</b></div>
-}
-
 function SignalInspector({
   signal,
   onClose,
@@ -396,15 +380,6 @@ function PositionInspector({
       </div>
     </section>
   )
-}
-
-function Table({ children, minWidth = 720 }: { children: ReactNode; minWidth?: number }) {
-  const [header, ...rows] = Children.toArray(children)
-  return <div className="workspace-table-wrap"><table style={{ minWidth }}><thead>{header}</thead><tbody>{rows}</tbody></table></div>
-}
-
-function TableHead({ labels }: { labels: string[] }) {
-  return <tr>{labels.map((label) => <th key={label}>{label}</th>)}</tr>
 }
 
 function MarketScreen({ data, onSelectMarket }: Pick<Props, 'data' | 'onSelectMarket'>) {
@@ -705,7 +680,7 @@ function LearningScreen({ data }: { data: WorkspaceData }) {
   return (
     <>
       <ScreenHeader title="Learning" description="Local model status, predictions, outcomes, and persisted promotion or rollback events" />
-      <div className="workspace-summary"><SummaryCard label="MODEL STATUS" value={data.learning?.model_status ?? 'Unavailable'} /><SummaryCard label="ACTIVE VERSION" value={data.learning?.version ?? '—'} /><SummaryCard label="PREDICTIONS" value={String(data.learning?.predictions_total ?? '—')} /><SummaryCard label="RESOLVED" value={String(data.learning?.predictions_resolved ?? '—')} /><SummaryCard label="MEASURED ACCURACY" value={data.learning?.accuracy == null ? '—' : `${data.learning.accuracy.toFixed(2)}%`} detail="Resolved outcomes only" /></div>
+      <div className="workspace-summary"><SummaryCard label="MODEL STATUS" value={data.learning?.model_status ?? 'Unavailable'} /><SummaryCard label="LEARNING LOOP" value={data.learning?.training_state ?? '—'} detail={data.learning?.last_cycle_status ?? 'No cycle reported'} /><SummaryCard label="ACTIVE VERSION" value={data.learning?.version ?? '—'} /><SummaryCard label="BOOTSTRAP SAMPLES" value={String(data.learning?.training_samples ?? '—')} detail="Historical labeled hourly candles" /><SummaryCard label="ONLINE UPDATES" value={String(data.learning?.river_updates ?? '—')} /><SummaryCard label="PREDICTIONS" value={String(data.learning?.predictions_total ?? '—')} /><SummaryCard label="RESOLVED" value={String(data.learning?.predictions_resolved ?? '—')} /><SummaryCard label="MEASURED ACCURACY" value={data.learning?.accuracy == null ? '—' : `${data.learning.accuracy.toFixed(2)}%`} detail="Resolved outcomes only" /></div>
       <h2 className="workspace-section-title">Model registry · candidate / champion state</h2>
       {data.models.length ? <Table minWidth={900}>
         <TableHead labels={['VERSION', 'MODEL', 'STATUS', 'ACTIVE', 'CHAMPION', 'PARENT', 'TRAINED']} />
