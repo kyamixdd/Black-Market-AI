@@ -51,7 +51,7 @@ export default function Dashboard(){
    <div className="content"><div className="welcome-row"><div><h2>{section==="Overview"?"Market overview":section+" workspace"}</h2><p>Exchange research · Strategy intelligence · Simulated execution</p></div><small>Updated {updated||"—"}</small></div>
     {error&&<div className="error-banner"><b>Connection issue</b> {error}. Check backend availability and deployment environment variables.</div>}
     {section==="Overview"&&<div className="metric-grid">{["portfolio/summary","risk/status","learning/status","signals/stats"].map(k=><Card key={k} title={k.split("/").join(" · ")}><pre>{pretty(data[k])}</pre></Card>)}</div>}
-    {section==="Settings"&&<SettingsPanel current={data["settings"]} onSave={async(value)=>{const result=await api("settings",{method:"POST",body:JSON.stringify(value)});await load();return result;}}/>}
+    {section==="Settings"&&<SettingsPanel current={data["settings"]} onSave={async(value)=>{const result=await api("settings",{method:"POST",body:JSON.stringify(value)});setData(prev=>({...prev,settings:result}));return result;}}/>}
     <div className="data-grid">{entries.filter(([k])=>section!=="Overview"||k==="markets").map(([key,value])=><Card key={key} title={key.replaceAll("/"," · ")}><DataView value={value}/></Card>)}</div>
     {entries.length===0&&!error&&<div className="empty">No response data yet. Refresh after the backend has started.</div>}
     <div className="notice">Research and paper-trading interface. No live exchange orders are submitted by this web dashboard.</div>
