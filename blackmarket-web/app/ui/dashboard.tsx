@@ -133,7 +133,7 @@ function SettingsPanel({current,onSave}:{current:any;onSave:(value:any)=>Promise
   finally{setSaving(false);}
  }
  return <Card title="Shared engine configuration">
-  <p className="muted">These settings are stored in the shared backend database and are used by the desktop and website. Secret credentials are never shown or editable here.</p>
+  <p className="muted">These settings persist in the hosted backend database. To synchronize them with desktop, configure the desktop backend to use this same PostgreSQL database. Secret credentials are never shown or editable here.</p>
   {!current?<p className="muted">Settings are unavailable until the backend connects.</p>:<>
    <div className="settings-toggle-grid">
     {([["spot_enabled","Spot market data"],["futures_enabled","USDⓈ-M futures"],["scan_all_eligible_symbols","Scan all eligible symbols"],["telegram_enabled","Telegram notifications"]] as [string,string][]).map(([key,label])=><label className="settings-toggle" key={key}><input type="checkbox" checked={Boolean(draft[key])} onChange={e=>toggle(key,e.target.checked)}/><span>{label}</span></label>)}
