@@ -369,3 +369,59 @@ def test_trainer_waits_for_economic_review_instead_of_retraining_pending_candida
         assert training_calls == []
     finally:
         db.close()
+
+
+def test_predictor_recovers_active_versioned_bundle_when_aliases_are_missing(monkeypatch, tmp_path):
+    from learning import predictor as predictor_module
+
+    class FakeRF:
+        n_features_in_ = 2
+
+    class FakeRiver:
+        def predict_proba_one(self, _features):
+            return {0: 0.2, 1: 0.2, 2: 0.6}
+
+    class FakeXGB:
+        def load_model(self, path):
+            self.loaded_path = path
+
+    monkeypatch.setattr(predictor_module, "ML_ENABLED", True)
+    monkeypatch.setattr(predictor_module.xgb, "XGBClassifier", FakeXGB)
+    def fake_load(path):
+        if "rf_" in str(path):
+            return FakeRF()
+        if "river_" in str(path):
+            return FakeRiver()
+        return object()
+    monkeypatch.setattr(predictor_module.joblib, "load", fake_load)
+
+    version = "approved-001"
+    for name in (
+        f"rf_{version}.pkl",
+        f"xgb_{version}.json",
+        f"scaler_{version}.pkl",
+        f"river_{version}.pkl",
+    ):
+        (tmp_path / name).write_bytes(b"model-artifact")
+    (tmp_path / "latest_version.txt").write_text(version, encoding="utf-8")
+
+    predictor = predictor_module.Predictor(model_dir=tmp_path)
+
+    assert predictor.is_trained is True
+    assert predictor.version == version
+    assert isinstance(predictor.rf_model, FakeRF)
+    assert isinstance(predictor.river_model, FakeRiver)
+    assert str(tmp_path / f"xgb_{version}.json") == predictor.xgb_model.loaded_path
+
+
+def test_predictor_never_loads_unapproved_candidate_without_active_marker(monkeypatch, tmp_path):
+    from learning import predictor as predictor_module
+
+    monkeypatch.setattr(predictor_module, "ML_ENABLED", True)
+    (tmp_path / "rf_candidate-999.pkl").write_bytes(b"candidate")
+    (tmp_path / "xgb_candidate-999.json").write_text("{}", encoding="utf-8")
+
+    predictor = predictor_module.Predictor(model_dir=tmp_path)
+
+    assert predictor.is_trained is False
+    assert predictor.rf_model is None
