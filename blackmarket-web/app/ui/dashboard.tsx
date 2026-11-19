@@ -7,7 +7,7 @@ const sections = ["Overview","Markets","Market Analysis","Signals","Portfolio","
 const endpoints: Record<string,string[]> = {
   Overview:["portfolio/summary","risk/status","learning/status","signals/stats","markets"],
   Markets:["markets","markets/symbols","markets/heatmap"],
-  "Market Analysis":["markets/symbols"],
+  "Market Analysis":[],
   Signals:["signals","signals/stats"],
   Portfolio:["portfolio/balance","portfolio/summary"],
   Positions:["positions"],
