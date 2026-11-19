@@ -847,7 +847,7 @@ function SettingsScreen({
 
   return (
     <>
-      <ScreenHeader title="Settings" description="These settings are shared by the desktop and website through the backend database. Secret credentials are never editable or returned here." />
+      <ScreenHeader title="Settings" description="These settings persist in the backend database configured for this installation. Use the same PostgreSQL database URL on desktop and website to synchronize them. Secret credentials are never editable or returned here." />
       <h2 className="workspace-section-title">Dashboard preferences · this device</h2>
       <div className="settings-card-list">
         {([
