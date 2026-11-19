@@ -692,12 +692,6 @@ class OrchestratorBridge:
             "risk_max_total_open_pct", "risk_max_leverage",
             "max_spot_positions", "max_futures_positions",
         }
-        restart_fields = {
-            "spot_enabled", "futures_enabled",
-            "scan_all_eligible_symbols", "timeframes", "telegram_enabled",
-        }
-        restart_required = sorted(set(values) & restart_fields)
-
         # Validate the combined risk profile, not each submitted field in isolation.
         current = self.get_settings()
         effective = {**current, **values}
@@ -744,9 +738,9 @@ class OrchestratorBridge:
             snapshot = self.simulator.get_state_snapshot()
             snapshot["closed_trades"] = []
             self.repo.save_simulator_state(snapshot)
-        result = self.get_settings()
-        result["restart_required"] = restart_required
-        return result
+        # get_settings compares persisted values with the live process config,
+        # so unchanged fields are not incorrectly marked as restart-required.
+        return self.get_settings()
 
     # ===== Health =====
 
