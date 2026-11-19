@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy.engine import make_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,6 +68,11 @@ def validate_config() -> dict[str, Any]:
 
     errors = []
     warnings = []
+    try:
+        safe_database_url = make_url(DATABASE_URL).render_as_string(hide_password=True)
+    except Exception:
+        safe_database_url = "<invalid>"
+        errors.append("DATABASE_URL is not a valid SQLAlchemy connection URL")
 
     # Validate APP_ENV
     valid_envs = {"development", "staging", "production", "test"}
@@ -150,7 +157,7 @@ def validate_config() -> dict[str, Any]:
 
     # Validate DATABASE_URL
     if not DATABASE_URL.startswith("sqlite:///"):
-        warnings.append(f"DATABASE_URL uses non-sqlite backend: {DATABASE_URL}")
+        warnings.append(f"DATABASE_URL uses non-sqlite backend: {safe_database_url}")
 
     # Validate scanner/websocket limits
     if MAX_WEBSOCKET_CONNECTIONS < 1:
@@ -214,7 +221,7 @@ def validate_config() -> dict[str, Any]:
         "TELEGRAM_ENABLED": TELEGRAM_ENABLED,
         "TELEGRAM_BOT_TOKEN": "***" if TELEGRAM_BOT_TOKEN else "",
         "TELEGRAM_CHAT_ID": "***" if TELEGRAM_CHAT_ID else "",
-        "DATABASE_URL": DATABASE_URL,
+        "DATABASE_URL": safe_database_url,
         "SIGNAL_STALE_SECONDS": SIGNAL_STALE_SECONDS,
         "AUTO_RECOVERY_ENABLED": AUTO_RECOVERY_ENABLED,
         "MODEL_ROLLBACK_ENABLED": MODEL_ROLLBACK_ENABLED,
