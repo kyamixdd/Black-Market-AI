@@ -647,6 +647,18 @@ class OrchestratorBridge:
             TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
         )
         persisted = self.repo.get_app_settings()
+        runtime_values = {
+            "spot_enabled": SPOT_ENABLED,
+            "futures_enabled": USDM_FUTURES_ENABLED,
+            "scan_all_eligible_symbols": SCAN_ALL_ELIGIBLE_SYMBOLS,
+            "timeframes": TIMEFRAMES,
+            "telegram_enabled": TELEGRAM_ENABLED,
+        }
+        restart_fields = ("spot_enabled", "futures_enabled", "scan_all_eligible_symbols", "timeframes", "telegram_enabled")
+        restart_required = sorted(
+            key for key in restart_fields
+            if key in persisted and persisted[key] != runtime_values[key]
+        )
         return {
             "spot_enabled": SPOT_ENABLED,
             "futures_enabled": USDM_FUTURES_ENABLED,
@@ -663,8 +675,8 @@ class OrchestratorBridge:
             "telegram_enabled": TELEGRAM_ENABLED,
             "telegram_bot_token_configured": bool(TELEGRAM_BOT_TOKEN),
             "telegram_chat_id_configured": bool(TELEGRAM_CHAT_ID),
-            "restart_required": [],
             **persisted,
+            "restart_required": restart_required,
         }
 
     def update_settings(self, updates: dict) -> dict:
