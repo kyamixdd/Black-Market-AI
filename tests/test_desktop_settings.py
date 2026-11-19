@@ -148,3 +148,28 @@ def test_settings_request_rejects_unsafe_values_and_invalid_timeframes():
         SettingsRequest(timeframes=["1m", "unsupported"])
     with pytest.raises(ValidationError):
         SettingsRequest(unrecognized_setting=True)
+
+
+def test_settings_report_restart_required_after_reload(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "SPOT_ENABLED", True)
+    monkeypatch.setattr(config, "USDM_FUTURES_ENABLED", True)
+    monkeypatch.setattr(config, "SCAN_ALL_ELIGIBLE_SYMBOLS", True)
+    monkeypatch.setattr(config, "TIMEFRAMES", ["1m", "5m"])
+    monkeypatch.setattr(config, "TELEGRAM_ENABLED", False)
+    bridge = object.__new__(OrchestratorBridge)
+    bridge.repo = SimpleNamespace(get_app_settings=lambda: {
+        "spot_enabled": False,
+        "timeframes": ["1m", "5m", "1h"],
+        "telegram_enabled": True,
+    })
+    bridge.simulator = SimpleNamespace(initial_spot_balance=250.0, initial_futures_balance=250.0)
+    bridge.risk_manager = SimpleNamespace(
+        max_risk_pct=0.5, max_daily_loss_pct=2.0, max_open_risk_pct=3.0,
+        max_leverage=3.0, max_spot_positions=5, max_futures_positions=5,
+    )
+
+    settings = bridge.get_settings()
+
+    assert settings["restart_required"] == ["spot_enabled", "telegram_enabled", "timeframes"]
