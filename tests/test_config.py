@@ -58,3 +58,20 @@ def test_real_trading_configuration_is_rejected(monkeypatch):
         assert "REAL_TRADING_ENABLED is unsupported" in str(exc)
     else:
         raise AssertionError("Real trading configuration must never be accepted")
+
+
+def test_database_url_credentials_are_redacted_from_validation_output(monkeypatch, caplog):
+    import logging
+    import config
+    from core.config_validator import validate_config
+
+    monkeypatch.setattr(
+        config,
+        "DATABASE_URL",
+        "postgresql+psycopg://blackmarket:top-secret-password@db.example:5432/blackmarket",
+    )
+    with caplog.at_level(logging.WARNING):
+        result = validate_config()
+
+    assert result["DATABASE_URL"] == "postgresql+psycopg://blackmarket:***@db.example:5432/blackmarket"
+    assert "top-secret-password" not in caplog.text
