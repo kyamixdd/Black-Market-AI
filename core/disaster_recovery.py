@@ -562,40 +562,75 @@ class ModelCheckpointRecovery:
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
     def list_checkpoints(self) -> list[dict]:
-        """List available model checkpoints."""
+        """List supported model artifacts used by the hybrid trainer."""
         checkpoints = []
-        for model_file in self.models_dir.glob("*.joblib"):
-            stat = model_file.stat()
-            checkpoints.append({
-                "name": model_file.stem,
-                "path": model_file,
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
-            })
-        return sorted(checkpoints, key=lambda c: c["modified"], reverse=True)
+        for pattern in ("*.joblib", "*.pkl", "*.json"):
+            for model_file in self.models_dir.glob(pattern):
+                stat = model_file.stat()
+                checkpoints.append({
+                    "name": model_file.stem,
+                    "path": model_file,
+                    "size": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                })
+        return sorted(checkpoints, key=lambda item: item["modified"], reverse=True)
 
     def get_latest_checkpoint(self, model_type: str) -> Optional[Path]:
-        """Get latest checkpoint for a model type."""
-        checkpoints = self.list_checkpoints()
-        for cp in checkpoints:
-            if model_type.lower() in cp["name"].lower():
-                return cp["path"]
+        """Get the newest artifact whose filename identifies the requested model."""
+        needle = model_type.lower()
+        for checkpoint in self.list_checkpoints():
+            if needle in checkpoint["name"].lower():
+                return checkpoint["path"]
         return None
 
-    def verify_checkpoint(self, checkpoint_path: Path) -> bool:
-        """Verify checkpoint can be loaded."""
-        try:
+    def load_checkpoint(self, checkpoint_path: Path):
+        """Load a pickle/joblib artifact or an XGBoost JSON model."""
+        suffix = checkpoint_path.suffix.lower()
+        if suffix == ".json":
+            import xgboost as xgb
+            model = xgb.XGBClassifier()
+            model.load_model(str(checkpoint_path))
+            return model
+        if suffix in {".pkl", ".joblib"}:
             import joblib
-            model = joblib.load(checkpoint_path)
-            return model is not None
-        except Exception as e:
-            logger.error(f"Checkpoint verification failed: {e}")
+            return joblib.load(checkpoint_path)
+        raise ValueError(f"Unsupported model checkpoint format: {suffix}")
+
+    def verify_checkpoint(self, checkpoint_path: Path) -> bool:
+        """Verify a checkpoint using the loader appropriate to its file format."""
+        try:
+            return self.load_checkpoint(checkpoint_path) is not None
+        except Exception:
+            logger.exception("Checkpoint verification failed: %s", checkpoint_path)
             return False
 
-    def load_checkpoint(self, checkpoint_path: Path):
-        """Load model from checkpoint."""
-        import joblib
-        return joblib.load(checkpoint_path)
+    def recover_hybrid_bundle(self, version: str) -> dict[str, Any] | None:
+        """Load a complete versioned RF/XGBoost/scaler/River bundle."""
+        paths = {
+            "random_forest": self.models_dir / f"rf_{version}.pkl",
+            "xgboost": self.models_dir / f"xgb_{version}.json",
+            "scaler": self.models_dir / f"scaler_{version}.pkl",
+            "river": self.models_dir / f"river_{version}.pkl",
+        }
+        if not all(path.is_file() for path in paths.values()):
+            return None
+        try:
+            return {
+                "version": version,
+                **{name: self.load_checkpoint(path) for name, path in paths.items()},
+                "paths": paths,
+            }
+        except Exception:
+            logger.exception("Unable to recover hybrid model bundle %s", version)
+            return None
+
+    def recover_latest_active_bundle(self) -> dict[str, Any] | None:
+        """Recover only the version explicitly marked active by the trainer."""
+        version_file = self.models_dir / "latest_version.txt"
+        if not version_file.is_file():
+            return None
+        version = version_file.read_text(encoding="utf-8").strip()
+        return self.recover_hybrid_bundle(version) if version else None
 
 
 class WebSocketReconnectionManager:
