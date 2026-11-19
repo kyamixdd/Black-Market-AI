@@ -172,7 +172,7 @@ async def test_combined_binance_stream_uses_correct_stream_endpoint(monkeypatch)
     )
 
     assert urls == [
-        "wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/btcusdt@kline_1m"
+        "wss://data-stream.binance.vision/stream?streams=btcusdt@ticker/btcusdt@kline_1m"
     ]
     assert received[0]["_market"] == "SPOT"
 
