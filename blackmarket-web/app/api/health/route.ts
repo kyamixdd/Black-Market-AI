@@ -15,7 +15,15 @@ export async function GET() {
       signal: AbortSignal.timeout(5000),
     });
     const health: unknown = await response.json();
-    if (!response.ok || typeof health !== "object" || health === null || !("database_connected" in health) || health.database_connected !== true) {
+    if (
+      !response.ok ||
+      typeof health !== "object" ||
+      health === null ||
+      !("database_connected" in health) ||
+      health.database_connected !== true ||
+      !("backend_ready" in health) ||
+      health.backend_ready !== true
+    ) {
       return NextResponse.json({ status: "backend_unready" }, { status: 503 });
     }
     return NextResponse.json({ status: "ok", backend: health }, { status: 200 });
