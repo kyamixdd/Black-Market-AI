@@ -141,8 +141,13 @@ class Orchestrator:
             (SPOT_ENABLED and self.registry.count("SPOT") > 0)
             or (USDM_FUTURES_ENABLED and self.registry.count("FUTURES") > 0)
         ):
-            raise RuntimeError(
-                "No eligible Binance symbols are available. Check network access and enabled markets."
+            # Keep the API and database available when an exchange blocks the
+            # hosting region or is temporarily offline. No symbols are fabricated,
+            # and the health endpoint reports market_data_active=false until
+            # genuine exchange data becomes available.
+            logger.error(
+                "No eligible Binance symbols are currently available; "
+                "backend will start in degraded market-data mode and retry discovery."
             )
         # Persist symbols
         self.repo.save_symbols(self.registry.to_dicts())
@@ -610,6 +615,17 @@ class Orchestrator:
             # This also recovers gracefully if the initial REST scan was slow and
             # no symbols were available during the first WebSocket startup.
             if websocket_refresh_counter % 5 == 0:
+                # Retry discovery as well as stream selection so a temporary
+                # provider outage does not permanently leave a fresh deployment
+                # with an empty symbol registry.
+                if self.registry.count("SPOT") == 0 and self.registry.count("FUTURES") == 0:
+                    result = await self._discovery.discover_all()
+                    if result["spot"] or result["futures"]:
+                        self.repo.save_symbols(self.registry.to_dicts())
+                        logger.info(
+                            "Market discovery recovered: spot=%d futures=%d",
+                            result["spot"], result["futures"],
+                        )
                 await self._start_market_websockets()
             # Periodic persistence; watchdog heartbeats come from successful analysis cycles.
             await self._persist_state()
