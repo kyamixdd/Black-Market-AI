@@ -340,3 +340,32 @@ def test_model_trainer_does_not_accept_candidate_without_river_artifact(monkeypa
 
     with pytest.raises(FileNotFoundError, match="required artifacts"):
         trainer.activate_version("candidate")
+
+
+def test_trainer_waits_for_economic_review_instead_of_retraining_pending_candidate(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from learning import trainer as trainer_module
+
+    monkeypatch.setattr(trainer_module, "MODELS_DIR", str(tmp_path / "models"))
+    db = Database(f"sqlite:///{tmp_path / 'learning-candidate.db'}")
+    db.init_db()
+    repo = Repository(db.session_maker())
+    repo.save_model_registry({
+        "version": "random_forest_candidate-001",
+        "model_type": "random_forest",
+        "metrics": {"accuracy": 0.8},
+        "file_path": str(tmp_path / "models" / "rf_candidate-001.pkl"),
+        "status": "VALIDATED",
+        "is_active": False,
+    })
+    trainer = trainer_module.ModelTrainer(repo=repo, dataset_builder=SimpleNamespace())
+    training_calls = []
+    trainer.train_and_validate = lambda: training_calls.append(True)
+
+    try:
+        result = trainer.retrain_if_needed(object())
+        assert result["status"] == "candidate_pending_review"
+        assert result["candidate"] == "random_forest_candidate-001"
+        assert training_calls == []
+    finally:
+        db.close()
