@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     rootDir: blackmarket-web
-    buildCommand: python3 --version && python3 -m pip install --user -r ../src_tauri/backend/requirements.txt && npm install --include=dev && npm run build
+    buildCommand: python3 --version && python3 -m pip install -r ../src_tauri/backend/requirements.txt && npm install --include=dev && npm run build
     startCommand: node server.mjs
     healthCheckPath: /api/health
     envVars:
