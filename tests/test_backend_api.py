@@ -506,3 +506,41 @@ async def test_historical_candles_are_bounded_closed_sorted_and_deduplicated():
     assert spot_client.request == ("BTCUSDT", "1m", end_time, 500)
     assert [candle["open_time"] for candle in candles] == [1000, 3000]
     assert candles[0]["close"] == 101
+
+
+@pytest.mark.asyncio
+async def test_authenticated_sse_stream_frames_events_and_detaches_subscriber(monkeypatch):
+    from src_tauri.backend import main
+
+    class FakeEventBus:
+        def __init__(self):
+            self.subscribers = {"*": []}
+
+        def subscribe_all(self, callback):
+            self.subscribers["*"].append(callback)
+
+    event_bus = FakeEventBus()
+    monkeypatch.setattr(main, "orchestrator", SimpleNamespace(event_bus=event_bus))
+
+    response = await main.event_stream()
+    assert response.media_type == "text/event-stream"
+    iterator = response.body_iterator
+    assert await anext(iterator) == "retry: 3000\\n\\n"
+
+    event = make_event(
+        EventType.MARKET_DATA,
+        "binance_kline_websocket",
+        symbol="BTCUSDT",
+        market="SPOT",
+        candle={"timeframe": "1m", "open_time": 1_800_000_000_000, "closed": False},
+    )
+    await event_bus.subscribers["*"][0](event)
+    message = await anext(iterator)
+
+    assert message.startswith("data: ")
+    payload = json.loads(message.removeprefix("data: ").strip())
+    assert payload["symbol"] == "BTCUSDT"
+    assert payload["payload"]["candle"]["timeframe"] == "1m"
+
+    await iterator.aclose()
+    assert event_bus.subscribers["*"] == []
