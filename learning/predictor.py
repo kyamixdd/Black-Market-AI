@@ -40,29 +40,63 @@ class Predictor:
             self._load_latest_locked()
 
     def _load_latest_locked(self) -> None:
-        rf_path = self.model_dir / "rf_model.pkl"
-        xgb_path = self.model_dir / "xgb_model.json"
-        scaler_path = self.model_dir / "scaler.pkl"
-        river_path = self.model_dir / "river_model.pkl"
-        if rf_path.exists() and xgb_path.exists():
+        version_file = self.model_dir / "latest_version.txt"
+        active_version = (
+            version_file.read_text(encoding="utf-8").strip()
+            if version_file.is_file() else ""
+        )
+        self.version = active_version or self.version
+
+        # Prefer the stable active aliases. If they are missing or corrupt,
+        # recover the exact version recorded by the activation marker. Never
+        # choose the newest timestamped candidate: it may not be approved.
+        candidates = [
+            (
+                self.model_dir / "rf_model.pkl",
+                self.model_dir / "xgb_model.json",
+                self.model_dir / "scaler.pkl",
+                self.model_dir / "river_model.pkl",
+                False,
+            )
+        ]
+        if active_version:
+            candidates.append((
+                self.model_dir / f"rf_{active_version}.pkl",
+                self.model_dir / f"xgb_{active_version}.json",
+                self.model_dir / f"scaler_{active_version}.pkl",
+                self.model_dir / f"river_{active_version}.pkl",
+                True,
+            ))
+
+        for rf_path, xgb_path, scaler_path, river_path, require_hybrid in candidates:
+            if not rf_path.is_file() or not xgb_path.is_file():
+                continue
+            if require_hybrid and not all(
+                path.is_file() for path in (scaler_path, river_path)
+            ):
+                continue
             try:
-                self.rf_model = joblib.load(rf_path)
-                self.xgb_model = xgb.XGBClassifier()
-                self.xgb_model.load_model(str(xgb_path))
-                if river_path.exists():
-                    try:
-                        self.river_model = joblib.load(river_path)
-                    except Exception as river_exc:
-                        self.river_model = None
-                        logger.warning("Failed to load River model: %s", river_exc)
-                version_file = self.model_dir / "latest_version.txt"
-                if version_file.exists():
-                    self.version = version_file.read_text(encoding="utf-8").strip() or self.version
+                rf_model = joblib.load(rf_path)
+                xgb_model = xgb.XGBClassifier()
+                xgb_model.load_model(str(xgb_path))
+                scaler = joblib.load(scaler_path) if scaler_path.is_file() else StandardScaler()
+                river_model = joblib.load(river_path) if river_path.is_file() else None
+
+                self.rf_model = rf_model
+                self.xgb_model = xgb_model
+                self.scaler = scaler
+                self.river_model = river_model
                 self.is_trained = True
-                logger.info("Loaded batch models%s", " and River online model" if self.river_model else "")
-            except Exception as exc:
-                self.is_trained = False
-                logger.warning("Failed to load models: %s", exc)
+                logger.info(
+                    "Loaded model bundle version %s%s",
+                    self.version,
+                    " with River online model" if self.river_model else "",
+                )
+                return
+            except Exception:
+                logger.exception("Failed to load model bundle from %s", rf_path)
+
+        self.is_trained = False
 
     @staticmethod
     def _class_probabilities(model: Any, features: np.ndarray) -> np.ndarray:
