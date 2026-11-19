@@ -713,7 +713,7 @@ function App() {
     }
 
     void refreshScreenData()
-    const timer = window.setInterval(() => void refreshScreenData(), 30_000)
+    const timer = window.setInterval(() => { if (activeScreen !== "Settings") void refreshScreenData() }, 30_000)
     return () => {
       active = false
       window.clearInterval(timer)
