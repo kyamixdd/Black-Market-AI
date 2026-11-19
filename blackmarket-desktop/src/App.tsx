@@ -1373,6 +1373,17 @@ function App() {
           data={data}
           preferences={preferences}
           onPreferencesChange={changePreferences}
+          onSettingsSave={async (updates) => {
+            const response = await fetch(`${API_ORIGIN}/api/settings`, {
+              method: 'POST',
+              headers: { ...getApiAuthorization(), 'Content-Type': 'application/json' },
+              body: JSON.stringify(updates),
+            })
+            const result = await response.json()
+            if (!response.ok) throw new Error(result.detail ?? result.error ?? `Settings update failed (${response.status})`)
+            setData((current) => ({ ...current, settings: result }))
+            return result
+          }}
           onSelectMarket={(selectedSymbol, selectedMarket) => {
             setSymbol(selectedSymbol)
             setSearchValue(selectedSymbol)
