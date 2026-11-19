@@ -24,7 +24,7 @@ Model artifacts are still written to `MODELS_DIR` / `BLACKMARKET_MODELS_DIR`. Fo
 
 - `REAL_TRADING_ENABLED=true` is rejected by startup validation.
 - Exchange clients are public market-data clients; the backend does not expose order-placement endpoints.
-- Virtual balances and risk settings are shared across desktop and hosted website when both connect to the same database.
+- Desktop defaults to a local SQLite database; the hosted website uses PostgreSQL. Settings and virtual balances synchronize across desktop and website only when both are configured to use the same PostgreSQL DATABASE_URL. Keep that URL private and use a secure connection.
 - Changes to market enablement, scan-all, timeframes, and Telegram enablement are persisted and reported as restart-required. Risk limits and virtual capital changes apply immediately; virtual capital cannot be changed while positions or orders are open.
 
 ## Before deploying
