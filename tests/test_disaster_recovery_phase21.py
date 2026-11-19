@@ -250,7 +250,7 @@ class TestPositionRecoveryManager:
             "market": "SPOT",
             "side": "LONG",
             "entry_price": 50000.0,
-            "amount": 0.1,
+            "amount": 0.001,
             "current_price": 51000.0,
             "stop_loss": 49000.0,
             "take_profit": 52000.0,
@@ -269,7 +269,7 @@ class TestPositionRecoveryManager:
             "market": "FUTURES",
             "side": "SHORT",
             "entry_price": 3000.0,
-            "amount": 1.0,
+            "amount": 0.01,
             "current_price": 2950.0,
             "stop_loss": 3100.0,
             "take_profit": 2800.0,
@@ -281,14 +281,42 @@ class TestPositionRecoveryManager:
             "opened_at": datetime.now(timezone.utc),
         })
 
+        repo.save_order({
+            "order_id": "ORD-SPOT-001",
+            "symbol": "SOLUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "order_type": "LIMIT",
+            "amount": 0.01,
+            "price": 100.0,
+            "leverage": 1.0,
+            "status": "OPEN",
+            "filled_amount": 0.0,
+            "avg_fill_price": 0.0,
+            "fee": 0.0,
+        })
+
         recovered = recovery_manager.recover_positions()
         assert recovered["spot"] == 1
         assert recovered["futures"] == 1
+        assert recovered["orders"] == 1
         assert "POS-SPOT-001" in recovery_manager.simulator.spot_positions
         assert "POS-FUT-001" in recovery_manager.simulator.futures_positions
+        assert "ORD-SPOT-001" in recovery_manager.simulator.open_orders
+        from config import SPOT_INITIAL_BALANCE, FUTURES_INITIAL_BALANCE, SPOT_TAKER
+        assert recovery_manager.simulator.spot_balance == pytest.approx(SPOT_INITIAL_BALANCE - 55.0)
+        assert recovery_manager.simulator.futures_balance == pytest.approx(FUTURES_INITIAL_BALANCE - 39.0)
+        expected_available_spot = SPOT_INITIAL_BALANCE - 55.0 - (1.0 * (1.0 + SPOT_TAKER))
+        assert recovery_manager.simulator._available_balance("SPOT") == pytest.approx(expected_available_spot)
+
+        # A second recovery must rebuild from the database, not double-subtract
+        # reserved capital or duplicate restored positions/orders.
         recovery_manager.recover_positions()
         assert len(recovery_manager.simulator.spot_positions) == 1
         assert len(recovery_manager.simulator.futures_positions) == 1
+        assert len(recovery_manager.simulator.open_orders) == 1
+        assert recovery_manager.simulator.spot_balance == pytest.approx(SPOT_INITIAL_BALANCE - 55.0)
+        assert recovery_manager.simulator.futures_balance == pytest.approx(FUTURES_INITIAL_BALANCE - 39.0)
 
 
 class TestModelCheckpointRecovery:
