@@ -1,7 +1,7 @@
 """Binance WebSocket Connection and Subscription Manager.
 
 Handles safe stream multiplexing, reconnection, rate limiting, and event distribution.
-Supports Spot: wss://stream.binance.com:9443/ws
+Supports Spot: wss://data-stream.binance.vision/ws
 And Futures: wss://fstream.binance.com/ws
 """
 from __future__ import annotations
