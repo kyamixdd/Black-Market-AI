@@ -50,15 +50,7 @@ class Predictor:
         # Prefer the stable active aliases. If they are missing or corrupt,
         # recover the exact version recorded by the activation marker. Never
         # choose the newest timestamped candidate: it may not be approved.
-        candidates = [
-            (
-                self.model_dir / "rf_model.pkl",
-                self.model_dir / "xgb_model.json",
-                self.model_dir / "scaler.pkl",
-                self.model_dir / "river_model.pkl",
-                False,
-            )
-        ]
+        candidates = []
         if active_version:
             candidates.append((
                 self.model_dir / f"rf_{active_version}.pkl",
@@ -67,6 +59,13 @@ class Predictor:
                 self.model_dir / f"river_{active_version}.pkl",
                 True,
             ))
+        candidates.append((
+            self.model_dir / "rf_model.pkl",
+            self.model_dir / "xgb_model.json",
+            self.model_dir / "scaler.pkl",
+            self.model_dir / "river_model.pkl",
+            False,
+        ))
 
         for rf_path, xgb_path, scaler_path, river_path, require_hybrid in candidates:
             if not rf_path.is_file() or not xgb_path.is_file():
