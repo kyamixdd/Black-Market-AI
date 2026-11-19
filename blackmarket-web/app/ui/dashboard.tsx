@@ -84,7 +84,7 @@ export default function Dashboard(){
   return()=>source.close();
  },[section,selectedSymbol,marketType,timeframe]);
  async function logout(){await fetch("/api/logout",{method:"POST"});location.assign("/login");}
- const entries=Object.entries(data).filter(([key])=>(endpoints[section]||[]).includes(key));
+ const entries=Object.entries(data).filter(([key])=>(endpoints[section]||[]).includes(key)&&!(section==="Settings"&&key==="settings"));
  return <main className="app-shell">
   <aside className="sidebar"><div className="brand"><b>BM<span>.</span></b><div>BLACKMARKET AI<small>MARKET INTELLIGENCE</small></div></div>
    <div className="nav-label">WORKSPACE</div>{sections.map(s=><button key={s} className={"nav-item "+(section===s?"active":"")} onClick={()=>setSection(s)}>{s}</button>)}
