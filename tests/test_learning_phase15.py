@@ -326,3 +326,17 @@ async def test_learning_cycle_keeps_new_classifier_candidate_inactive(monkeypatc
     assert result["promotion"]["status"] == "deferred"
     assert result["promotion"]["active_model_unchanged"] is True
     assert "promoted" not in result
+
+
+def test_model_trainer_does_not_accept_candidate_without_river_artifact(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from learning import trainer as trainer_module
+
+    monkeypatch.setattr(trainer_module, "MODELS_DIR", str(tmp_path))
+    trainer = trainer_module.ModelTrainer(repo=object(), dataset_builder=SimpleNamespace())
+    (tmp_path / "rf_candidate.pkl").write_bytes(b"rf")
+    (tmp_path / "xgb_candidate.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "scaler_candidate.pkl").write_bytes(b"scaler")
+
+    with pytest.raises(FileNotFoundError, match="required artifacts"):
+        trainer.activate_version("candidate")
