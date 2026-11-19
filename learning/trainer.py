@@ -229,6 +229,16 @@ class ModelTrainer:
         from database.models import ModelRegistryModel
 
         with self.repo._get_session() as session:
+            candidate_stmt = (
+                select(ModelRegistryModel)
+                .where(
+                    ModelRegistryModel.is_active.is_(False),
+                    ModelRegistryModel.status == "VALIDATED",
+                )
+                .order_by(ModelRegistryModel.trained_at.desc())
+                .limit(1)
+            )
+            pending_candidate = session.scalars(candidate_stmt).first()
             stmt = (
                 select(ModelRegistryModel)
                 .where(ModelRegistryModel.is_active.is_(True))
@@ -236,6 +246,17 @@ class ModelTrainer:
                 .limit(1)
             )
             active = session.scalars(stmt).first()
+
+        if pending_candidate:
+            return {
+                "status": "candidate_pending_review",
+                "candidate": pending_candidate.version,
+                "reason": (
+                    "A validated candidate is already saved but intentionally inactive. "
+                    "Complete cost-aware champion/challenger evaluation before training "
+                    "or promoting another version."
+                ),
+            }
 
         if not active:
             logger.info("No active model found; starting the initial training attempt")
