@@ -544,3 +544,45 @@ async def test_authenticated_sse_stream_frames_events_and_detaches_subscriber(mo
 
     await iterator.aclose()
     assert event_bus._subscribers["*"] == []
+
+
+def test_health_readiness_is_independent_of_exchange_market_data(monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src_tauri.backend import main
+
+    class FakeHealthMonitor:
+        @staticmethod
+        def get_status():
+            return {"status": "degraded", "metrics": {"uptime_seconds": 1.0}}
+
+    class FakeOrchestrator:
+        health_monitor = FakeHealthMonitor()
+        scanner = SimpleNamespace(_running=True)
+        cache = SimpleNamespace(get_market_tickers=lambda _market: [])
+        _last_ws_message_at = None
+
+        @staticmethod
+        def has_fresh_market_data():
+            return False
+
+    class FakeDatabase:
+        @staticmethod
+        def health():
+            return {"status": "ok"}
+
+    monkeypatch.setattr(main, "orchestrator", FakeOrchestrator())
+    monkeypatch.setattr(main, "db", FakeDatabase())
+    app = FastAPI()
+    app.add_api_route("/health", main.health_check)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["database_connected"] is True
+    assert payload["backend_ready"] is True
+    assert payload["market_data_active"] is False
