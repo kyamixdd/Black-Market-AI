@@ -1,4 +1,4 @@
-import { Children, useMemo, useState } from 'react'
+import { Children, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
 export type ScreenName =
@@ -203,6 +203,7 @@ export type WorkspaceSettings = {
   telegram_enabled?: boolean
   telegram_bot_token_configured?: boolean
   telegram_chat_id_configured?: boolean
+  restart_required?: string[]
 }
 
 export type AnalysisCandle = {
@@ -246,6 +247,7 @@ type Props = {
   data: WorkspaceData
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
+  onSettingsSave: (settings: Partial<WorkspaceSettings>) => Promise<WorkspaceSettings>
   onSelectMarket: (symbol: string, market: 'SPOT' | 'FUTURES') => void
 }
 
@@ -767,15 +769,85 @@ function SettingsScreen({
   settings,
   preferences,
   onPreferencesChange,
+  onSettingsSave,
 }: {
   settings: WorkspaceSettings | null
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
+  onSettingsSave: (settings: Partial<WorkspaceSettings>) => Promise<WorkspaceSettings>
 }) {
+  const [draft, setDraft] = useState<WorkspaceSettings>({})
+  const [timeframeText, setTimeframeText] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [restartRequired, setRestartRequired] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!settings) return
+    setDraft({ ...settings })
+    setTimeframeText((settings.timeframes ?? []).join(', '))
+    setRestartRequired(settings.restart_required ?? [])
+  }, [settings])
+
   const updatePreference = (key: keyof DashboardPreferences) => onPreferencesChange({ ...preferences, [key]: !preferences[key] })
+  const update = <K extends keyof WorkspaceSettings>(key: K, value: WorkspaceSettings[K]) => {
+    setDraft((current) => ({ ...current, [key]: value }))
+  }
+  const save = async () => {
+    setSaving(true)
+    setMessage('')
+    try {
+      const payload: Partial<WorkspaceSettings> = {
+        spot_enabled: draft.spot_enabled,
+        futures_enabled: draft.futures_enabled,
+        scan_all_eligible_symbols: draft.scan_all_eligible_symbols,
+        timeframes: timeframeText.split(',').map((item) => item.trim()).filter(Boolean),
+        spot_initial_balance: draft.spot_initial_balance,
+        futures_initial_balance: draft.futures_initial_balance,
+        risk_per_trade_pct: draft.risk_per_trade_pct,
+        risk_max_daily_loss_pct: draft.risk_max_daily_loss_pct,
+        risk_max_total_open_pct: draft.risk_max_total_open_pct,
+        risk_max_leverage: draft.risk_max_leverage,
+        max_spot_positions: draft.max_spot_positions,
+        max_futures_positions: draft.max_futures_positions,
+        telegram_enabled: draft.telegram_enabled,
+      }
+      const result = await onSettingsSave(payload)
+      const required = result.restart_required ?? []
+      setRestartRequired(required)
+      setMessage(required.length
+        ? 'Saved. Restart the backend to apply: ' + required.join(', ')
+        : 'Settings saved and applied.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to save settings.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const numberField = (
+    key: keyof WorkspaceSettings,
+    label: string,
+    min: number,
+    max: number,
+    step = 1,
+  ) => (
+    <label className="settings-input">
+      <span>{label}</span>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={typeof draft[key] === 'number' ? draft[key] as number : ''}
+        onChange={(event) => update(key, event.target.value === '' ? undefined as never : Number(event.target.value) as never)}
+      />
+    </label>
+  )
+
   return (
     <>
-      <ScreenHeader title="Settings" description="Dashboard preferences are stored locally. Engine configuration is reported read-only; edits require changing local configuration and restarting." />
+      <ScreenHeader title="Settings" description="These settings are shared by the desktop and website through the backend database. Secret credentials are never editable or returned here." />
       <h2 className="workspace-section-title">Dashboard preferences · this device</h2>
       <div className="settings-card-list">
         {([
@@ -788,25 +860,58 @@ function SettingsScreen({
           </button>
         ))}
       </div>
-      <h2 className="workspace-section-title">Engine configuration · read-only</h2>
+
+      <h2 className="workspace-section-title">Shared engine configuration</h2>
+      {!settings ? <EmptyState text="Settings are unavailable until the backend connects." /> : (
+        <div className="settings-editor">
+          <div className="settings-toggle-grid">
+            {([
+              ['spot_enabled', 'Spot market data'],
+              ['futures_enabled', 'USDⓈ-M futures'],
+              ['scan_all_eligible_symbols', 'Scan all eligible symbols'],
+              ['telegram_enabled', 'Telegram notifications'],
+            ] as [keyof WorkspaceSettings, string][]).map(([key, label]) => (
+              <label className="settings-toggle" key={key}>
+                <input type="checkbox" checked={Boolean(draft[key])} onChange={(event) => update(key, event.target.checked as never)} />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="settings-fields">
+            {numberField('spot_initial_balance', 'Spot virtual capital', 0.01, 1000000000, 0.01)}
+            {numberField('futures_initial_balance', 'Futures virtual capital', 0.01, 1000000000, 0.01)}
+            {numberField('risk_per_trade_pct', 'Risk per trade (%)', 0.01, 10, 0.01)}
+            {numberField('risk_max_daily_loss_pct', 'Maximum daily loss (%)', 0.01, 20, 0.01)}
+            {numberField('risk_max_total_open_pct', 'Maximum open risk (%)', 0.01, 50, 0.01)}
+            {numberField('risk_max_leverage', 'Maximum leverage', 1, 20, 0.1)}
+            {numberField('max_spot_positions', 'Maximum spot positions', 1, 100)}
+            {numberField('max_futures_positions', 'Maximum futures positions', 1, 100)}
+            <label className="settings-input settings-timeframes">
+              <span>Analysis timeframes · comma separated</span>
+              <input value={timeframeText} onChange={(event) => setTimeframeText(event.target.value)} placeholder="1m, 3m, 5m, 15m, 30m, 1h, 4h, 1d, 1w" />
+            </label>
+          </div>
+          <div className="settings-save-row">
+            <button className="primary-button" type="button" disabled={saving} onClick={() => void save()}>
+              {saving ? 'Saving settings…' : 'Save shared settings'}
+            </button>
+            <span role="status">{message}</span>
+          </div>
+          {restartRequired.length > 0 && (
+            <div className="workspace-note" role="status">
+              Restart required before these changes take effect: {restartRequired.join(', ')}.
+            </div>
+          )}
+          <div className="workspace-note">
+            Capital changes are blocked while virtual positions or orders are open. Telegram can only be enabled after credentials are configured securely. Real-money execution remains disabled.
+          </div>
+        </div>
+      )}
+      <h2 className="workspace-section-title">Credential status</h2>
       <div className="workspace-summary">
-        <SummaryCard label="SPOT MARKET DATA" value={settings ? settings.spot_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} />
-        <SummaryCard label="USDⓈ-M FUTURES" value={settings ? settings.futures_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} />
-        <SummaryCard label="MARKET SCANNING" value={settings ? settings.scan_all_eligible_symbols ? 'ALL ELIGIBLE' : 'CONFIGURED SET' : 'Unavailable'} />
-        <SummaryCard label="SPOT PAPER CAPITAL" value={money(num(settings?.spot_initial_balance))} />
-        <SummaryCard label="FUTURES PAPER CAPITAL" value={money(num(settings?.futures_initial_balance))} />
-        <SummaryCard label="TELEGRAM" value={settings ? settings.telegram_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} detail={settings?.telegram_enabled ? `Token ${settings.telegram_bot_token_configured ? 'configured' : 'missing'} · chat ${settings.telegram_chat_id_configured ? 'configured' : 'missing'}` : 'No credentials are exposed'} />
+        <SummaryCard label="TELEGRAM BOT TOKEN" value={settings?.telegram_bot_token_configured ? 'CONFIGURED' : 'NOT CONFIGURED'} />
+        <SummaryCard label="TELEGRAM CHAT ID" value={settings?.telegram_chat_id_configured ? 'CONFIGURED' : 'NOT CONFIGURED'} />
       </div>
-      <h2 className="workspace-section-title">Risk controls · read-only</h2>
-      <div className="workspace-summary">
-        <SummaryCard label="RISK / TRADE" value={settings?.risk_per_trade_pct == null ? '—' : `${settings.risk_per_trade_pct}%`} />
-        <SummaryCard label="MAX DAILY LOSS" value={settings?.risk_max_daily_loss_pct == null ? '—' : `${settings.risk_max_daily_loss_pct}%`} />
-        <SummaryCard label="MAX OPEN RISK" value={settings?.risk_max_total_open_pct == null ? '—' : `${settings.risk_max_total_open_pct}%`} />
-        <SummaryCard label="FUTURES LEVERAGE" value={settings?.risk_max_leverage == null ? '—' : `${settings.risk_max_leverage}x`} />
-        <SummaryCard label="POSITION LIMITS" value={settings ? `${settings.max_spot_positions ?? '—'} Spot / ${settings.max_futures_positions ?? '—'} Futures` : '—'} />
-        <SummaryCard label="TIMEFRAMES" value={settings?.timeframes?.length ? settings.timeframes.join(', ') : '—'} />
-      </div>
-      <div className="workspace-note">Risk controls and notification credentials are not editable in this dashboard. Configure Telegram secrets only through the private local environment file. Binance public market data requires no API credentials; real trading is disabled.</div>
     </>
   )
 }
