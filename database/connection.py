@@ -20,6 +20,17 @@ class Database:
         self._engine: Engine | None = None
         self._session_maker = None
 
+    def _engine_url(self) -> str:
+        """Use the installed psycopg 3 driver for PostgreSQL URLs.
+
+        The project installs psycopg[binary], not psycopg2. SQLAlchemy's
+        default postgresql:// dialect otherwise attempts to import psycopg2.
+        """
+        parsed = make_url(self.url)
+        if parsed.drivername in {"postgres", "postgresql"}:
+            parsed = parsed.set(drivername="postgresql+psycopg")
+        return parsed.render_as_string(hide_password=False)
+
     @property
     def engine(self) -> Engine:
         if self._engine is None:
@@ -47,7 +58,12 @@ class Database:
                     finally:
                         cursor.close()
             else:
-                self._engine = create_engine(self.url, future=True)
+                self._engine = create_engine(
+                    self._engine_url(),
+                    future=True,
+                    pool_pre_ping=True,
+                    pool_recycle=300,
+                )
         return self._engine
 
     def session_maker(self):
