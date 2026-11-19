@@ -828,3 +828,33 @@ class TestPersistentEventQueue:
         retry.stop_worker()
         await asyncio.wait_for(worker, timeout=2)
         db.close()
+
+
+    def test_model_checkpoint_recovery_loads_complete_versioned_hybrid_bundle(self, tmp_path, monkeypatch):
+        import joblib
+        import xgboost as xgb
+        from core.disaster_recovery import ModelCheckpointRecovery
+
+        class FakeXGB:
+            def load_model(self, path):
+                self.path = path
+
+        monkeypatch.setattr(xgb, "XGBClassifier", FakeXGB)
+        version = "active-20261119"
+        joblib.dump({"model": "rf"}, tmp_path / f"rf_{version}.pkl")
+        (tmp_path / f"xgb_{version}.json").write_text("{}", encoding="utf-8")
+        joblib.dump({"model": "scaler"}, tmp_path / f"scaler_{version}.pkl")
+        joblib.dump({"model": "river"}, tmp_path / f"river_{version}.pkl")
+        (tmp_path / "latest_version.txt").write_text(version, encoding="utf-8")
+
+        recovery = ModelCheckpointRecovery(tmp_path)
+        bundle = recovery.recover_latest_active_bundle()
+
+        assert bundle is not None
+        assert bundle["version"] == version
+        assert bundle["random_forest"] == {"model": "rf"}
+        assert bundle["scaler"] == {"model": "scaler"}
+        assert bundle["river"] == {"model": "river"}
+        assert isinstance(bundle["xgboost"], FakeXGB)
+        assert len(recovery.list_checkpoints()) == 4
+        assert recovery.verify_checkpoint(tmp_path / f"xgb_{version}.json")
