@@ -51,7 +51,7 @@ export default function Dashboard(){
    <div className="content"><div className="welcome-row"><div><h2>{section==="Overview"?"Market overview":section+" workspace"}</h2><p>Exchange research · Strategy intelligence · Simulated execution</p></div><small>Updated {updated||"—"}</small></div>
     {error&&<div className="error-banner"><b>Connection issue</b> {error}. Check backend availability and deployment environment variables.</div>}
     {section==="Overview"&&<div className="metric-grid">{["portfolio/summary","risk/status","learning/status","signals/stats"].map(k=><Card key={k} title={k.split("/").join(" · ")}><pre>{pretty(data[k])}</pre></Card>)}</div>}
-    {section==="Settings"&&<SettingsPanel current={data["settings"]} onSave={async(value)=>{await api("settings",{method:"POST",body:JSON.stringify(value)});await load();}}/>}
+    {section==="Settings"&&<SettingsPanel current={data["settings"]} onSave={async(value)=>{const result=await api("settings",{method:"POST",body:JSON.stringify(value)});await load();return result;}}/>}
     <div className="data-grid">{entries.filter(([k])=>section!=="Overview"||k==="markets").map(([key,value])=><Card key={key} title={key.replaceAll("/"," · ")}><DataView value={value}/></Card>)}</div>
     {entries.length===0&&!error&&<div className="empty">No response data yet. Refresh after the backend has started.</div>}
     <div className="notice">Research and paper-trading interface. No live exchange orders are submitted by this web dashboard.</div>
@@ -64,8 +64,42 @@ function DataView({value}:{value:any}){
  if(value&&typeof value==="object")return <div className="kv">{Object.entries(value).map(([k,v])=><div key={k}><span>{k.replaceAll("_"," ")}</span><b>{typeof v==="object"?pretty(v):pretty(v)}</b></div>)}</div>;
  return <pre>{pretty(value)}</pre>;
 }
-function SettingsPanel({current,onSave}:{current:any;onSave:(value:any)=>Promise<void>}){
- const [text,setText]=useState("");const [saving,setSaving]=useState(false);const [message,setMessage]=useState("");
- useEffect(()=>{setText(JSON.stringify(current??{},null,2));},[current]);
- return <Card title="Runtime configuration"><p className="muted">Edit the backend-supported settings payload. Secret values are not displayed here.</p><textarea value={text} onChange={e=>setText(e.target.value)} rows={12}/><button className="primary" disabled={saving} onClick={async()=>{setSaving(true);setMessage("");try{await onSave(JSON.parse(text));setMessage("Settings saved.");}catch(e){setMessage(e instanceof Error?e.message:"Save failed");}finally{setSaving(false);}}}>{saving?"Saving…":"Save settings"}</button>{message&&<p className="muted">{message}</p>}</Card>;
+function SettingsPanel({current,onSave}:{current:any;onSave:(value:any)=>Promise<any>}){
+ const [draft,setDraft]=useState<any>(current??{});const [timeframes,setTimeframes]=useState((current?.timeframes??[]).join(", "));
+ const [saving,setSaving]=useState(false);const [message,setMessage]=useState("");const [restartRequired,setRestartRequired]=useState<string[]>(current?.restart_required??[]);
+ useEffect(()=>{if(current){setDraft(current);setTimeframes((current.timeframes??[]).join(", "));setRestartRequired(current.restart_required??[]);}},[current]);
+ const toggle=(key:string,value:boolean)=>setDraft((old:any)=>({...old,[key]:value}));
+ const number=(key:string,label:string,min:number,max:number,step=1)=><label className="settings-field"><span>{label}</span><input type="number" min={min} max={max} step={step} value={draft[key]??""} onChange={e=>setDraft((old:any)=>({...old,[key]:e.target.value===""?undefined:Number(e.target.value)}))}/></label>;
+ async function save(){
+  setSaving(true);setMessage("");
+  try{
+   const payload={spot_enabled:draft.spot_enabled,futures_enabled:draft.futures_enabled,scan_all_eligible_symbols:draft.scan_all_eligible_symbols,telegram_enabled:draft.telegram_enabled,timeframes:timeframes.split(",").map((v:string)=>v.trim()).filter(Boolean),spot_initial_balance:draft.spot_initial_balance,futures_initial_balance:draft.futures_initial_balance,risk_per_trade_pct:draft.risk_per_trade_pct,risk_max_daily_loss_pct:draft.risk_max_daily_loss_pct,risk_max_total_open_pct:draft.risk_max_total_open_pct,risk_max_leverage:draft.risk_max_leverage,max_spot_positions:draft.max_spot_positions,max_futures_positions:draft.max_futures_positions};
+   const result=await onSave(payload);const required=result.restart_required??[];setRestartRequired(required);
+   setMessage(required.length?"Saved. Restart the backend to apply: "+required.join(", "):"Settings saved and applied.");
+  }catch(e){setMessage(e instanceof Error?e.message:"Save failed");}
+  finally{setSaving(false);}
+ }
+ return <Card title="Shared engine configuration">
+  <p className="muted">These settings are stored in the shared backend database and are used by the desktop and website. Secret credentials are never shown or editable here.</p>
+  {!current?<p className="muted">Settings are unavailable until the backend connects.</p>:<>
+   <div className="settings-toggle-grid">
+    {([["spot_enabled","Spot market data"],["futures_enabled","USDⓈ-M futures"],["scan_all_eligible_symbols","Scan all eligible symbols"],["telegram_enabled","Telegram notifications"]] as [string,string][]).map(([key,label])=><label className="settings-toggle" key={key}><input type="checkbox" checked={Boolean(draft[key])} onChange={e=>toggle(key,e.target.checked)}/><span>{label}</span></label>)}
+   </div>
+   <div className="settings-fields">
+    {number("spot_initial_balance","Spot virtual capital",0.01,1000000000,0.01)}
+    {number("futures_initial_balance","Futures virtual capital",0.01,1000000000,0.01)}
+    {number("risk_per_trade_pct","Risk per trade (%)",0.01,10,0.01)}
+    {number("risk_max_daily_loss_pct","Maximum daily loss (%)",0.01,20,0.01)}
+    {number("risk_max_total_open_pct","Maximum open risk (%)",0.01,50,0.01)}
+    {number("risk_max_leverage","Maximum leverage",1,20,0.1)}
+    {number("max_spot_positions","Maximum spot positions",1,100)}
+    {number("max_futures_positions","Maximum futures positions",1,100)}
+    <label className="settings-field settings-timeframes"><span>Analysis timeframes · comma separated</span><input value={timeframes} onChange={e=>setTimeframes(e.target.value)} placeholder="1m, 3m, 5m, 15m, 30m, 1h, 4h, 1d, 1w"/></label>
+   </div>
+   <div className="settings-save-row"><button className="primary" disabled={saving} onClick={()=>void save()}>{saving?"Saving…":"Save shared settings"}</button><span role="status">{message}</span></div>
+   {restartRequired.length>0&&<p className="settings-warning" role="status">Restart required before these changes take effect: {restartRequired.join(", ")}.</p>}
+   <p className="muted">Virtual capital cannot be changed while positions or orders are open. Telegram can only be enabled after credentials are configured securely. Real-money execution remains disabled.</p>
+   <div className="settings-credential-status"><span>Telegram bot token <b>{current.telegram_bot_token_configured?"Configured":"Not configured"}</b></span><span>Telegram chat ID <b>{current.telegram_chat_id_configured?"Configured":"Not configured"}</b></span></div>
+  </>}
+ </Card>;
 }
