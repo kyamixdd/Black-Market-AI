@@ -738,7 +738,8 @@ class TestPersistentEventQueue:
         assert result == "ok"
         queue.mark_completed(event_id)
 
-        duplicate, duplicate_result = processor.process_event(
+        restarted_processor = IdempotentEventProcessor(temp_db)
+        duplicate, duplicate_result = restarted_processor.process_event(
             event_id, lambda: calls.append("duplicate")
         )
         assert duplicate is True
@@ -767,10 +768,15 @@ class TestPersistentEventQueue:
         )
         retry.queue_notification("notification-1", telegram.send_message, "queued hello")
 
-        await retry.process_queue()
+        # Recreate the retry manager to simulate a process restart. The new
+        # manager must recover the queued notification from the database.
+        restarted_retry = TelegramRetryManager(
+            telegram, max_retries=3, base_delay=0.001, max_delay=0.01, db=db
+        )
+        await restarted_retry.process_queue()
 
         assert telegram.calls == 2
-        assert retry._persistent_queue.dequeue(limit=10) == []
+        assert restarted_retry._persistent_queue.dequeue(limit=10) == []
         db.close()
 
     @pytest.mark.asyncio
