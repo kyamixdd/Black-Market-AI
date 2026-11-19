@@ -1,10 +1,13 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { LiveMarketChart } from "../../desktop/src/components/charts/LiveMarketChart";
+import type { MarketCandle } from "../../desktop/src/services/marketData";
 type Data = Record<string, any>;
-const sections = ["Overview","Markets","Signals","Portfolio","Positions","Trades","Intelligence","Learning","Risk","Activity","Settings"] as const;
+const sections = ["Overview","Markets","Market Analysis","Signals","Portfolio","Positions","Trades","Intelligence","Learning","Risk","Activity","Settings"] as const;
 const endpoints: Record<string,string[]> = {
   Overview:["portfolio/summary","risk/status","learning/status","signals/stats","markets"],
   Markets:["markets","markets/symbols","markets/heatmap"],
+  "Market Analysis":["markets/symbols"],
   Signals:["signals","signals/stats"],
   Portfolio:["portfolio/balance","portfolio/summary"],
   Positions:["positions"],
@@ -33,6 +36,8 @@ export default function Dashboard(){
  const [section,setSection]=useState<(typeof sections)[number]>("Overview");
  const [data,setData]=useState<Record<string,Data>>({});
  const [error,setError]=useState(""); const [busy,setBusy]=useState(false); const [updated,setUpdated]=useState("");
+ const [selectedSymbol,setSelectedSymbol]=useState("BTCUSDT");const [marketType,setMarketType]=useState<"SPOT"|"FUTURES">("SPOT");const [timeframe,setTimeframe]=useState("1m");
+ const [candles,setCandles]=useState<MarketCandle[]>([]);const [streamStatus,setStreamStatus]=useState<"connecting"|"live"|"reconnecting">("connecting");
  const load=useCallback(async()=>{
    setBusy(true);setError("");
    try{const paths=endpoints[section]||[];const values=await Promise.all(paths.map(async p=>[p,await api(p)] as const));setData(prev=>({...prev,...Object.fromEntries(values)}));setUpdated(new Date().toLocaleTimeString());}
@@ -40,6 +45,44 @@ export default function Dashboard(){
    finally{setBusy(false);}
  },[section]);
  useEffect(()=>{void load();const timer=window.setInterval(()=>{if(section!=="Settings")void load();},15000);return()=>window.clearInterval(timer);},[load,section]);
+ useEffect(()=>{
+  if(section!=="Market Analysis")return;
+  let active=true;
+  const refresh=async()=>{
+   try{
+    const result=await api(`markets/${encodeURIComponent(selectedSymbol)}/candles?market=${marketType}&timeframe=${timeframe}&limit=500`);
+    if(!active)return;
+    const rows=Array.isArray(result.candles)?result.candles:[];
+    const parsed:MarketCandle[]=rows.map((c:any)=>({time:Math.floor(Number(c.open_time)/1000),open:Number(c.open),high:Number(c.high),low:Number(c.low),close:Number(c.close),volume:Number(c.volume??0)})).filter((c:MarketCandle)=>Number.isFinite(c.time)&&[c.open,c.high,c.low,c.close].every(Number.isFinite));
+    setCandles(parsed);
+   }catch(e){if(active)setError(e instanceof Error?e.message:"Unable to load candle history");}
+  };
+  void refresh();
+  const timer=window.setInterval(()=>void refresh(),30000);
+  return()=>{active=false;window.clearInterval(timer);};
+ },[section,selectedSymbol,marketType,timeframe]);
+ useEffect(()=>{
+  if(section!=="Market Analysis")return;
+  const source=new EventSource("/api/backend/events/stream");
+  setStreamStatus("connecting");
+  source.onopen=()=>setStreamStatus("live");
+  source.onmessage=(message)=>{
+   try{
+    const event=JSON.parse(message.data);
+    const candle=event?.payload?.candle;
+    if(event?.event_type!=="MARKET_DATA"||event?.symbol!==selectedSymbol||event?.market!==marketType||candle?.timeframe!==timeframe)return;
+    const next:MarketCandle={time:Math.floor(Number(candle.open_time)/1000),open:Number(candle.open),high:Number(candle.high),low:Number(candle.low),close:Number(candle.close),volume:Number(candle.volume??0)};
+    if(!Number.isFinite(next.time)||![next.open,next.high,next.low,next.close].every(Number.isFinite))return;
+    setCandles(previous=>{
+     const index=previous.findIndex(item=>item.time===next.time);
+     if(index>=0){const updated=[...previous];updated[index]=next;return updated;}
+     return [...previous,next].sort((a,b)=>a.time-b.time).slice(-500);
+    });
+   }catch{/* Ignore malformed dashboard-only events. */}
+  };
+  source.onerror=()=>setStreamStatus("reconnecting");
+  return()=>source.close();
+ },[section,selectedSymbol,marketType,timeframe]);
  async function logout(){await fetch("/api/logout",{method:"POST"});location.assign("/login");}
  const entries=Object.entries(data).filter(([key])=>(endpoints[section]||[]).includes(key));
  return <main className="app-shell">
@@ -50,6 +93,16 @@ export default function Dashboard(){
   <section className="main-area"><header className="topbar"><div><div className="eyebrow">BLACKMARKET / {section.toUpperCase()}</div><h1>{section}</h1></div><div className="top-actions"><span className="status"><i/> PAPER MODE</span><button className="refresh" onClick={()=>void load()} disabled={busy}>{busy?"Refreshing…":"↻ Refresh"}</button></div></header>
    <div className="content"><div className="welcome-row"><div><h2>{section==="Overview"?"Market overview":section+" workspace"}</h2><p>Exchange research · Strategy intelligence · Simulated execution</p></div><small>Updated {updated||"—"}</small></div>
     {error&&<div className="error-banner"><b>Connection issue</b> {error}. Check backend availability and deployment environment variables.</div>}
+    {section==="Market Analysis"&&<Card title="Live Binance candlesticks">
+     <div className="market-analysis-controls">
+      <label>Symbol<input value={selectedSymbol} onChange={e=>setSelectedSymbol(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g,""))} aria-label="Market symbol"/></label>
+      <label>Market<select value={marketType} onChange={e=>setMarketType(e.target.value as "SPOT"|"FUTURES")}><option value="SPOT">Spot</option><option value="FUTURES">USDⓈ-M Futures</option></select></label>
+      <label>Timeframe<select value={timeframe} onChange={e=>setTimeframe(e.target.value)}>{["1m","3m","5m","15m","30m","1h","4h","1d","1w"].map(v=><option key={v}>{v}</option>)}</select></label>
+      <span className={"stream-indicator "+streamStatus}><i/>{streamStatus==="live"?"LIVE STREAM":streamStatus==="connecting"?"CONNECTING":"RECONNECTING"}</span>
+     </div>
+     <div className="web-market-chart"><LiveMarketChart candles={candles} symbol={selectedSymbol} marketType={marketType} timeframe={timeframe} indicators={[]} autoScale crosshair onLoadOlder={()=>{}}/></div>
+     <p className="muted">{candles.length} candles loaded · forming candles update from the authenticated backend event stream; completed candles are persisted for desktop and website.</p>
+    </Card>}
     {section==="Overview"&&<div className="metric-grid">{["portfolio/summary","risk/status","learning/status","signals/stats"].map(k=><Card key={k} title={k.split("/").join(" · ")}><pre>{pretty(data[k])}</pre></Card>)}</div>}
     {section==="Settings"&&<SettingsPanel current={data["settings"]} onSave={async(value)=>{const result=await api("settings",{method:"POST",body:JSON.stringify(value)});setData(prev=>({...prev,settings:result}));return result;}}/>}
     <div className="data-grid">{entries.filter(([k])=>section!=="Overview"||k==="markets").map(([key,value])=><Card key={key} title={key.replaceAll("/"," · ")}><DataView value={value}/></Card>)}</div>
