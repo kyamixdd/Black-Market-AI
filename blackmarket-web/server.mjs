@@ -12,6 +12,12 @@ if (!process.env.BLACKMARKET_API_TOKEN) {
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL must point to durable PostgreSQL before the hosted backend can start.");
 }
+if (!process.env.BLACKMARKET_WEB_PASSWORD) {
+  throw new Error("BLACKMARKET_WEB_PASSWORD must be configured before the website can start.");
+}
+if (!process.env.BLACKMARKET_SESSION_SECRET || process.env.BLACKMARKET_SESSION_SECRET.length < 32) {
+  throw new Error("BLACKMARKET_SESSION_SECRET must contain at least 32 characters.");
+}
 
 const commonEnv = {
   ...process.env,
