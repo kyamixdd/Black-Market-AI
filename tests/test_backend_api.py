@@ -514,10 +514,10 @@ async def test_authenticated_sse_stream_frames_events_and_detaches_subscriber(mo
 
     class FakeEventBus:
         def __init__(self):
-            self.subscribers = {"*": []}
+            self._subscribers = {"*": []}
 
         def subscribe_all(self, callback):
-            self.subscribers["*"].append(callback)
+            self._subscribers["*"].append(callback)
 
     event_bus = FakeEventBus()
     monkeypatch.setattr(main, "orchestrator", SimpleNamespace(event_bus=event_bus))
@@ -534,7 +534,7 @@ async def test_authenticated_sse_stream_frames_events_and_detaches_subscriber(mo
         market="SPOT",
         candle={"timeframe": "1m", "open_time": 1_800_000_000_000, "closed": False},
     )
-    await event_bus.subscribers["*"][0](event)
+    await event_bus._subscribers["*"][0](event)
     message = await anext(iterator)
 
     assert message.startswith("data: ")
@@ -543,4 +543,4 @@ async def test_authenticated_sse_stream_frames_events_and_detaches_subscriber(mo
     assert payload["payload"]["candle"]["timeframe"] == "1m"
 
     await iterator.aclose()
-    assert event_bus.subscribers["*"] == []
+    assert event_bus._subscribers["*"] == []
