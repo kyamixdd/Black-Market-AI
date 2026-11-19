@@ -15,7 +15,7 @@ from .symbol_registry import SymbolRegistry
 
 logger = logging.getLogger(__name__)
 
-SPOT_EXCHANGE_INFO = "https://api.binance.com/api/v3/exchangeInfo"
+SPOT_EXCHANGE_INFO = "https://data-api.binance.vision/api/v3/exchangeInfo"
 FUTURES_EXCHANGE_INFO = "https://fapi.binance.com/fapi/v1/exchangeInfo"
 
 
