@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   Activity,
   ArrowDownToLine,
@@ -51,7 +49,6 @@ import type {
   WorkspaceRisk,
   WorkspaceSignal,
 } from './screens/DashboardScreens'
-import './App.css'
 
 type MarketSnapshot = MarketSnapshotData
 
@@ -131,6 +128,15 @@ type StartupStatus = {
 }
 
 const API_ORIGIN = 'http://127.0.0.1:8765'
+
+async function invoke<T>(command: string): Promise<T> {
+  const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
+  return tauriInvoke<T>(command)
+}
+
+function apiBaseUrl(): string {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? `${API_ORIGIN}/api` : '/api/backend'
+}
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
 const WEBSOCKET_CHANNELS: WebSocketChannel[] = [
   'market_updates',
@@ -215,10 +221,11 @@ function readPreferences(): DashboardPreferences {
 }
 
 async function requestJson<T>(path: string, api = true): Promise<T | null> {
-  const url = api ? `${API_ORIGIN}/api${path}` : `${API_ORIGIN}${path}`
+  const url = api ? `${apiBaseUrl()}${path}` : `${API_ORIGIN}${path}`
   try {
     const response = await fetch(url, {
-      headers: api ? getApiAuthorization() : undefined,
+      headers: api && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? getApiAuthorization() : undefined,
+      cache: 'no-store',
     })
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
     return (await response.json()) as T
@@ -298,7 +305,7 @@ function App() {
   const [data, setData] = useState(EMPTY_DATA)
   const [startupStatus, setStartupStatus] = useState<StartupStatus>({
     state: 'checking',
-    message: 'Checking the local backend.',
+    message: 'Checking the backend connection.',
   })
   const [apiReady, setApiReady] = useState(false)
   const [websocketConnected, setWebsocketConnected] = useState(false)
@@ -318,6 +325,17 @@ function App() {
   const [popup, setPopup] = useState<Popup>(null)
   const [activeScreen, setActiveScreen] = useState<ScreenName>('Overview')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
+  useEffect(() => {
+    if (!mobileMenuOpen && !popup) return
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setMobileMenuOpen(false)
+      setPopup(null)
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [mobileMenuOpen, popup])
   const [assistantHelpOpen, setAssistantHelpOpen] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -355,49 +373,53 @@ function App() {
 
       let ready = false
       let authenticationFailed = false
-      let healthError = 'The local API is not responding yet.'
+      let healthError = isTauri ? 'The local API is not responding yet.' : 'The hosted API is not responding yet.'
       const controller = new AbortController()
-      const requestTimeout = window.setTimeout(() => controller.abort(), 2000)
+      const requestTimeout = window.setTimeout(() => controller.abort(), 5000)
       try {
-        const response = await fetch(`${API_ORIGIN}/health`, { signal: controller.signal })
+        const response = await fetch(isTauri ? `${API_ORIGIN}/health` : '/api/health', {
+          signal: controller.signal,
+          cache: 'no-store',
+        })
         if (!response.ok) {
-          healthError = `The local API returned HTTP ${response.status}.`
+          healthError = `The ${isTauri ? 'local' : 'hosted'} API returned HTTP ${response.status}.`
         } else {
-          const health: unknown = await response.json()
+          const healthPayload: unknown = await response.json()
+          const health = !isTauri && typeof healthPayload === 'object' && healthPayload !== null && 'backend' in healthPayload
+            ? healthPayload.backend
+            : healthPayload
           if (typeof health === 'object' && health !== null && 'backend_ready' in health
             && health.backend_ready === true && 'database_connected' in health
-            && health.database_connected === true && 'websocket_connected' in health
-            && health.websocket_connected === true) {
-            if (!isTauri) {
-              setApiToken(null)
-              healthError = 'Authenticated API access is available only through the managed desktop application.'
-              authenticationFailed = true
-            } else {
+            && health.database_connected === true) {
+            if (isTauri) {
               const token = await invoke<string>('backend_api_token')
               if (!token) throw new Error('The desktop supervisor returned an empty API token.')
               setApiToken(token)
-              const authenticatedResponse = await fetch(`${API_ORIGIN}/api/system/status`, {
-                headers: getApiAuthorization(),
+            }
+            const authenticatedResponse = await fetch(
+              isTauri ? `${API_ORIGIN}/api/system/status` : '/api/backend/system/status',
+              {
+                headers: isTauri ? getApiAuthorization() : undefined,
                 signal: controller.signal,
-              })
-              if (authenticatedResponse.ok) {
-                ready = true
-              } else {
-                authenticationFailed = authenticatedResponse.status === 401
-                healthError = `The authenticated local API check returned HTTP ${authenticatedResponse.status}.`
-                setApiToken(null)
-              }
+                cache: 'no-store',
+              },
+            )
+            if (authenticatedResponse.ok) ready = true
+            else {
+              authenticationFailed = authenticatedResponse.status === 401
+              healthError = `The authenticated API check returned HTTP ${authenticatedResponse.status}.`
+              setApiToken(null)
             }
           } else {
             setApiToken(null)
-            healthError = 'The backend is responding but has not reported database and WebSocket readiness.'
+            healthError = 'The backend is responding but has not reported database readiness.'
           }
         }
       } catch (error) {
         setApiToken(null)
         healthError = error instanceof Error && error.message.includes('API token')
           ? error.message
-          : 'The local API is not responding or its authenticated startup check failed. Check the backend startup log for details.'
+          : `The ${isTauri ? 'local' : 'hosted'} API is unreachable or its authenticated startup check failed.`
         authenticationFailed = isTauri && nativeStatus?.state === 'ready'
       } finally {
         window.clearTimeout(requestTimeout)
@@ -408,7 +430,7 @@ function App() {
         if (ready) {
           setStartupStatus({
             state: 'ready',
-            message: 'The backend API, database, and WebSocket service are ready.',
+            message: isTauri ? 'The local backend API and database are ready.' : 'The hosted backend API and database are ready.',
           })
         } else {
           setMarketDataStatus('disconnected')
@@ -438,8 +460,8 @@ function App() {
           } else if (!isTauri && Date.now() - startedAt >= 30000) {
             setStartupStatus({
               state: 'failed',
-              message: 'The backend is unavailable in this browser preview.',
-              details: 'The browser preview cannot launch the Python engine. Launch BlackMarket AI from its desktop application to manage backend startup.',
+              message: 'The hosted backend is unavailable.',
+              details: 'The website cannot launch the Python engine. Check the hosted backend service and its health endpoint.'
             })
           } else {
             setStartupStatus({
@@ -892,8 +914,7 @@ function App() {
 
   const runWindowAction = (action: 'minimize' | 'toggleMaximize' | 'close') => {
     if (!isTauri) return
-    const appWindow = getCurrentWindow()
-    void appWindow[action]().catch((error: unknown) => console.error(`Unable to ${action} application window`, error))
+    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow()[action]()).catch((error: unknown) => console.error(`Unable to ${action} application window`, error))
   }
 
   const downloadRiskData = () => {
@@ -1049,7 +1070,7 @@ function App() {
   return (
     <main className="terminal">
       <header className="topbar" data-tauri-drag-region>
-        <button className={`mobile-menu icon-button ${mobileMenuOpen ? 'selected' : ''}`} aria-label="Toggle navigation" onClick={() => setMobileMenuOpen((open) => !open)}>
+        <button className={`mobile-menu icon-button ${mobileMenuOpen ? 'selected' : ''}`} type="button" aria-label="Toggle navigation" aria-expanded={mobileMenuOpen} aria-controls="application-navigation" onClick={() => setMobileMenuOpen((open) => !open)}>
           <MoreHorizontal size={16} />
         </button>
         <a className="brand" href="#" aria-label="BlackMarket AI home" onClick={() => changeNavigation('Overview')}>
@@ -1127,7 +1148,7 @@ function App() {
         )}
       </header>
 
-      <nav className={`screen-navigation ${mobileMenuOpen ? 'mobile-open' : ''}`} aria-label="Application screens">
+      <nav id="application-navigation" className={`screen-navigation ${mobileMenuOpen ? 'mobile-open' : ''}`} aria-label="Application screens">
         {NAV_ITEMS.map((item) => (
           <button
             key={item.label}
@@ -1210,8 +1231,9 @@ function App() {
                 {heatCells.length ? heatCells.map((item, index) => {
                   const change = numberValue(item.price_change_24h)
                   const activity = Math.max(0, Math.min(1, (item.volume_rank_pct ?? 0) / 100))
-                  const intensity = Math.min(0.68, 0.12 + Math.min(Math.abs(change ?? 0) / 20, 0.36) + activity * 0.2)
-                  const color = `rgba(174, 181, 188, ${intensity})`
+                  const intensity = Math.min(4, Math.floor(Math.min(1, Math.abs(change ?? 0) / 20 + activity * 0.45) * 5))
+                  const heatmapTones = ['#19191E', '#29292F', '#414149', '#66666F', '#A1A1AA']
+                  const color = heatmapTones[intensity]
                   const title = `${item.symbol ?? 'Market'} ${item.market ?? ''} · 24h ${formatChange(change)} · relative strength ${formatChange(item.relative_strength_pct ?? undefined)} · volume rank ${metricText(item.volume_rank_pct)}% · volatility ${item.volatility_24h_pct == null ? 'unavailable' : `${metricText(item.volatility_24h_pct)}%`}`
                   return (
                     <button

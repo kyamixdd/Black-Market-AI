@@ -14,7 +14,7 @@ from typing import Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.websockets import WebSocketState
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -58,8 +58,10 @@ bridge: "OrchestratorBridge" | None = None
 ws_manager: WebSocketManager | None = None
 _shutdown_token = os.environ.get("BLACKMARKET_SHUTDOWN_TOKEN")
 _api_token = os.environ.get("BLACKMARKET_API_TOKEN")
+_REMOTE_API_ENABLED = os.environ.get("BLACKMARKET_REMOTE_API_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+_ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get("BLACKMARKET_ALLOWED_ORIGINS", "").split(",") if origin.strip()]
 _request_server_shutdown: Callable[[], None] | None = None
-_tauri_origins = ["http://tauri.localhost", "tauri://localhost"]
+_tauri_origins = ["http://tauri.localhost", "tauri://localhost", *_ALLOWED_ORIGINS]
 if os.environ.get("BLACKMARKET_DESKTOP_DEV") == "1":
     _tauri_origins.extend(["http://localhost:3000", "http://127.0.0.1:3000"])
 
@@ -87,8 +89,14 @@ def _matches_bearer_token(authorization: str | None, expected: str | None) -> bo
 
 def _api_host() -> str:
     host = os.environ.get("BLACKMARKET_API_HOST", "127.0.0.1")
+    if _REMOTE_API_ENABLED:
+        if not _api_token:
+            raise RuntimeError("BLACKMARKET_API_TOKEN is required when remote API mode is enabled.")
+        if host not in {"0.0.0.0", "::"} and not _is_loopback(host):
+            raise RuntimeError("Remote API host must be 0.0.0.0, ::, or loopback.")
+        return host
     if not _is_loopback(host):
-        raise RuntimeError("BLACKMARKET_API_HOST must be a loopback IP address.")
+        raise RuntimeError("BLACKMARKET_API_HOST must be a loopback IP address unless remote API mode is explicitly enabled.")
     return host
 
 
@@ -156,8 +164,8 @@ app = FastAPI(
 @app.middleware("http")
 async def require_local_api_auth(request: Request, call_next):
     client_host = request.client.host if request.client else None
-    if not _is_loopback(client_host):
-        return JSONResponse(status_code=403, content={"detail": "Loopback clients only"})
+    if not _is_loopback(client_host) and not _REMOTE_API_ENABLED:
+        return JSONResponse(status_code=403, content={"detail": "Remote API access is disabled"})
 
     if request.url.path == "/api" or request.url.path.startswith("/api/"):
         if request.method != "OPTIONS":
@@ -187,6 +195,50 @@ for router in (
     settings.router,
 ):
     app.include_router(router, prefix="/api")
+
+
+@app.get("/api/events/stream")
+async def event_stream():
+    """Authenticated Server-Sent Events stream for browser dashboard clients."""
+    if orchestrator is None:
+        raise HTTPException(status_code=503, detail="Backend is starting")
+    event_bus = orchestrator.event_bus
+    queue: asyncio.Queue = asyncio.Queue(maxsize=512)
+
+    async def on_event(event):
+        try:
+            queue.put_nowait(event.to_dict())
+        except asyncio.QueueFull:
+            # Keep the newest dashboard state without blocking the trading event bus.
+            try:
+                queue.get_nowait()
+                queue.task_done()
+                queue.put_nowait(event.to_dict())
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                logger.warning("Dropping dashboard SSE event because its queue is full")
+
+    event_bus.subscribe_all(on_event)
+
+    async def stream():
+        try:
+            yield "retry: 3000\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield "data: " + json.dumps(event, default=str, separators=(",", ":")) + "\n\n"
+                    queue.task_done()
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            subscribers = event_bus._subscribers.get("*", [])
+            if on_event in subscribers:
+                subscribers.remove(on_event)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.websocket("/ws")
