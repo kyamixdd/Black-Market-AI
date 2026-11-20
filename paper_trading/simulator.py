@@ -658,6 +658,7 @@ class Simulator:
         self.spot_positions = state.get("spot_positions", {})
         self.futures_positions = state.get("futures_positions", {})
         self.open_orders = state.get("open_orders", {})
+        self.closed_trades = state.get("closed_trades", [])
         # A crash during execution is ambiguous: the position may already have
         # been created even if the order's FILLED state was not persisted.
         # Hold for reconciliation rather than risking a duplicate fill.
@@ -673,7 +674,6 @@ class Simulator:
                 self.open_orders.pop(order_id, None)
             else:
                 order["status"] = "RECOVERY_REVIEW"
-        self.closed_trades = state.get("closed_trades", [])
         daily_pnl_date = state.get("daily_pnl_date")
         try:
             self.daily_pnl_date = datetime.fromisoformat(daily_pnl_date).date() if daily_pnl_date else datetime.now(timezone.utc).date()
