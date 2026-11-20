@@ -1165,3 +1165,43 @@ def test_slippage_volume_impact_uses_notional_not_leveraged_margin():
     low = calc.calculate_slippage("FUTURES", "MARKET", 1.0, 100.0, 1.0, 10000.0)
     high = calc.calculate_slippage("FUTURES", "MARKET", 1.0, 100.0, 20.0, 10000.0)
     assert high == pytest.approx(low)
+
+
+
+@pytest.mark.parametrize(("side", "expected"), [
+    ("LONG", 20.0),
+    ("BUY", 20.0),
+    ("SHORT", -20.0),
+    ("SELL", -20.0),
+])
+def test_futures_realized_pnl_uses_underlying_notional_not_leverage(side, expected):
+    from paper_trading.pnl_calculator import PnLCalculator
+
+    position = {
+        "side": side,
+        "entry_price": 100.0,
+        "amount": 1.0,
+        "leverage": 10.0,
+    }
+    assert PnLCalculator().realized(position, 120.0) == pytest.approx(expected if side in ("LONG", "BUY") else -20.0)
+
+
+def test_futures_unrealized_pnl_is_independent_of_leverage():
+    from paper_trading.pnl_calculator import PnLCalculator
+
+    calculator = PnLCalculator()
+    base = {"side": "LONG", "entry_price": 100.0, "amount": 2.0, "leverage": 1.0}
+    leveraged = {**base, "leverage": 25.0}
+
+    assert calculator.unrealized(base, 110.0) == pytest.approx(20.0)
+    assert calculator.unrealized(leveraged, 110.0) == pytest.approx(20.0)
+
+
+def test_short_realized_pnl_direction_is_correct_without_leverage_multiplier():
+    from paper_trading.pnl_calculator import PnLCalculator
+
+    position = {"side": "SHORT", "entry_price": 100.0, "amount": 2.0, "leverage": 20.0}
+    calculator = PnLCalculator()
+
+    assert calculator.realized(position, 90.0) == pytest.approx(20.0)
+    assert calculator.realized(position, 110.0) == pytest.approx(-20.0)
