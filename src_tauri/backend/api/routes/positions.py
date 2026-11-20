@@ -60,12 +60,19 @@ async def update_position(position_id: str, request: PositionUpdateRequest):
         raise HTTPException(422, "Provide a stop loss or take profit update.")
     entry = float(position["entry_price"])
     long_side = position["side"] in ("LONG", "BUY")
+    if request.stop_loss is not None and (
+        (long_side and request.stop_loss >= entry)
+        or (not long_side and request.stop_loss <= entry)
+    ):
+        raise HTTPException(422, "Stop loss is on the invalid side of entry.")
+    if request.take_profit is not None and (
+        (long_side and request.take_profit <= entry)
+        or (not long_side and request.take_profit >= entry)
+    ):
+        raise HTTPException(422, "Take profit is on the invalid side of entry.")
+    # Validate every supplied value before mutating either field.
     if request.stop_loss is not None:
-        if (long_side and request.stop_loss >= entry) or (not long_side and request.stop_loss <= entry):
-            raise HTTPException(422, "Stop loss is on the invalid side of entry.")
         position["stop_loss"] = request.stop_loss
     if request.take_profit is not None:
-        if (long_side and request.take_profit <= entry) or (not long_side and request.take_profit >= entry):
-            raise HTTPException(422, "Take profit is on the invalid side of entry.")
         position["take_profit"] = request.take_profit
     return ManualActionResponse(success=True, id=position_id, message="Position risk levels updated.")
