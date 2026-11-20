@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from ...bridge.orchestrator_bridge import get_bridge
 from .schemas import (
     TradeListResponse, TradeResponse, TradeStatisticsResponse,
-    ManualOrderRequest, ManualActionResponse,
+    OpenOrderListResponse, ManualOrderRequest, ManualActionResponse,
 )
 
 router = APIRouter(prefix="/trades", tags=["trades"])
@@ -93,10 +93,13 @@ async def get_trade_stats():
     return get_bridge().get_trade_statistics()
 
 
-@router.get("/orders")
+@router.get("/orders", response_model=OpenOrderListResponse)
 async def get_open_orders():
     simulator = get_bridge().simulator
-    return {"orders": list(simulator.open_orders.values()), "total": len(simulator.open_orders)}
+    return OpenOrderListResponse(
+        orders=list(simulator.open_orders.values()),
+        total=len(simulator.open_orders),
+    )
 
 
 @router.post("", response_model=ManualActionResponse)

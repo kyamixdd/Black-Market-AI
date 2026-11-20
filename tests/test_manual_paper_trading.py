@@ -163,3 +163,93 @@ def test_manual_trade_rejects_stale_or_invalid_market_snapshots(snapshot):
     with pytest.raises(HTTPException) as error:
         _validated_manual_signal(order, FakeBridge())
     assert error.value.status_code == 409
+
+
+def test_position_risk_update_persists_trailing_stop_and_rolls_back_on_failure(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src_tauri.backend.api.routes import positions
+
+    saved = []
+
+    class FakeSimulator:
+        spot_positions = {
+            "POS-TRAIL": {
+                "position_id": "POS-TRAIL",
+                "symbol": "BTCUSDT",
+                "market": "SPOT",
+                "side": "LONG",
+                "entry_price": 100.0,
+                "current_price": 120.0,
+                "stop_loss": 90.0,
+                "take_profit": 140.0,
+                "status": "OPEN",
+            }
+        }
+        futures_positions = {}
+
+        @staticmethod
+        def persist_position_callback(position):
+            saved.append(dict(position))
+
+    class FakeBridge:
+        simulator = FakeSimulator()
+
+    monkeypatch.setattr(positions, "get_bridge", lambda: FakeBridge())
+    app = FastAPI()
+    app.include_router(positions.router, prefix="/api")
+
+    with TestClient(app) as client:
+        response = client.patch("/api/positions/POS-TRAIL", json={"stop_loss": 110.0})
+        assert response.status_code == 200
+        assert FakeBridge.simulator.spot_positions["POS-TRAIL"]["stop_loss"] == 110.0
+        assert saved[-1]["stop_loss"] == 110.0
+
+        FakeBridge.simulator.persist_position_callback = lambda _position: (_ for _ in ()).throw(RuntimeError("db down"))
+        response = client.patch("/api/positions/POS-TRAIL", json={"stop_loss": 115.0})
+        assert response.status_code == 503
+        assert FakeBridge.simulator.spot_positions["POS-TRAIL"]["stop_loss"] == 110.0
+
+
+def test_open_orders_endpoint_returns_typed_order_contract(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src_tauri.backend.api.routes import trades
+
+    class FakeSimulator:
+        open_orders = {
+            "ORD-TYPED": {
+                "order_id": "ORD-TYPED",
+                "symbol": "BTCUSDT",
+                "market": "SPOT",
+                "side": "BUY",
+                "entry_price": 100.0,
+                "amount": 0.01,
+                "stop_loss": 95.0,
+                "take_profit": 110.0,
+                "leverage": 1.0,
+                "order_type": "LIMIT",
+                "status": "RECOVERY_REVIEW",
+                "created_at": datetime.now(timezone.utc),
+                "signal_id": "MANUAL",
+                "filled_amount": 0.0,
+                "avg_fill_price": 0.0,
+                "fee": 0.0,
+                "strategy": "MANUAL",
+            }
+        }
+
+    class FakeBridge:
+        simulator = FakeSimulator()
+
+    monkeypatch.setattr(trades, "get_bridge", lambda: FakeBridge())
+    app = FastAPI()
+    app.include_router(trades.router, prefix="/api")
+
+    with TestClient(app) as client:
+        response = client.get("/api/trades/orders")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["orders"][0]["order_id"] == "ORD-TYPED"
+        assert payload["orders"][0]["status"] == "RECOVERY_REVIEW"

@@ -255,6 +255,31 @@ class TradeStatisticsResponse(BaseModel):
     max_drawdown_pct: float
 
 
+class PaperOrderResponse(BaseModel):
+    order_id: str
+    symbol: str
+    market: MarketType
+    side: str
+    entry_price: float
+    amount: float
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    leverage: float = 1.0
+    order_type: str
+    status: str
+    created_at: datetime | None = None
+    signal_id: str | None = None
+    filled_amount: float = 0.0
+    avg_fill_price: float = 0.0
+    fee: float = 0.0
+    strategy: str = "UNKNOWN"
+
+
+class OpenOrderListResponse(BaseModel):
+    orders: list[PaperOrderResponse]
+    total: int
+
+
 class SignalStatisticsResponse(BaseModel):
     total: int
     avg_confidence: float
