@@ -786,3 +786,55 @@ async def test_close_rejects_non_finite_fee_without_mutating_account():
     assert position_id in simulator.spot_positions
     assert simulator.spot_balance == pytest.approx(balance_before)
     assert simulator.closed_trades == []
+
+
+@pytest.mark.asyncio
+async def test_liquidation_does_not_emit_false_alert_after_concurrent_manual_close():
+    margin_alert_started = asyncio.Event()
+    release_margin_alert = asyncio.Event()
+
+    class PausingEventBus(EventBus):
+        def __init__(self):
+            super().__init__()
+            self.published = []
+
+        async def publish(self, event):
+            self.published.append(event)
+            payload = event.payload.get("payload", {})
+            if event.event_type == "RISK_ALERT" and payload.get("alert_type") == "MARGIN_RISK":
+                margin_alert_started.set()
+                await release_margin_alert.wait()
+            await super().publish(event)
+
+    bus = PausingEventBus()
+    simulator = Simulator(bus)
+    signal = {
+        "signal_id": "SIG-LIQ-CLOSE-RACE",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 35000.0,
+        "take_profit": [52000.0],
+        "leverage": 3.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.futures_positions[position_id]
+    simulator.liquidation.is_at_risk = lambda *_args: True
+    simulator.liquidation.check_liquidation = lambda *_args: True
+    simulator.liquidation.calculate_liquidation_price = lambda *_args: 36000.0
+
+    liquidation_task = asyncio.create_task(simulator._check_liquidation(position, 36000.0))
+    await margin_alert_started.wait()
+
+    assert await simulator._close_position(position, 40000.0, "MANUAL") is True
+    release_margin_alert.set()
+    await liquidation_task
+
+    liquidation_alerts = [
+        event for event in bus.published
+        if event.event_type == "RISK_ALERT"
+        and event.payload.get("payload", {}).get("alert_type") == "LIQUIDATION"
+    ]
+    assert liquidation_alerts == []
+    assert len(simulator.closed_trades) == 1

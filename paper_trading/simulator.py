@@ -306,21 +306,22 @@ class Simulator:
                 }
             ))
 
-        if self.liquidation.check_liquidation(position, mark_price):
+        if position.get("status") == "OPEN" and self.liquidation.check_liquidation(position, mark_price):
             liq_price = self.liquidation.calculate_liquidation_price(position)
             logger.warning("LIQUIDATION triggered for %s %s @ %.4f (liq: %.4f)",
                           position["symbol"], position["side"], mark_price, liq_price)
-            await self._close_position(position, mark_price, "LIQUIDATION")
-            await self.event_bus.publish(make_event(
-                EventType.RISK_ALERT, "simulator",
-                symbol=position["symbol"], market=position["market"],
-                payload={
-                    "alert_type": "LIQUIDATION",
-                    "message": f"Position {position['symbol']} liquidated",
-                    "liquidation_price": liq_price,
-                    "mark_price": mark_price,
-                }
-            ))
+            closed = await self._close_position(position, mark_price, "LIQUIDATION")
+            if closed:
+                await self.event_bus.publish(make_event(
+                    EventType.RISK_ALERT, "simulator",
+                    symbol=position["symbol"], market=position["market"],
+                    payload={
+                        "alert_type": "LIQUIDATION",
+                        "message": f"Position {position['symbol']} liquidated",
+                        "liquidation_price": liq_price,
+                        "mark_price": mark_price,
+                    }
+                ))
 
     async def _apply_funding(self, position: dict, funding_rate: float) -> None:
         """Apply funding payment to futures position."""
