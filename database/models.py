@@ -164,6 +164,7 @@ class PaperPositionModel(Base):
     unrealized_pnl = Column(Float, default=0.0)
     realized_pnl = Column(Float, default=0.0)
     fees_paid = Column(Float, default=0.0)
+    last_funding_time = Column(Integer, default=0)
     reserved_notional = Column(Float, default=0.0)
     order_id = Column(String(64), nullable=True)
     signal_id = Column(String(64), nullable=True)

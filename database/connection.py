@@ -60,6 +60,7 @@ class Database:
         additions = {
             "paper_positions": {
                 "reserved_notional": "FLOAT NOT NULL DEFAULT 0.0",
+                "last_funding_time": "INTEGER NOT NULL DEFAULT 0",
                 "order_id": "VARCHAR(64)",
                 "signal_id": "VARCHAR(64)",
                 "strategy": "VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN'",
