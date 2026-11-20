@@ -179,6 +179,12 @@ class Simulator:
                 and signal.get("direction") not in ("LONG", "BUY")
                 else "Calculated quantity is zero"
             )
+        if market == "FUTURES":
+            entry = float(signal["entry"])
+            fee = self.fee_calc.calculate("FUTURES", direction, qty, entry, leverage)
+            required_margin = qty * entry / leverage
+            if required_margin + fee > balance + 1e-9:
+                return False, "Insufficient available Futures balance for margin and fees"
         # Total open risk
         total_risk = self._get_total_risk()
         new_risk = risk_amount * qty
@@ -211,6 +217,10 @@ class Simulator:
         # Deduct fees upfront
         fee = self.fee_calc.calculate(market, signal["direction"], qty, fill_price, leverage)
         reserved_notional = qty * fill_price if market == "SPOT" else 0.0
+        reserved_margin = qty * fill_price / leverage if market == "FUTURES" else 0.0
+        if market == "FUTURES" and reserved_margin + fee > self.futures_balance + 1e-9:
+            logger.warning("Futures order %s exceeds available margin after fees", signal["signal_id"])
+            return None
         if market == "SPOT" and reserved_notional + fee > self.spot_balance + 1e-9:
             logger.warning("Spot order %s exceeds available cash after fees", signal["signal_id"])
             return None
@@ -231,6 +241,7 @@ class Simulator:
             "realized_pnl": 0.0,
             "fees_paid": fee,
             "reserved_notional": reserved_notional,
+            "reserved_margin": reserved_margin,
             "status": "OPEN",
             "opened_at": datetime.now(timezone.utc),
             "order_type": order_type,
@@ -243,7 +254,7 @@ class Simulator:
             self.spot_balance -= reserved_notional + fee
         else:
             self.futures_positions[position_id] = position
-            self.futures_balance -= fee
+            self.futures_balance -= reserved_margin + fee
 
         # Persist the position before publishing an event that may be delayed or lost.
         try:
@@ -255,7 +266,7 @@ class Simulator:
                 self.spot_balance += reserved_notional + fee
             else:
                 self.futures_positions.pop(position_id, None)
-                self.futures_balance += fee
+                self.futures_balance += reserved_margin + fee
             raise
 
         try:
@@ -440,7 +451,11 @@ class Simulator:
             self.spot_balance += reserved + balance_delta
             pos_dict = self.spot_positions
         else:
-            self.futures_balance += balance_delta
+            reserved_margin = float(position.get(
+                "reserved_margin",
+                position["entry_price"] * position["amount"] / max(float(position.get("leverage", 1.0)), 1.0),
+            ))
+            self.futures_balance += reserved_margin + balance_delta
             pos_dict = self.futures_positions
         # Record trade
         trade = {

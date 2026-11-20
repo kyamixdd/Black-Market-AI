@@ -1205,3 +1205,30 @@ def test_short_realized_pnl_direction_is_correct_without_leverage_multiplier():
 
     assert calculator.realized(position, 90.0) == pytest.approx(20.0)
     assert calculator.realized(position, 110.0) == pytest.approx(-20.0)
+
+
+
+@pytest.mark.asyncio
+async def test_futures_margin_is_reserved_and_released_on_close():
+    sim = Simulator(EventBus())
+    sim.futures_balance = 1000.0
+    signal = {
+        "signal_id": "MARGIN-OPEN",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": 2.0,
+        "order_type": "LIMIT",
+    }
+    position_id = await sim.execute_signal(signal, quantity_override=1.0)
+    assert position_id is not None
+    position = sim.futures_positions[position_id]
+    assert position["reserved_margin"] == pytest.approx(50.0)
+    assert sim.futures_balance == pytest.approx(1000.0 - 50.0 - position["fees_paid"])
+
+    assert await sim._close_position(position, 110.0, "MANUAL") is True
+    assert position_id not in sim.futures_positions
+    assert sim.futures_balance == pytest.approx(1000.0 + 10.0 - position["fees_paid"])

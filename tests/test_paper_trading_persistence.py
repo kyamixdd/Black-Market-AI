@@ -310,6 +310,7 @@ def test_futures_funding_timestamp_and_fee_survive_restart_without_double_charge
             "fees_paid": 0.0,
             "last_funding_time": 0,
             "reserved_notional": 0.0,
+            "reserved_margin": 100.0,
             "status": "OPEN",
             "opened_at": datetime.now(timezone.utc).replace(microsecond=0) - __import__("datetime").timedelta(hours=9),
         }
@@ -469,5 +470,41 @@ def test_recovery_deducts_open_position_costs_and_futures_funding_once(tmp_path)
         assert simulator.futures_balance == FUTURES_INITIAL_BALANCE - 2.75
         assert simulator.spot_positions[spot["position_id"]]["fees_paid"] == 1.0
         assert simulator.futures_positions[futures["position_id"]]["last_funding_time"] == 1795200000000
+    finally:
+        db.close()
+
+
+
+def test_recovery_restores_futures_reserved_margin_once(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'futures-margin.db'}")
+    db.init_db()
+    try:
+        repo = Repository(db.session_maker())
+        position = {
+            "position_id": "POS-MARGIN-RECOVERY",
+            "symbol": "BTCUSDT",
+            "market": "FUTURES",
+            "side": "LONG",
+            "entry_price": 1000.0,
+            "amount": 2.0,
+            "current_price": 1000.0,
+            "stop_loss": 900.0,
+            "take_profit": 1200.0,
+            "leverage": 4.0,
+            "unrealized_pnl": 0.0,
+            "realized_pnl": 0.0,
+            "fees_paid": 1.0,
+            "last_funding_time": 0,
+            "reserved_notional": 0.0,
+            "reserved_margin": 500.0,
+            "status": "OPEN",
+            "opened_at": datetime.now(timezone.utc),
+        }
+        repo.save_position(position)
+        simulator = Simulator(EventBus())
+        PositionRecoveryManager(db, simulator).recover_positions()
+        assert simulator.futures_balance == FUTURES_INITIAL_BALANCE - 501.0
+        recovered = simulator.futures_positions["POS-MARGIN-RECOVERY"]
+        assert recovered["reserved_margin"] == 500.0
     finally:
         db.close()
