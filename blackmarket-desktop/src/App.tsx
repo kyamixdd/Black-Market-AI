@@ -1039,64 +1039,21 @@ function App() {
     }
   }
 
-  if (!appReady && !hasBootstrappedRef.current) {
-    const marketDataFailed = apiReady && currentMarketDataStatus === 'error'
-    const marketSnapshotMissing = apiReady && currentMarketDataStatus === 'degraded' && !marketDataLoaded
-    const startupFailed = startupStatus.state === 'failed'
-      || Boolean(socketError)
-      || marketDataFailed
-      || marketSnapshotMissing
-    const startupMessage = startupFailed
-      ? startupStatus.state === 'failed'
-        ? startupStatus.message
-        : socketError
-          ? 'The local WebSocket connection could not be established.'
-          : marketSnapshotMissing
-            ? 'A valid candle series arrived without a matching market snapshot. Market readiness remains degraded.'
-            : 'The selected market did not return a valid snapshot and candle series. No market data was marked ready.'
-      : !apiReady
-        ? startupStatus.message
-        : !websocketInitialized
-          ? 'The API is ready. Connecting to live update channels…'
-          : currentMarketDataStatus === 'loading'
-            ? 'Loading the initial market snapshot and candle series…'
-            : 'Loading the initial analytics snapshot…'
-    return (
-      <main className="startup-screen">
-        <section className="startup-card" aria-live="polite">
-          <div className="startup-brand">
-            <Activity size={18} />
-            <strong>BlackMarket AI</strong>
-            <span>LOCAL MARKET TERMINAL</span>
-          </div>
-          <div className={`startup-indicator ${startupFailed ? 'failed' : 'active'}`}>
-            <i /> {startupFailed ? 'ATTENTION REQUIRED' : startupStatus.state.toUpperCase()}
-          </div>
-          <h1>{startupFailed ? 'Startup needs attention' : 'Starting local intelligence'}</h1>
-          <p>{startupMessage}</p>
-          <div className="startup-checks">
-            <div><span>BACKEND API</span><b>{apiReady ? 'READY' : startupStatus.state.toUpperCase()}</b></div>
-            <div><span>DATABASE</span><b>{apiReady ? 'READY' : 'WAITING'}</b></div>
-            <div><span>WEBSOCKET</span><b>{websocketInitialized ? 'CONNECTED' : socketError ? 'UNAVAILABLE' : 'CONNECTING'}</b></div>
-            <div><span>MARKET DATA</span><b>{marketDataLoaded ? currentMarketDataStatus.toUpperCase() : currentMarketDataStatus === 'error' ? 'ERROR' : currentMarketDataStatus === 'degraded' ? 'DEGRADED' : apiReady ? 'LOADING' : 'DISCONNECTED'}</b></div>
-          </div>
-          {(startupStatus.details || socketError) && (
-            <pre className="startup-diagnostics">{startupStatus.details ?? socketError}</pre>
-          )}
-          {startupStatus.logPath && <p className="startup-log">Backend log: {startupStatus.logPath}</p>}
-          {startupFailed && (
-            <button className="startup-retry" onClick={() => void retryStartup()}>
-              Retry startup
-            </button>
-          )}
-          <p className="startup-safety">Market, portfolio, and risk panels remain hidden until the backend is ready.</p>
-        </section>
-      </main>
-    )
-  }
-
   return (
     <main className="terminal">
+      {!appReady && (
+        <aside className={`startup-toast ${startupStatus.state === 'failed' || socketError || currentMarketDataStatus === 'error' ? 'is-error' : 'is-loading'}`} role="status" aria-live="polite">
+          <span className="startup-toast-indicator" aria-hidden="true" />
+          <span className="startup-toast-copy">
+            <strong>{startupStatus.state === 'failed' ? 'Backend unavailable' : !apiReady ? 'Connecting to backend' : !websocketInitialized ? 'Connecting live updates' : 'Loading market data'}</strong>
+            <small>{startupStatus.state === 'failed' ? startupStatus.message : socketError || (!apiReady ? startupStatus.message : currentMarketDataStatus === 'error' ? 'Market data is unavailable. Dashboard remains accessible.' : 'Dashboard is available while services initialize.')}</small>
+          </span>
+          {startupStatus.state === 'failed' && (
+            <button type="button" className="startup-toast-action" onClick={() => void retryStartup()}>Retry</button>
+          )}
+          <button type="button" className="startup-toast-dismiss" aria-label="Dismiss connection notice" onClick={(event) => event.currentTarget.parentElement?.remove()}>×</button>
+        </aside>
+      )}
       <header className="topbar" data-tauri-drag-region>
         <button className={`mobile-menu icon-button ${mobileMenuOpen ? 'selected' : ''}`} type="button" aria-label="Toggle navigation" aria-expanded={mobileMenuOpen} aria-controls="application-navigation" onClick={() => setMobileMenuOpen((open) => !open)}>
           <MoreHorizontal size={16} />

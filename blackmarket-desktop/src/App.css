@@ -2674,3 +2674,33 @@ button, input, select, textarea { min-width: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+
+/* Non-blocking startup status: dashboard stays mounted while services initialize. */
+.startup-toast {
+  position: fixed; z-index: 100; top: 12px; right: 14px;
+  display: flex; align-items: center; gap: 10px;
+  width: min(420px, calc(100vw - 28px)); padding: 10px 12px;
+  border: 1px solid var(--border-panel); border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
+  box-shadow: 0 12px 32px #0009; backdrop-filter: blur(12px);
+}
+.startup-toast-indicator {
+  width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%;
+  background: #a1a1aa; box-shadow: 0 0 0 3px #a1a1aa22;
+  animation: startup-pulse 1.6s ease-in-out infinite;
+}
+.startup-toast.is-error .startup-toast-indicator { background: #f87171; box-shadow: 0 0 0 3px #f8717122; animation: none; }
+.startup-toast-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.startup-toast-copy strong { color: var(--text-primary); font-size: 10px; font-weight: 600; }
+.startup-toast-copy small { overflow: hidden; color: var(--text-muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.startup-toast-action, .startup-toast-dismiss {
+  border: 1px solid var(--border-panel); border-radius: 4px; background: var(--bg-hover);
+  color: var(--text-primary); cursor: pointer;
+}
+.startup-toast-action { padding: 5px 8px; font-size: 9px; }
+.startup-toast-dismiss { width: 22px; height: 22px; padding: 0; font-size: 16px; line-height: 1; }
+@keyframes startup-pulse { 50% { opacity: .35; } }
+@media (max-width: 540px) {
+  .startup-toast { top: 60px; right: 8px; width: calc(100vw - 16px); padding: 8px 9px; }
+}

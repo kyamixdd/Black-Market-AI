@@ -175,35 +175,57 @@ class DatabaseBackupManager:
             logger.info(f"Pruned old backup: {old_backup}")
 
     def restore_backup(self, backup_path: Path, target_path: Optional[Path] = None) -> bool:
-        """Restore database from backup."""
+        """Restore a verified SQLite backup atomically and reopen the live database."""
         with self._lock:
             if not backup_path.exists():
-                logger.error(f"Backup not found: {backup_path}")
+                logger.error("Backup not found: %s", backup_path)
                 return False
-
             if target_path is None:
                 target_path = Path(self._get_source_path())
-
+            target_path = Path(target_path)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path: Path | None = None
             try:
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".restore.db", dir=target_path.parent, delete=False) as tmp:
+                    tmp_path = Path(tmp.name)
                 if self.config.compress:
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-                        tmp_path = Path(tmp.name)
-                    try:
-                        with gzip.open(backup_path, "rb") as f_in:
-                            with open(tmp_path, "wb") as f_out:
-                                shutil.copyfileobj(f_in, f_out)
-                        shutil.copy2(tmp_path, target_path)
-                    finally:
-                        tmp_path.unlink(missing_ok=True)
+                    with gzip.open(backup_path, "rb") as source, open(tmp_path, "wb") as dest:
+                        shutil.copyfileobj(source, dest)
                 else:
-                    shutil.copy2(backup_path, target_path)
+                    shutil.copy2(backup_path, tmp_path)
 
-                logger.info(f"Restored database from {backup_path}")
+                check = sqlite3.connect(str(tmp_path))
+                try:
+                    integrity = check.execute("PRAGMA integrity_check").fetchone()
+                    if not integrity or integrity[0] != "ok":
+                        raise RuntimeError("Backup failed SQLite integrity_check")
+                finally:
+                    check.close()
+
+                live_target = target_path.resolve() == Path(self._get_source_path()).resolve()
+                if live_target:
+                    try:
+                        with self.db.engine.connect() as connection:
+                            connection.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except Exception:
+                        logger.debug("WAL checkpoint before restore skipped", exc_info=True)
+                    self.db.close()
+
+                for suffix in ("-wal", "-shm"):
+                    Path(str(target_path) + suffix).unlink(missing_ok=True)
+                os.replace(tmp_path, target_path)
+                tmp_path = None
+                if live_target:
+                    self.db.init_db()
+                logger.info("Restored database from %s", backup_path)
                 return True
-            except Exception as e:
-                logger.error(f"Restore failed: {e}")
+            except Exception as exc:
+                logger.error("Restore failed: %s", exc, exc_info=True)
                 return False
+            finally:
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
 
 
 class IdempotentEventProcessor:
