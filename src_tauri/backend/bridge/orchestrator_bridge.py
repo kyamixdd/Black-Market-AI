@@ -101,7 +101,8 @@ class OrchestratorBridge:
         result = []
         for item in snapshots.values():
             enriched = self._with_freshness(item)
-            volatility, atr = self._volatility_metrics(item["market"], item["symbol"])
+            volatility = item.get("volatility_24h_pct")
+            atr = item.get("atr_24h_pct")
             enriched["volatility_24h_pct"] = volatility
             enriched["atr_24h_pct"] = atr
             result.append(enriched)
