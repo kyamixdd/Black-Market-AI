@@ -75,6 +75,7 @@ class Orchestrator:
         self.outcome_labeler = OutcomeLabeler(self.repo, self.simulator)
         self.performance_analyzer = PerformanceAnalyzer(self.repo)
         self.health_monitor: HealthMonitor = HealthMonitor()
+        self._runtime_settings = {}
         self._running: bool = False
         self._tasks: list[asyncio.Task] = []
         self._discovery: MarketDiscovery = MarketDiscovery(self.registry, self.rate_limiter,
@@ -85,6 +86,71 @@ class Orchestrator:
         self._tracked_symbols: list[str] = []
         self._recent_snapshots: list[dict] = []
         self._current_regime: str = "UNKNOWN"
+        self.apply_runtime_settings(self._load_runtime_settings(), persist=False)
+
+    @staticmethod
+    def _load_runtime_settings() -> dict:
+        from core.runtime_settings_store import load_runtime_settings
+        return load_runtime_settings()
+
+    def apply_runtime_settings(self, settings: dict, persist: bool = True) -> None:
+        """Apply validated settings to live components; never reset active paper equity."""
+        from core.runtime_settings_store import save_runtime_settings
+
+        if not isinstance(settings, dict):
+            raise ValueError("Runtime settings must be an object.")
+        simulator = self.simulator
+        risk = simulator.risk_manager
+        has_activity = bool(
+            simulator.spot_positions or simulator.futures_positions
+            or simulator.open_orders or simulator.closed_trades
+        )
+        balance_changed = (
+            settings.get("spot_initial_balance", simulator.initial_spot_balance) != simulator.initial_spot_balance
+            or settings.get("futures_initial_balance", simulator.initial_futures_balance) != simulator.initial_futures_balance
+        )
+        if balance_changed and has_activity:
+            raise ValueError("Paper starting balances cannot be changed after trading activity exists.")
+
+        next_settings = dict(self._runtime_settings)
+        next_settings.update(settings)
+
+        # Apply numeric risk controls only after request schema validation.
+        risk.max_risk_pct = float(next_settings.get("risk_per_trade_pct", risk.max_risk_pct))
+        risk.max_daily_loss_pct = float(next_settings.get("risk_max_daily_loss_pct", risk.max_daily_loss_pct))
+        risk.max_open_risk_pct = float(next_settings.get("risk_max_total_open_pct", risk.max_open_risk_pct))
+        risk.max_leverage = float(next_settings.get("risk_max_leverage", risk.max_leverage))
+        risk.max_spot_positions = int(next_settings.get("max_spot_positions", risk.max_spot_positions))
+        risk.max_futures_positions = int(next_settings.get("max_futures_positions", risk.max_futures_positions))
+
+        if balance_changed:
+            spot = float(next_settings.get("spot_initial_balance", simulator.initial_spot_balance))
+            futures = float(next_settings.get("futures_initial_balance", simulator.initial_futures_balance))
+            simulator.initial_spot_balance = simulator.spot_balance = spot
+            simulator.initial_futures_balance = simulator.futures_balance = futures
+
+        scanner = self.scanner
+        scanner.enabled_markets = {
+            market for market, enabled in (
+                ("SPOT", next_settings.get("spot_enabled", True)),
+                ("FUTURES", next_settings.get("futures_enabled", True)),
+            ) if enabled
+        }
+        scanner.analysis_timeframes = tuple(next_settings.get("timeframes", ("15m", "1h")))
+        scanner.analysis_symbol_limit = 50 if next_settings.get("scan_all_eligible_symbols", False) else 10
+        self._discovery.spot_enabled = bool(next_settings.get("spot_enabled", True))
+        self._discovery.futures_enabled = bool(next_settings.get("futures_enabled", True))
+
+        telegram_enabled = bool(next_settings.get("telegram_enabled", False))
+        if telegram_enabled and self.telegram is None:
+            self.telegram = TelegramClient()
+        elif not telegram_enabled:
+            self.telegram = None
+
+        self._runtime_settings = next_settings
+        if persist:
+            save_runtime_settings(next_settings)
+
         self.disaster_recovery = create_disaster_recovery_orchestrator(
             db=self.db,
             simulator=self.simulator,
