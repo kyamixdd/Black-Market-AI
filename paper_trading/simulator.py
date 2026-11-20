@@ -356,11 +356,26 @@ class Simulator:
         if current_time_ms - last_funding < 8 * 3600 * 1000:
             return
 
-        payment = self.funding_calc.calculate(position, funding_rate)
-        position["fees_paid"] += payment
+        payment = float(self.funding_calc.calculate(position, funding_rate))
+        if not math.isfinite(payment):
+            raise ValueError("Funding payment must be finite.")
+
+        # Persist the funding timestamp and fee adjustment together. Otherwise a
+        # restart can forget the interval and charge the same funding payment twice.
+        previous_fees = float(position.get("fees_paid", 0.0))
+        previous_timestamp = last_funding
+        previous_balance = self.futures_balance
+        position["fees_paid"] = previous_fees + payment
         position["last_funding_time"] = current_time_ms
-        if position["market"] == "FUTURES":
-            self.futures_balance -= payment
+        self.futures_balance -= payment
+        try:
+            if callable(self.persist_position_callback):
+                self.persist_position_callback(position)
+        except Exception:
+            position["fees_paid"] = previous_fees
+            position["last_funding_time"] = previous_timestamp
+            self.futures_balance = previous_balance
+            raise
         logger.debug("Funding payment for %s: %.4f (rate: %.6f)", position["symbol"], payment, funding_rate)
 
     async def _close_position(self, position: dict, exit_price: float, reason: str) -> bool:
