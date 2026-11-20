@@ -61,6 +61,9 @@ type HeatmapItem = {
   relative_strength_pct?: number | null
   volume_rank_pct?: number | null
   volatility_24h_pct?: number | null
+  atr_24h_pct?: number | null
+  data_age_seconds?: number | null
+  data_freshness?: string
   regime?: string
 }
 
@@ -78,6 +81,12 @@ type VolumeStats = {
   sell_volume?: number | null
   total_volume?: number
   volume_change_24h?: number | null
+  average_daily_quote_volume_7d?: number | null
+  volume_change_vs_7d_avg_pct?: number | null
+  comparison_period?: string | null
+  data_timestamp?: string | null
+  data_age_seconds?: number | null
+  data_freshness?: string
   flow_is_estimated?: boolean
   flow_sample_size?: number
   flow_sample_scope?: string | null
