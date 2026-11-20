@@ -1237,3 +1237,79 @@ async def test_futures_margin_is_reserved_and_released_on_close():
     # returns to the available balance; do not reconstruct it from the
     # requested trigger price.
     assert sim.futures_balance == pytest.approx(1000.0 + position["realized_pnl"])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_futures_entries_cannot_allocate_same_margin_twice():
+    simulator = Simulator(EventBus())
+    simulator.futures_balance = 100.0
+    simulator.validate_new_position = lambda *_args: (True, "OK")
+    signal = {
+        "signal_id": "CONCURRENT-MARGIN",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": 1.0,
+    }
+    first, second = await asyncio.gather(
+        simulator.execute_signal(signal, quantity_override=0.9),
+        simulator.execute_signal({**signal, "symbol": "ETHUSDT"}, quantity_override=0.9),
+    )
+    opened = [value for value in (first, second) if value]
+    assert len(opened) == 1
+    assert simulator.futures_balance >= -1e-9
+    assert len(simulator.futures_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_partial_futures_close_releases_proportional_margin_and_records_trade():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *_args: 0.0
+    simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
+    signal = {
+        "signal_id": "PARTIAL-MARGIN",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": 2.0,
+    }
+    position_id = await simulator.execute_signal(signal, quantity_override=0.1)
+    position = simulator.futures_positions[position_id]
+    original_margin = position["reserved_margin"]
+    original_balance = simulator.futures_balance
+
+    assert await simulator._partial_close_position(position, 110.0, 0.04) is True
+    assert position["amount"] == pytest.approx(0.06)
+    assert position["reserved_margin"] == pytest.approx(original_margin * 0.6)
+    assert simulator.futures_balance == pytest.approx(original_balance + original_margin * 0.4 + 0.4)
+    assert len(simulator.closed_trades) == 1
+    assert simulator.closed_trades[0]["amount"] == pytest.approx(0.04)
+    assert position_id in simulator.futures_positions
+
+
+@pytest.mark.asyncio
+async def test_partial_close_rejects_full_or_excess_quantity_without_mutation():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *_args: 0.0
+    signal = {
+        "signal_id": "PARTIAL-INVALID",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": 2.0,
+    }
+    position_id = await simulator.execute_signal(signal, quantity_override=0.1)
+    position = simulator.futures_positions[position_id]
+    before = dict(position)
+    with pytest.raises(ValueError):
+        await simulator._partial_close_position(position, 110.0, 0.1)
+    assert position == before
