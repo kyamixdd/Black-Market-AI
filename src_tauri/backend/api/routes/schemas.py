@@ -588,16 +588,16 @@ class ManualOrderRequest(BaseModel):
     market: MarketType
     side: Literal["BUY", "SELL", "LONG", "SHORT"]
     order_type: Literal["MARKET", "LIMIT"] = "MARKET"
-    quantity: float = Field(gt=0, le=1_000_000_000)
-    price: float | None = Field(default=None, gt=0)
-    stop_loss: float = Field(gt=0)
-    take_profit: float | None = Field(default=None, gt=0)
-    leverage: float = Field(default=1.0, ge=1.0, le=125.0)
+    quantity: float = Field(gt=0, le=1_000_000_000, allow_inf_nan=False)
+    price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    stop_loss: float = Field(gt=0, allow_inf_nan=False)
+    take_profit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    leverage: float = Field(default=1.0, ge=1.0, le=125.0, allow_inf_nan=False)
 
 
 class PositionUpdateRequest(BaseModel):
-    stop_loss: float | None = Field(default=None, gt=0)
-    take_profit: float | None = Field(default=None, gt=0)
+    stop_loss: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    take_profit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class ManualActionResponse(BaseModel):
