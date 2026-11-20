@@ -91,7 +91,11 @@ class Orchestrator:
     @staticmethod
     def _load_runtime_settings() -> dict:
         from core.runtime_settings_store import load_runtime_settings
-        return load_runtime_settings()
+        from src_tauri.backend.api.routes.schemas import SettingsRequest
+        saved = load_runtime_settings()
+        if not saved:
+            return {}
+        return SettingsRequest.model_validate(saved).model_dump(exclude_none=True)
 
     def apply_runtime_settings(self, settings: dict, persist: bool = True) -> None:
         """Apply validated settings to live components; never reset active paper equity."""
@@ -114,6 +118,11 @@ class Orchestrator:
 
         next_settings = dict(self._runtime_settings)
         next_settings.update(settings)
+
+        # Persist the complete next state before mutating live components. A failed
+        # disk write therefore leaves the running engine on its previous settings.
+        if persist:
+            save_runtime_settings(next_settings)
 
         # Apply numeric risk controls only after request schema validation.
         risk.max_risk_pct = float(next_settings.get("risk_per_trade_pct", risk.max_risk_pct))
@@ -148,8 +157,6 @@ class Orchestrator:
             self.telegram = None
 
         self._runtime_settings = next_settings
-        if persist:
-            save_runtime_settings(next_settings)
 
         self.disaster_recovery = create_disaster_recovery_orchestrator(
             db=self.db,
