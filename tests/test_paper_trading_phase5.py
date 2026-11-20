@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
+import asyncio
+
 import pytest
 
 from core.event_bus import EventBus
@@ -531,3 +533,140 @@ async def test_realized_trade_pnl_includes_entry_and_exit_fees():
     assert trade["fee"] == 0.2
     assert sim.spot_balance == pytest.approx(500.0 + trade["pnl"])
     assert sim.daily_pnl == pytest.approx(trade["pnl"])
+
+@pytest.mark.asyncio
+async def test_limit_order_remains_open_when_execution_is_temporarily_rejected():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-RETRY",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    order = simulator.open_orders[order_id]
+
+    # Simulate a balance/risk change after order placement but before the fill.
+    simulator.spot_balance = 0.0
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert simulator.open_orders[order_id] is order
+    assert order["status"] == "OPEN"
+    assert simulator.spot_positions == {}
+
+    # Once the account can support the order again, the same order can fill.
+    simulator.spot_balance = simulator.initial_spot_balance
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert order_id not in simulator.open_orders
+    assert order["status"] == "FILLED"
+    assert len(simulator.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_limit_order_execution_exception_does_not_lose_pending_order():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-EXCEPTION",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    original_execute = simulator.execute_signal
+
+    async def fail_execution(*_args, **_kwargs):
+        raise RuntimeError("simulated execution failure")
+
+    simulator.execute_signal = fail_execution
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert simulator.open_orders[order_id]["status"] == "OPEN"
+
+    simulator.execute_signal = original_execute
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert order_id not in simulator.open_orders
+    assert len(simulator.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_limit_order_is_idempotent_and_publishes_cancellation():
+    bus = EventBus()
+    simulator = Simulator(bus)
+    signal = {
+        "signal_id": "SIG-LIMIT-CANCEL",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    cancelled = await simulator.cancel_limit_order(order_id)
+    assert cancelled is not None
+    assert cancelled["status"] == "CANCELLED"
+    assert order_id not in simulator.open_orders
+    assert await simulator.cancel_limit_order(order_id) is None
+
+    placed_event = bus._queue.get_nowait()
+    cancelled_event = bus._queue.get_nowait()
+    assert placed_event.event_type == "ORDER_PLACED"
+    assert cancelled_event.event_type == "TRADE_CANCELLED"
+    assert cancelled_event.payload["order"]["status"] == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_price_updates_cannot_double_fill_one_limit_order():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-CONCURRENT",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_execute = simulator.execute_signal
+    executions = 0
+
+    async def delayed_execute(*args, **kwargs):
+        nonlocal executions
+        executions += 1
+        started.set()
+        await release.wait()
+        return await original_execute(*args, **kwargs)
+
+    simulator.execute_signal = delayed_execute
+    first = asyncio.create_task(simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0))
+    await started.wait()
+
+    assert simulator.open_orders[order_id]["status"] == "FILLING"
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert executions == 1
+
+    release.set()
+    await first
+    assert executions == 1
+    assert order_id not in simulator.open_orders
+    assert len(simulator.spot_positions) == 1

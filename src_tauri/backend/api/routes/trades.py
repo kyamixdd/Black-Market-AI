@@ -20,12 +20,16 @@ def _validated_manual_signal(request: ManualOrderRequest, bridge):
         raise HTTPException(422, "Spot paper trading supports BUY/LONG only; shorting requires Futures.")
     if market == "FUTURES" and side in ("BUY", "SELL"):
         side = "LONG" if side == "BUY" else "SHORT"
-    snapshot = bridge.get_market_snapshot(request.symbol, market)
-    if not snapshot or not snapshot.get("price") or not math.isfinite(float(snapshot["price"])):
-        raise HTTPException(409, "No fresh market price is available for this symbol.")
-    entry = float(request.price if request.order_type == "LIMIT" else snapshot["price"])
     if request.order_type == "LIMIT" and request.price is None:
         raise HTTPException(422, "Limit orders require a price.")
+    snapshot = bridge.get_market_snapshot(request.symbol, market)
+    try:
+        market_price = float(snapshot.get("price")) if snapshot else 0.0
+    except (TypeError, ValueError, OverflowError):
+        market_price = 0.0
+    if not math.isfinite(market_price) or market_price <= 0:
+        raise HTTPException(409, "No fresh market price is available for this symbol.")
+    entry = float(request.price) if request.order_type == "LIMIT" else market_price
     if request.stop_loss >= entry and side in ("BUY", "LONG"):
         raise HTTPException(422, "Stop loss must be below entry for a long position.")
     if request.stop_loss <= entry and side in ("SELL", "SHORT"):
@@ -98,13 +102,7 @@ async def open_manual_trade(request: ManualOrderRequest):
 @router.delete("/orders/{order_id}", response_model=ManualActionResponse)
 async def cancel_order(order_id: str):
     simulator = get_bridge().simulator
-    order = simulator.open_orders.pop(order_id, None)
+    order = await simulator.cancel_limit_order(order_id)
     if order is None:
         raise HTTPException(404, "Open order not found.")
-    order["status"] = "CANCELLED"
-    from core.event_models import EventType, make_event
-    await simulator.event_bus.publish(make_event(
-        EventType.TRADE_CANCELLED, "manual_api",
-        symbol=order["symbol"], market=order["market"], order=order,
-    ))
     return ManualActionResponse(success=True, id=order_id, message="Order cancelled.")

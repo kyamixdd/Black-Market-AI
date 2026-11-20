@@ -47,3 +47,63 @@ def test_position_update_requires_a_value_at_route_validation_layer():
     request = PositionUpdateRequest()
     assert request.stop_loss is None
     assert request.take_profit is None
+
+
+def test_missing_limit_price_returns_validation_error_instead_of_type_error():
+    from fastapi import HTTPException
+    from src_tauri.backend.api.routes.trades import _validated_manual_signal
+
+    order = ManualOrderRequest(
+        symbol="BTCUSDT",
+        market="FUTURES",
+        side="LONG",
+        order_type="LIMIT",
+        quantity=0.001,
+        stop_loss=90000,
+    )
+
+    class FakeBridge:
+        @staticmethod
+        def get_market_snapshot(_symbol, _market):
+            return {"price": 100000.0, "data_freshness": "LIVE"}
+
+    with pytest.raises(HTTPException) as error:
+        _validated_manual_signal(order, FakeBridge())
+
+    assert error.value.status_code == 422
+    assert error.value.detail == "Limit orders require a price."
+
+
+@pytest.mark.parametrize("field", ["quantity", "price", "stop_loss", "take_profit", "leverage"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_manual_order_rejects_non_finite_numeric_values(field, value):
+    payload = {
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "side": "LONG",
+        "quantity": 0.001,
+        "stop_loss": 90000,
+    }
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        ManualOrderRequest(**payload)
+
+
+@pytest.mark.parametrize("market_price", [None, "not-a-price", float("nan"), float("inf"), 0, -1])
+def test_manual_trade_rejects_invalid_market_snapshot_without_server_error(market_price):
+    from fastapi import HTTPException
+    from src_tauri.backend.api.routes.trades import _validated_manual_signal
+
+    order = ManualOrderRequest(
+        symbol="BTCUSDT", market="SPOT", side="BUY",
+        quantity=0.001, stop_loss=90000,
+    )
+
+    class FakeBridge:
+        @staticmethod
+        def get_market_snapshot(_symbol, _market):
+            return {"price": market_price}
+
+    with pytest.raises(HTTPException) as error:
+        _validated_manual_signal(order, FakeBridge())
+    assert error.value.status_code == 409
