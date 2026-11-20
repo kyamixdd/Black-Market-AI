@@ -481,9 +481,7 @@ class PositionRecoveryManager:
         if trades is None:
             trades = repo.get_trade_history(limit=None)
 
-        from config import SPOT_INITIAL_BALANCE, FUTURES_INITIAL_BALANCE
-        self.simulator.initial_spot_balance = SPOT_INITIAL_BALANCE
-        self.simulator.initial_futures_balance = FUTURES_INITIAL_BALANCE
+        # Preserve runtime-configured starting equity loaded by the orchestrator.
         self.simulator.spot_balance = self.simulator.initial_spot_balance
         self.simulator.futures_balance = self.simulator.initial_futures_balance
         today = datetime.now(timezone.utc).date()
