@@ -3,7 +3,7 @@ import sqlite3
 
 from sqlalchemy import inspect
 
-from config import SPOT_INITIAL_BALANCE
+from config import FUTURES_INITIAL_BALANCE, SPOT_INITIAL_BALANCE
 from core.disaster_recovery import PositionRecoveryManager
 from core.event_bus import EventBus
 from database.connection import Database
@@ -392,3 +392,82 @@ def test_new_futures_position_waits_for_scheduled_funding_boundary():
     assert position["last_funding_time"] == 0
     assert position["fees_paid"] == 0.0
     assert simulator.futures_balance == balance_before
+
+
+
+def test_recovery_reconciles_closed_spot_and_futures_net_pnl(tmp_path):
+    from datetime import timedelta
+
+    db = Database(f"sqlite:///{tmp_path / 'closed-ledger.db'}")
+    db.init_db()
+    try:
+        repo = Repository(db.session_maker())
+        closed_at = datetime.now(timezone.utc)
+        for market, pnl in (("SPOT", 12.5), ("FUTURES", -7.25)):
+            repo.save_trade_history({
+                "position_id": f"POS-{market}-CLOSED",
+                "symbol": "BTCUSDT",
+                "market": market,
+                "side": "BUY" if market == "SPOT" else "LONG",
+                "entry_price": 100.0,
+                "exit_price": 110.0,
+                "amount": 1.0,
+                "leverage": 5.0 if market == "FUTURES" else 1.0,
+                "pnl": pnl,
+                "pnl_pct": pnl,
+                "fee": 1.0,
+                "strategy": "MANUAL",
+                "signal_id": "MANUAL",
+                "opened_at": closed_at - timedelta(hours=1),
+                "closed_at": closed_at,
+                "close_reason": "MANUAL",
+            })
+
+        simulator = Simulator(EventBus())
+        PositionRecoveryManager(db, simulator).recover_positions()
+
+        assert simulator.spot_balance == SPOT_INITIAL_BALANCE + 12.5
+        assert simulator.futures_balance == FUTURES_INITIAL_BALANCE - 7.25
+        assert len(simulator.closed_trades) == 2
+        assert simulator.daily_pnl == 5.25
+    finally:
+        db.close()
+
+
+def test_recovery_deducts_open_position_costs_and_futures_funding_once(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'open-ledger.db'}")
+    db.init_db()
+    try:
+        repo = Repository(db.session_maker())
+        spot = _open_spot_position()
+        futures = {
+            "position_id": "POS-FUTURES-OPEN",
+            "symbol": "ETHUSDT",
+            "market": "FUTURES",
+            "side": "LONG",
+            "entry_price": 2000.0,
+            "amount": 0.5,
+            "current_price": 2010.0,
+            "stop_loss": 1900.0,
+            "take_profit": 2200.0,
+            "leverage": 10.0,
+            "unrealized_pnl": 5.0,
+            "realized_pnl": 0.0,
+            "fees_paid": 2.75,
+            "last_funding_time": 1795200000000,
+            "reserved_notional": 0.0,
+            "status": "OPEN",
+            "opened_at": datetime.now(timezone.utc),
+        }
+        repo.save_position(spot)
+        repo.save_position(futures)
+
+        simulator = Simulator(EventBus())
+        PositionRecoveryManager(db, simulator).recover_positions()
+
+        assert simulator.spot_balance == SPOT_INITIAL_BALANCE - 201.0
+        assert simulator.futures_balance == FUTURES_INITIAL_BALANCE - 2.75
+        assert simulator.spot_positions[spot["position_id"]]["fees_paid"] == 1.0
+        assert simulator.futures_positions[futures["position_id"]]["last_funding_time"] == 1795200000000
+    finally:
+        db.close()
