@@ -29,9 +29,15 @@ class MomentumAnalyzer:
             return {"macd": 0.0, "signal": 0.0, "hist": 0.0}
 
         def ema(data, window):
-            weights = np.exp(np.linspace(-1.0, 0.0, window))
-            weights /= weights.sum()
-            return np.convolve(data, weights, mode="full")[:len(data)]
+            # Recursive EMA keeps the newest observations most influential and
+            # avoids the truncated-convolution edge effect on short histories.
+            values = np.asarray(data, dtype=float)
+            alpha = 2.0 / (window + 1.0)
+            result = np.empty_like(values, dtype=float)
+            result[0] = values[0]
+            for index in range(1, len(values)):
+                result[index] = alpha * values[index] + (1.0 - alpha) * result[index - 1]
+            return result
 
         ema_fast = ema(closes, fast)
         ema_slow = ema(closes, slow)

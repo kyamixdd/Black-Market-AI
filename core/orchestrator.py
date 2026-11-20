@@ -67,6 +67,7 @@ class Orchestrator:
             self.event_bus, self.registry, self.cache,
             self.spot_client, self.futures_client,
             self.candle_manager, self.intelligence,
+            websocket_manager=self.ws_manager,
         )
         self.telegram: TelegramClient | None = TelegramClient() if TELEGRAM_ENABLED else None
         # Keep one canonical predictor for the API, live inference, and learning loop.
