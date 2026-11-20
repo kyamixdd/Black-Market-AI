@@ -151,6 +151,10 @@ class Orchestrator:
         self._discovery.futures_enabled = bool(next_settings.get("futures_enabled", True))
 
         telegram_enabled = bool(next_settings.get("telegram_enabled", False))
+        if telegram_enabled:
+            from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+            if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+                raise ValueError("Telegram cannot be enabled until its bot token and chat ID are configured in the private environment.")
         if telegram_enabled and self.telegram is None:
             self.telegram = TelegramClient()
         elif not telegram_enabled:
