@@ -49,7 +49,6 @@ import type {
   WorkspaceRisk,
   WorkspaceSignal,
 } from './screens/DashboardScreens'
-import './App.css'
 
 type MarketSnapshot = MarketSnapshotData
 
