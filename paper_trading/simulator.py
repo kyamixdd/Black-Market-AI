@@ -258,10 +258,15 @@ class Simulator:
                 self.futures_balance += fee
             raise
 
-        await self.event_bus.publish(make_event(
-            EventType.POSITION_OPENED, "simulator",
-            symbol=signal["symbol"], market=market, position=position
-        ))
+        try:
+            await self.event_bus.publish(make_event(
+                EventType.POSITION_OPENED, "simulator",
+                symbol=signal["symbol"], market=market, position=position
+            ))
+        except Exception:
+            if not callable(self.persist_position_callback):
+                raise
+            logger.exception("Position %s was persisted but its open event could not be published", position_id)
         logger.info("Opened %s position %s %s @ %.4f (fill: %.4f)", market, signal["direction"], signal["symbol"], signal["entry"], fill_price)
         return position_id
 
@@ -451,10 +456,15 @@ class Simulator:
             position.pop("close_price", None)
             raise
         del pos_dict[position["position_id"]]
-        await self.event_bus.publish(make_event(
-            EventType.POSITION_CLOSED, "simulator",
-            symbol=position["symbol"], market=market, trade=trade
-        ))
+        try:
+            await self.event_bus.publish(make_event(
+                EventType.POSITION_CLOSED, "simulator",
+                symbol=position["symbol"], market=market, trade=trade
+            ))
+        except Exception:
+            if not callable(self.persist_trade_callback):
+                raise
+            logger.exception("Trade %s was persisted but its close event could not be published", position["position_id"])
         logger.info("Closed %s %s PnL: %.2f (%s, fill: %.4f)", position["symbol"], position["side"], trade_pnl, reason, fill_price)
         return True
 
@@ -500,10 +510,15 @@ class Simulator:
         except Exception:
             self.open_orders.pop(order_id, None)
             raise
-        await self.event_bus.publish(make_event(
-            EventType.ORDER_PLACED, "simulator",
-            symbol=signal["symbol"], market=market, order=order
-        ))
+        try:
+            await self.event_bus.publish(make_event(
+                EventType.ORDER_PLACED, "simulator",
+                symbol=signal["symbol"], market=market, order=order
+            ))
+        except Exception:
+            if not callable(self.persist_order_callback):
+                raise
+            logger.exception("Limit order %s was persisted but its placement event could not be published", order_id)
         logger.info("Placed LIMIT order %s %s %s @ %.4f", market, signal["direction"], signal["symbol"], signal["entry"])
         return order_id
 
@@ -521,10 +536,15 @@ class Simulator:
             order["status"] = "OPEN"
             raise
         self.open_orders.pop(order_id, None)
-        await self.event_bus.publish(make_event(
-            EventType.TRADE_CANCELLED, "simulator",
-            symbol=order["symbol"], market=order["market"], order=order,
-        ))
+        try:
+            await self.event_bus.publish(make_event(
+                EventType.TRADE_CANCELLED, "simulator",
+                symbol=order["symbol"], market=order["market"], order=order,
+            ))
+        except Exception:
+            if not callable(self.persist_order_callback):
+                raise
+            logger.exception("Limit order %s was cancelled and persisted but its event could not be published", order_id)
         logger.info("Cancelled limit order %s", order_id)
         return order
 
@@ -602,6 +622,8 @@ class Simulator:
                             symbol=order["symbol"], market=order["market"], order=order
                         ))
                     except Exception:
+                        if not callable(self.persist_order_callback):
+                            raise
                         logger.exception("Could not publish recovered fill event for order %s", order_id)
                 else:
                     order["status"] = "OPEN"
@@ -632,10 +654,15 @@ class Simulator:
                 # Position.order_id was persisted before execution; restart recovery
                 # can safely reconcile a stale FILLING order against that position.
                 logger.exception("Could not persist FILLED state for order %s", order["order_id"])
-            await self.event_bus.publish(make_event(
-                EventType.ORDER_FILLED, "simulator",
-                symbol=order["symbol"], market=order["market"], order=order
-            ))
+            try:
+                await self.event_bus.publish(make_event(
+                    EventType.ORDER_FILLED, "simulator",
+                    symbol=order["symbol"], market=order["market"], order=order
+                ))
+            except Exception:
+                if not callable(self.persist_order_callback):
+                    raise
+                logger.exception("Limit order %s was filled and persisted but its event could not be published", order["order_id"])
 
     # --- Restart Recovery ---
     def get_state_snapshot(self) -> dict[str, Any]:

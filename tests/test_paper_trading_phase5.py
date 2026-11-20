@@ -1002,3 +1002,59 @@ def test_restore_reconciles_filling_order_against_closed_trade_history():
     simulator.restore_state(state)
 
     assert "ORD-CLOSED-BEFORE-RESTART" not in simulator.open_orders
+
+
+@pytest.mark.asyncio
+async def test_durable_market_open_survives_event_publication_failure():
+    class FailingOpenEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "POSITION_OPENED":
+                raise RuntimeError("event bus unavailable")
+            await super().publish(event)
+
+    simulator = Simulator(FailingOpenEventBus())
+    persisted = []
+    simulator.persist_position_callback = lambda position: persisted.append(dict(position))
+    signal = {
+        "signal_id": "SIG-DURABLE-MARKET-OPEN",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    position_id = await simulator.execute_signal(signal)
+
+    assert position_id in simulator.spot_positions
+    assert persisted[0]["position_id"] == position_id
+
+
+@pytest.mark.asyncio
+async def test_durable_limit_placement_survives_order_event_failure():
+    class FailingOrderEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "ORDER_PLACED":
+                raise RuntimeError("event bus unavailable")
+            await super().publish(event)
+
+    simulator = Simulator(FailingOrderEventBus())
+    persisted = []
+    simulator.persist_order_callback = lambda order: persisted.append(order["status"])
+    signal = {
+        "signal_id": "SIG-DURABLE-ORDER-PLACE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    order_id = await simulator.place_limit_order(signal)
+
+    assert order_id in simulator.open_orders
+    assert persisted == ["OPEN"]
