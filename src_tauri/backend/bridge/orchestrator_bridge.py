@@ -76,7 +76,7 @@ class OrchestratorBridge:
         return {**snapshot, "data_age_seconds": age, "data_freshness": freshness}
 
     def get_all_market_snapshots(self) -> list[dict]:
-        """Get all recent market snapshots."""
+        """Get all recent market snapshots with computed 1h-candle risk analytics."""
         snapshots: dict[tuple[str, str], dict] = {}
         for market in ("SPOT", "FUTURES"):
             for snapshot in self.orch.cache.get_market_tickers(market):
@@ -98,7 +98,14 @@ class OrchestratorBridge:
                     "orderbook_imbalance": stored.orderbook_imbalance,
                     "regime": stored.regime,
                 }
-        return [self._with_freshness(item) for item in snapshots.values()]
+        result = []
+        for item in snapshots.values():
+            enriched = self._with_freshness(item)
+            volatility, atr = self._volatility_metrics(item["market"], item["symbol"])
+            enriched["volatility_24h_pct"] = volatility
+            enriched["atr_24h_pct"] = atr
+            result.append(enriched)
+        return result
 
     async def get_candles(
         self,
@@ -772,7 +779,11 @@ class OrchestratorBridge:
         cache_key, now = (market, symbol), time.monotonic()
         cached = self._analytics_cache.get(cache_key)
         if cached and now - cached[0] < 60:
-            return dict(cached[1])
+            result = dict(cached[1])
+            age = max(0.0, now - cached[0])
+            result["data_age_seconds"] = age
+            result["data_freshness"] = "LIVE" if age <= 90 else "DELAYED" if age <= 300 else "STALE"
+            return result
         trades, ticker, daily = await asyncio.gather(
             client.get_aggregate_trades(symbol, limit=500),
             client.get_ticker_24h(symbol),
