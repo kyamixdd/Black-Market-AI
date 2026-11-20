@@ -235,6 +235,24 @@ async function requestJson<T>(path: string, api = true): Promise<T | null> {
   }
 }
 
+async function mutateJson<T>(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): Promise<T> {
+  const response = await fetch(`${apiBaseUrl()}${path}`, {
+    method,
+    headers: {
+      ...(typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? getApiAuthorization() : {}),
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    cache: 'no-store',
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const detail = typeof payload.detail === 'string' ? payload.detail : `${response.status} ${response.statusText}`
+    throw new Error(detail)
+  }
+  return payload as T
+}
+
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
@@ -1408,6 +1426,19 @@ function App() {
           data={data}
           preferences={preferences}
           onPreferencesChange={changePreferences}
+          onManualTrade={async (payload) => {
+            await mutateJson('/trades', 'POST', payload)
+            refreshScreenDataRef.current?.()
+          }}
+          onPositionAction={async (positionId, action, values) => {
+            if (!positionId) throw new Error('Missing position identifier.')
+            if (action === 'close') {
+              await mutateJson(`/positions/${encodeURIComponent(positionId)}/close`, 'POST')
+            } else {
+              await mutateJson(`/positions/${encodeURIComponent(positionId)}`, 'PATCH', values ?? {})
+            }
+            refreshScreenDataRef.current?.()
+          }}
           onSelectMarket={(selectedSymbol, selectedMarket) => {
             setSymbol(selectedSymbol)
             setSearchValue(selectedSymbol)

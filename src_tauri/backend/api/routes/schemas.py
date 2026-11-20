@@ -548,3 +548,26 @@ class ErrorResponse(BaseModel):
 class SuccessResponse(BaseModel):
     success: bool = True
     message: str | None = None
+
+
+class ManualOrderRequest(BaseModel):
+    symbol: str = Field(min_length=3, max_length=30, pattern=r"^[A-Z0-9]{3,30}$")
+    market: MarketType
+    side: Literal["BUY", "SELL", "LONG", "SHORT"]
+    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    quantity: float = Field(gt=0, le=1_000_000_000)
+    price: float | None = Field(default=None, gt=0)
+    stop_loss: float = Field(gt=0)
+    take_profit: float | None = Field(default=None, gt=0)
+    leverage: float = Field(default=1.0, ge=1.0, le=125.0)
+
+
+class PositionUpdateRequest(BaseModel):
+    stop_loss: float | None = Field(default=None, gt=0)
+    take_profit: float | None = Field(default=None, gt=0)
+
+
+class ManualActionResponse(BaseModel):
+    success: bool
+    id: str | None = None
+    message: str

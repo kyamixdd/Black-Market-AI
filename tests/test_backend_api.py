@@ -225,6 +225,8 @@ def test_main_api_registers_requested_read_routes():
         "/api/portfolio",
         "/api/positions",
         "/api/trades",
+        "/api/trades/orders",
+        "/api/positions/{position_id}/close",
         "/api/intelligence",
         "/api/learning",
         "/api/risk/status",

@@ -252,6 +252,8 @@ type Props = {
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
   onSelectMarket: (symbol: string, market: 'SPOT' | 'FUTURES') => void
+  onPositionAction: (positionId: string, action: 'close' | 'update', values?: { stop_loss?: number; take_profit?: number }) => Promise<void>
+  onManualTrade: (payload: { symbol: string; market: 'SPOT' | 'FUTURES'; side: 'BUY' | 'SELL' | 'LONG' | 'SHORT'; order_type: 'MARKET' | 'LIMIT'; quantity: number; price?: number; stop_loss: number; take_profit?: number; leverage: number }) => Promise<void>
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -358,10 +360,16 @@ function SignalInspector({
 function PositionInspector({
   position,
   onClose,
+  onPositionAction,
 }: {
   position: WorkspacePosition
   onClose: () => void
+  onPositionAction: Props['onPositionAction']
 }) {
+  const [stopLoss, setStopLoss] = useState(position.stop_loss?.toString() ?? '')
+  const [takeProfit, setTakeProfit] = useState(position.take_profit?.toString() ?? '')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
   return (
     <section className="workspace-inspector" aria-label="Position details">
       <div className="workspace-inspector-heading">
@@ -377,6 +385,29 @@ function PositionInspector({
         <DetailCard label="LIQUIDATION / MARGIN" value={`${price(num(position.liquidation_price ?? undefined))} / ${position.margin_ratio == null ? '—' : `${(position.margin_ratio * 100).toFixed(2)}%`}`} />
         <DetailCard label="FEES / STRATEGY" value={`${money(num(position.fees_paid))} / ${position.strategy ?? '—'}`} />
         <DetailCard label="OPENED" value={timestamp(position.opened_at)} />
+      </div>
+      <div className="workspace-inspector-actions">
+        <label>Stop loss <input className="workspace-search" type="number" min="0" step="any" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} /></label>
+        <label>Take profit <input className="workspace-search" type="number" min="0" step="any" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} /></label>
+        <button className="table-action" disabled={busy || (!stopLoss && !takeProfit)} onClick={async () => {
+          setBusy(true); setMessage('')
+          try {
+            await onPositionAction(position.position_id ?? '', 'update', {
+              ...(stopLoss ? { stop_loss: Number(stopLoss) } : {}),
+              ...(takeProfit ? { take_profit: Number(takeProfit) } : {}),
+            })
+            setMessage('Risk levels updated.')
+          } catch (error) { setMessage(error instanceof Error ? error.message : 'Update failed.') }
+          finally { setBusy(false) }
+        }}>Update risk levels</button>
+        <button className="table-action" disabled={busy} onClick={async () => {
+          if (!window.confirm('Close this paper position at the latest available market price?')) return
+          setBusy(true); setMessage('')
+          try { await onPositionAction(position.position_id ?? '', 'close'); onClose() }
+          catch (error) { setMessage(error instanceof Error ? error.message : 'Close failed.') }
+          finally { setBusy(false) }
+        }}>Close position</button>
+        {message && <span role="status">{message}</span>}
       </div>
     </section>
   )
@@ -528,7 +559,7 @@ function PortfolioScreen({ portfolio, positions, trades, stats }: { portfolio: W
           <td><button className="table-action" onClick={() => setSelectedPosition(position)}>Inspect</button></td>
         </tr>)}
       </Table> : <EmptyState text={`No open simulated ${accountView === 'ALL' ? '' : `${accountView} `}positions.`} />}
-      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} />}
+      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} onPositionAction={onPositionAction} />}
       <div className="workspace-note">Balances and trade activity are simulated only. No Binance order endpoints or live execution are used.</div>
       <h2 className="workspace-section-title">Recent completed trades · {visibleTrades.length} shown / {stats?.total ?? trades.length} total</h2>
       {visibleTrades.length ? <Table minWidth={900}>
@@ -543,11 +574,50 @@ function PortfolioScreen({ portfolio, positions, trades, stats }: { portfolio: W
   )
 }
 
-function PositionsScreen({ positions }: { positions: WorkspacePosition[] }) {
+function PositionsScreen({ positions, onPositionAction, onManualTrade }: { positions: WorkspacePosition[]; onPositionAction: Props['onPositionAction']; onManualTrade: Props['onManualTrade'] }) {
   const [selectedPosition, setSelectedPosition] = useState<WorkspacePosition | null>(null)
+  const [symbol, setSymbol] = useState('BTCUSDT')
+  const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
+  const [side, setSide] = useState<'BUY' | 'SELL' | 'LONG' | 'SHORT'>('BUY')
+  const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET')
+  const [quantity, setQuantity] = useState('')
+  const [entryPrice, setEntryPrice] = useState('')
+  const [stopLoss, setStopLoss] = useState('')
+  const [takeProfit, setTakeProfit] = useState('')
+  const [leverage, setLeverage] = useState('1')
+  const [tradeBusy, setTradeBusy] = useState(false)
+  const [tradeMessage, setTradeMessage] = useState('')
   return (
     <>
       <ScreenHeader title="Positions" description="Open simulated exposure across separate Spot and Futures paper accounts" />
+      <section className="workspace-inspector" aria-label="Manual paper trade">
+        <div className="workspace-inspector-heading"><strong>MANUAL PAPER TRADE</strong><span>Simulator only · risk checks enforced</span></div>
+        <form className="workspace-inspector-actions" onSubmit={async (event) => {
+          event.preventDefault(); setTradeBusy(true); setTradeMessage('')
+          try {
+            await onManualTrade({
+              symbol: symbol.trim().toUpperCase(), market, side, order_type: orderType,
+              quantity: Number(quantity), ...(orderType === 'LIMIT' ? { price: Number(entryPrice) } : {}),
+              stop_loss: Number(stopLoss), ...(takeProfit ? { take_profit: Number(takeProfit) } : {}),
+              leverage: Number(leverage),
+            })
+            setTradeMessage('Paper order accepted. Refreshing positions.')
+          } catch (error) { setTradeMessage(error instanceof Error ? error.message : 'Order rejected.') }
+          finally { setTradeBusy(false) }
+        }}>
+          <label>Symbol <input className="workspace-search" value={symbol} onChange={(event) => setSymbol(event.target.value)} required maxLength={30} /></label>
+          <label>Market <select className="workspace-select" value={market} onChange={(event) => { const next = event.target.value as typeof market; setMarket(next); setSide(next === 'SPOT' ? 'BUY' : 'LONG') }}><option value="SPOT">Spot</option><option value="FUTURES">Futures</option></select></label>
+          <label>Side <select className="workspace-select" value={side} onChange={(event) => setSide(event.target.value as typeof side)}>{(market === 'SPOT' ? ['BUY'] : ['LONG', 'SHORT']).map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label>Order <select className="workspace-select" value={orderType} onChange={(event) => setOrderType(event.target.value as typeof orderType)}><option value="MARKET">Market</option><option value="LIMIT">Limit</option></select></label>
+          <label>Quantity <input className="workspace-search" type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} required /></label>
+          {orderType === 'LIMIT' && <label>Limit price <input className="workspace-search" type="number" min="0" step="any" value={entryPrice} onChange={(event) => setEntryPrice(event.target.value)} required /></label>}
+          <label>Stop loss <input className="workspace-search" type="number" min="0" step="any" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} required /></label>
+          <label>Take profit <input className="workspace-search" type="number" min="0" step="any" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} /></label>
+          <label>Leverage <input className="workspace-search" type="number" min="1" max="125" step="1" value={leverage} onChange={(event) => setLeverage(event.target.value)} required /></label>
+          <button className="table-action" type="submit" disabled={tradeBusy || !quantity || !stopLoss || (orderType === 'LIMIT' && !entryPrice)}>{tradeBusy ? 'Submitting…' : 'Place paper order'}</button>
+          {tradeMessage && <span role="status">{tradeMessage}</span>}
+        </form>
+      </section>
       <div className="workspace-summary"><SummaryCard label="OPEN POSITIONS" value={String(positions.length)} /><SummaryCard label="SPOT" value={String(positions.filter((position) => position.market === 'SPOT').length)} /><SummaryCard label="FUTURES" value={String(positions.filter((position) => position.market === 'FUTURES').length)} /><SummaryCard label="UNREALIZED P&L" value={money(positions.reduce((total, position) => total + (position.unrealized_pnl ?? 0), 0))} /></div>
       {positions.length ? <Table minWidth={1200}>
         <TableHead labels={['POSITION', 'ASSET', 'ACCOUNT', 'SIDE', 'ENTRY PRICE', 'CURRENT PRICE', 'AMOUNT', 'LEVERAGE', 'UNREALIZED P&L', 'STOP LOSS', 'TAKE PROFIT', 'LIQ. PRICE', 'MARGIN RATIO', 'OPENED', 'ACTION']} />
@@ -794,7 +864,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'AI Signals' && <SignalsScreen signals={data.signals} onSelectMarket={props.onSelectMarket} />}
       {screen === 'Market Analysis' && <AnalysisScreen symbol={props.symbol} marketType={props.marketType} candles={data.analysisCandles} />}
       {screen === 'Portfolio' && <PortfolioScreen portfolio={data.portfolio} positions={data.positions} trades={data.trades} stats={data.tradeStats} />}
-      {screen === 'Positions' && <PositionsScreen positions={data.positions} />}
+      {screen === 'Positions' && <PositionsScreen positions={data.positions} onPositionAction={props.onPositionAction} onManualTrade={props.onManualTrade} />}
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
