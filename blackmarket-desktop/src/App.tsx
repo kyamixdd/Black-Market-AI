@@ -1210,8 +1210,9 @@ function App() {
                 {heatCells.length ? heatCells.map((item, index) => {
                   const change = numberValue(item.price_change_24h)
                   const activity = Math.max(0, Math.min(1, (item.volume_rank_pct ?? 0) / 100))
-                  const intensity = Math.min(0.68, 0.12 + Math.min(Math.abs(change ?? 0) / 20, 0.36) + activity * 0.2)
-                  const color = `rgba(174, 181, 188, ${intensity})`
+                  const intensity = Math.min(4, Math.floor(Math.min(1, Math.abs(change ?? 0) / 20 + activity * 0.45) * 5))
+                  const heatmapTones = ['#19191E', '#29292F', '#414149', '#66666F', '#A1A1AA']
+                  const color = heatmapTones[intensity]
                   const title = `${item.symbol ?? 'Market'} ${item.market ?? ''} · 24h ${formatChange(change)} · relative strength ${formatChange(item.relative_strength_pct ?? undefined)} · volume rank ${metricText(item.volume_rank_pct)}% · volatility ${item.volatility_24h_pct == null ? 'unavailable' : `${metricText(item.volatility_24h_pct)}%`}`
                   return (
                     <button
