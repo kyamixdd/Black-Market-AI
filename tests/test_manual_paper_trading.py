@@ -47,3 +47,28 @@ def test_position_update_requires_a_value_at_route_validation_layer():
     request = PositionUpdateRequest()
     assert request.stop_loss is None
     assert request.take_profit is None
+
+
+def test_missing_limit_price_returns_validation_error_instead_of_type_error():
+    from fastapi import HTTPException
+    from src_tauri.backend.api.routes.trades import _validated_manual_signal
+
+    order = ManualOrderRequest(
+        symbol="BTCUSDT",
+        market="FUTURES",
+        side="LONG",
+        order_type="LIMIT",
+        quantity=0.001,
+        stop_loss=90000,
+    )
+
+    class FakeBridge:
+        @staticmethod
+        def get_market_snapshot(_symbol, _market):
+            return {"price": 100000.0, "data_freshness": "LIVE"}
+
+    with pytest.raises(HTTPException) as error:
+        _validated_manual_signal(order, FakeBridge())
+
+    assert error.value.status_code == 422
+    assert error.value.detail == "Limit orders require a price."
