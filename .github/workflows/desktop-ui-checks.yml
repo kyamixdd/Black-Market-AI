@@ -1,0 +1,44 @@
+name: Desktop UI checks
+
+on:
+  pull_request:
+    branches:
+      - black-market-ai-beta
+  push:
+    branches:
+      - ui/obsidian-terminal-integration
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: TypeScript, lint, and market-data tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: blackmarket-desktop/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+        working-directory: blackmarket-desktop
+
+      - name: TypeScript and production build
+        run: npm run build
+        working-directory: blackmarket-desktop
+
+      - name: Lint
+        run: npm run lint
+        working-directory: blackmarket-desktop
+
+      - name: Market-data unit tests
+        run: npm test
+        working-directory: blackmarket-desktop
