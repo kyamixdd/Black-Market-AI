@@ -899,3 +899,83 @@ def test_restore_marks_order_filled_when_matching_position_was_persisted():
     restored.restore_state(state)
 
     assert "ORD-PERSISTED-FILL" not in restored.open_orders
+
+
+@pytest.mark.asyncio
+async def test_limit_order_persistence_callback_records_state_transitions():
+    simulator = Simulator(EventBus())
+    persisted_statuses = []
+    simulator.persist_order_callback = lambda order: persisted_statuses.append(order["status"])
+    signal = {
+        "signal_id": "SIG-LIMIT-PERSIST",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert persisted_statuses == ["OPEN", "FILLING", "FILLED"]
+
+
+@pytest.mark.asyncio
+async def test_position_persistence_failure_rolls_back_opening_balance_and_position():
+    simulator = Simulator(EventBus())
+    balance_before = simulator.spot_balance
+
+    def fail_persist(_position):
+        raise RuntimeError("database write failed")
+
+    simulator.persist_position_callback = fail_persist
+    signal = {
+        "signal_id": "SIG-PERSIST-ROLLBACK",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        await simulator.execute_signal(signal)
+
+    assert simulator.spot_positions == {}
+    assert simulator.spot_balance == pytest.approx(balance_before)
+
+
+@pytest.mark.asyncio
+async def test_trade_persistence_failure_rolls_back_close_and_balance():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-CLOSE-PERSIST-ROLLBACK",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before = simulator.spot_balance
+
+    def fail_persist(_trade):
+        raise RuntimeError("trade write failed")
+
+    simulator.persist_trade_callback = fail_persist
+    with pytest.raises(RuntimeError, match="trade write failed"):
+        await simulator._close_position(position, 51000.0, "MANUAL")
+
+    assert position["status"] == "OPEN"
+    assert position_id in simulator.spot_positions
+    assert simulator.spot_balance == pytest.approx(balance_before)
+    assert simulator.closed_trades == []
