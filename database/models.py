@@ -166,6 +166,7 @@ class PaperPositionModel(Base):
     fees_paid = Column(Float, default=0.0)
     last_funding_time = Column(Integer, default=0)
     reserved_notional = Column(Float, default=0.0)
+    reserved_margin = Column(Float, default=0.0)
     order_id = Column(String(64), nullable=True)
     signal_id = Column(String(64), nullable=True)
     strategy = Column(String(32), default="UNKNOWN")

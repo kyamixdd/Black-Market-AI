@@ -400,6 +400,7 @@ class PositionRecoveryManager:
                     "fees_paid": pos.fees_paid,
                     "last_funding_time": pos.last_funding_time or 0,
                     "reserved_notional": pos.reserved_notional or (pos.entry_price * pos.amount),
+                    "reserved_margin": pos.reserved_margin or (pos.entry_price * pos.amount / max(float(pos.leverage or 1.0), 1.0)),
                     "order_id": pos.order_id,
                     "signal_id": pos.signal_id,
                     "strategy": pos.strategy,
@@ -529,7 +530,11 @@ class PositionRecoveryManager:
             )
             self.simulator.spot_balance -= reserved + position.get("fees_paid", 0.0)
         for position in self.simulator.futures_positions.values():
-            self.simulator.futures_balance -= position.get("fees_paid", 0.0)
+            reserved_margin = float(position.get(
+                "reserved_margin",
+                position.get("entry_price", 0.0) * position.get("amount", 0.0) / max(float(position.get("leverage", 1.0)), 1.0),
+            ))
+            self.simulator.futures_balance -= reserved_margin + float(position.get("fees_paid", 0.0))
 
 
 class ModelCheckpointRecovery:

@@ -1205,3 +1205,35 @@ def test_short_realized_pnl_direction_is_correct_without_leverage_multiplier():
 
     assert calculator.realized(position, 90.0) == pytest.approx(20.0)
     assert calculator.realized(position, 110.0) == pytest.approx(-20.0)
+
+
+
+@pytest.mark.asyncio
+async def test_futures_margin_is_reserved_and_released_on_close():
+    sim = Simulator(EventBus())
+    sim.futures_balance = 1000.0
+    signal = {
+        "signal_id": "MARGIN-OPEN",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": 2.0,
+        "order_type": "LIMIT",
+    }
+    position_id = await sim.execute_signal(signal, quantity_override=0.1)
+    assert position_id is not None
+    position = sim.futures_positions[position_id]
+    expected_margin = position["entry_price"] * position["amount"] / position["leverage"]
+    assert position["reserved_margin"] == pytest.approx(expected_margin)
+    assert sim.futures_balance == pytest.approx(1000.0 - expected_margin - position["fees_paid"])
+
+    assert await sim._close_position(position, 110.0, "MANUAL") is True
+    assert position_id not in sim.futures_positions
+    # The close fill includes the simulator's exit slippage and fees. The
+    # account-level invariant is that released margin plus net realized P&L
+    # returns to the available balance; do not reconstruct it from the
+    # requested trigger price.
+    assert sim.futures_balance == pytest.approx(1000.0 + position["realized_pnl"])
