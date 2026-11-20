@@ -348,12 +348,26 @@ class Simulator:
 
     async def _apply_funding(self, position: dict, funding_rate: float) -> None:
         """Apply funding payment to futures position."""
-        # Track last funding time to avoid double-paying
-        current_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        last_funding = position.get("last_funding_time", 0)
+        # Funding settles on fixed UTC boundaries (00:00, 08:00, 16:00),
+        # not eight hours after the first market-data update seen by this process.
+        now = datetime.now(timezone.utc)
+        interval_ms = 8 * 3600 * 1000
+        current_boundary_ms = (int(now.timestamp() * 1000) // interval_ms) * interval_ms
+        last_funding = int(position.get("last_funding_time", 0) or 0)
+        opened_at = position.get("opened_at")
+        if isinstance(opened_at, datetime):
+            opened_at_ms = int(
+                (opened_at.replace(tzinfo=timezone.utc) if opened_at.tzinfo is None else opened_at)
+                .timestamp() * 1000
+            )
+        else:
+            opened_at_ms = 0
 
-        # Only apply if enough time has passed (8 hours)
-        if current_time_ms - last_funding < 8 * 3600 * 1000:
+        # Do not charge immediately on the first price tick after opening. A
+        # position becomes eligible at the first scheduled funding boundary
+        # after it was opened. Persist the boundary itself to make retries and
+        # restarts idempotent within that settlement interval.
+        if current_boundary_ms <= last_funding or current_boundary_ms <= opened_at_ms:
             return
 
         payment = float(self.funding_calc.calculate(position, funding_rate))
@@ -366,7 +380,7 @@ class Simulator:
         previous_timestamp = last_funding
         previous_balance = self.futures_balance
         position["fees_paid"] = previous_fees + payment
-        position["last_funding_time"] = current_time_ms
+        position["last_funding_time"] = current_boundary_ms
         self.futures_balance -= payment
         try:
             if callable(self.persist_position_callback):
