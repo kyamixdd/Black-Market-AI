@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - black-market-ai-beta
+      - ui/obsidian-terminal-integration
   push:
     branches:
       - ui/obsidian-terminal-integration
