@@ -109,7 +109,7 @@ def test_database_init_migrates_existing_paper_trading_tables(tmp_path):
         inspector = inspect(db.engine)
         position_columns = {column["name"] for column in inspector.get_columns("paper_positions")}
         trade_columns = {column["name"] for column in inspector.get_columns("trade_history")}
-        assert {"reserved_notional", "order_id", "signal_id", "strategy", "order_type"} <= position_columns
+        assert {"reserved_notional", "last_funding_time", "order_id", "signal_id", "strategy", "order_type"} <= position_columns
         assert "order_id" in trade_columns
     finally:
         db.close()
@@ -284,3 +284,84 @@ def test_limit_fill_event_failure_is_durable_and_reconciles_after_restart(tmp_pa
         assert recovered_simulator.open_orders == {}
     finally:
         db.close()
+
+
+
+def test_futures_funding_timestamp_and_fee_survive_restart_without_double_charge(tmp_path):
+    import asyncio
+
+    db = Database(f"sqlite:///{tmp_path / 'funding-recovery.db'}")
+    db.init_db()
+    try:
+        repo = Repository(db.session_maker())
+        position = {
+            "position_id": "POS-FUNDING-1",
+            "symbol": "BTCUSDT",
+            "market": "FUTURES",
+            "side": "LONG",
+            "entry_price": 100.0,
+            "amount": 1.0,
+            "current_price": 100.0,
+            "stop_loss": 90.0,
+            "take_profit": 120.0,
+            "leverage": 2.0,
+            "unrealized_pnl": 0.0,
+            "realized_pnl": 0.0,
+            "fees_paid": 0.0,
+            "last_funding_time": 0,
+            "reserved_notional": 0.0,
+            "status": "OPEN",
+            "opened_at": datetime.now(timezone.utc),
+        }
+        repo.save_position(position)
+        simulator = Simulator(EventBus())
+        simulator.futures_positions[position["position_id"]] = position
+        simulator.persist_position_callback = repo.save_position
+
+        asyncio.run(simulator._apply_funding(position, 0.001))
+        charged_balance = simulator.futures_balance
+        charged_fee = position["fees_paid"]
+        charged_timestamp = position["last_funding_time"]
+
+        persisted = repo.get_open_positions("FUTURES")[0]
+        assert persisted.last_funding_time == charged_timestamp
+        assert persisted.fees_paid == charged_fee
+
+        restored = Simulator(EventBus())
+        PositionRecoveryManager(db, restored).recover_positions()
+        restored_position = restored.futures_positions[position["position_id"]]
+        restored.persist_position_callback = repo.save_position
+        asyncio.run(restored._apply_funding(restored_position, 0.001))
+
+        assert restored_position["last_funding_time"] == charged_timestamp
+        assert restored_position["fees_paid"] == charged_fee
+        assert restored.futures_balance == charged_balance
+    finally:
+        db.close()
+
+
+def test_funding_persistence_failure_rolls_back_fee_timestamp_and_balance():
+    import asyncio
+    import pytest
+
+    simulator = Simulator(EventBus())
+    position = {
+        "position_id": "POS-FUNDING-FAIL",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "side": "LONG",
+        "entry_price": 100.0,
+        "amount": 1.0,
+        "leverage": 2.0,
+        "fees_paid": 0.0,
+        "last_funding_time": 0,
+    }
+    simulator.persist_position_callback = lambda _position: (_ for _ in ()).throw(RuntimeError("database unavailable"))
+    balance_before = simulator.futures_balance
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        asyncio.run(simulator._apply_funding(position, 0.001))
+
+    assert position["fees_paid"] == 0.0
+    assert position["last_funding_time"] == 0
+    assert simulator.futures_balance == balance_before
