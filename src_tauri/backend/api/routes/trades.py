@@ -84,26 +84,15 @@ async def open_manual_trade(request: ManualOrderRequest):
     bridge = get_bridge()
     signal = _validated_manual_signal(request, bridge)
     simulator = bridge.simulator
-    # Manual quantity is explicit; the same simulator validation and fee/slippage
-    # accounting are retained by temporarily sizing through the normal execution path.
-    original = simulator._calculate_order_quantity
-    simulator._calculate_order_quantity = lambda _signal, _balance: (
-        float(request.quantity), simulator.risk_manager.validate_leverage(
-            request.market.value, request.leverage
-        )
-    )
-    try:
-        if request.order_type == "LIMIT":
-            order_id = await simulator.place_limit_order(signal)
-            if not order_id:
-                raise HTTPException(409, "Order rejected by paper-trading risk controls.")
-            return ManualActionResponse(success=True, id=order_id, message="Limit order placed.")
-        position_id = await simulator.execute_signal(signal)
-        if not position_id:
-            raise HTTPException(409, "Trade rejected by paper-trading risk controls.")
-        return ManualActionResponse(success=True, id=position_id, message="Paper position opened.")
-    finally:
-        simulator._calculate_order_quantity = original
+    if request.order_type == "LIMIT":
+        order_id = await simulator.place_limit_order(signal, request.quantity)
+        if not order_id:
+            raise HTTPException(409, "Order rejected by paper-trading risk controls.")
+        return ManualActionResponse(success=True, id=order_id, message="Limit order placed.")
+    position_id = await simulator.execute_signal(signal, request.quantity)
+    if not position_id:
+        raise HTTPException(409, "Trade rejected by paper-trading risk controls.")
+    return ManualActionResponse(success=True, id=position_id, message="Paper position opened.")
 
 
 @router.delete("/orders/{order_id}", response_model=ManualActionResponse)
