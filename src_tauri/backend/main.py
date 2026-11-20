@@ -272,6 +272,9 @@ async def websocket_endpoint(websocket: WebSocket):
     if not _is_loopback(client_host):
         await websocket.close(code=4403, reason="Loopback clients only")
         return
+    if _rate_limit_exceeded(f"ws:{client_host}", 30):
+        await websocket.close(code=4429, reason="WebSocket connection rate limit exceeded")
+        return
     if not _api_token:
         await websocket.close(code=1011, reason="Local API authentication is not configured")
         return
