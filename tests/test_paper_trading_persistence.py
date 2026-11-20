@@ -208,3 +208,79 @@ def test_completed_trade_order_id_reconciles_filling_order_after_position_closed
         assert simulator.closed_trades[0]["order_id"] == "ORD-CLOSED"
     finally:
         db.close()
+
+
+def test_limit_fill_event_failure_is_durable_and_reconciles_after_restart(tmp_path):
+    class FailingPositionEventBus(EventBus):
+        def __init__(self):
+            super().__init__()
+            self.fail_position_event = True
+
+        async def publish(self, event):
+            if event.event_type == "POSITION_OPENED" and self.fail_position_event:
+                self.fail_position_event = False
+                raise RuntimeError("simulated event dispatch failure")
+            await super().publish(event)
+
+    db = Database(f"sqlite:///{tmp_path / 'durable-fill.db'}")
+    db.init_db()
+    try:
+        repo = Repository(db.session_maker())
+
+        def persist_order(order):
+            repo.save_order({
+                "order_id": order["order_id"],
+                "signal_id": order.get("signal_id"),
+                "symbol": order["symbol"],
+                "market": order["market"],
+                "order_type": order["order_type"],
+                "side": order["side"],
+                "amount": order["amount"],
+                "price": order.get("entry_price", order.get("price")),
+                "stop_loss": order.get("stop_loss"),
+                "take_profit": order.get("take_profit"),
+                "status": order["status"],
+                "filled_amount": order.get("filled_amount", 0.0),
+                "avg_fill_price": order.get("avg_fill_price", 0.0),
+                "fee": order.get("fee", 0.0),
+                "leverage": order.get("leverage", 1.0),
+                "created_at": order.get("created_at"),
+            })
+
+        simulator = Simulator(FailingPositionEventBus())
+        simulator.persist_order_callback = persist_order
+        simulator.persist_position_callback = repo.save_position
+        simulator.persist_trade_callback = repo.save_trade_history
+        signal = {
+            "signal_id": "SIG-DURABLE-LIMIT",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "direction": "LONG",
+            "entry": 49000.0,
+            "stop_loss": 48000.0,
+            "take_profit": [52000.0],
+            "leverage": 1.0,
+        }
+
+        import asyncio
+
+        async def run_fill():
+            placed_id = await simulator.place_limit_order(signal)
+            await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+            return placed_id
+
+        order_id = asyncio.run(run_fill())
+
+        assert order_id not in simulator.open_orders
+        assert len(simulator.spot_positions) == 1
+        assert repo.get_open_orders() == []
+        persisted_position = repo.get_open_positions("SPOT")[0]
+        assert persisted_position.order_id == order_id
+
+        recovered_simulator = Simulator(EventBus())
+        PositionRecoveryManager(db, recovered_simulator).recover_positions()
+        assert len(recovered_simulator.spot_positions) == 1
+        assert recovered_simulator.spot_balance == simulator.spot_balance
+        assert recovered_simulator.open_orders == {}
+    finally:
+        db.close()
