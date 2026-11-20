@@ -371,6 +371,11 @@ class PositionRecoveryManager:
                     "unrealized_pnl": pos.unrealized_pnl,
                     "realized_pnl": pos.realized_pnl,
                     "fees_paid": pos.fees_paid,
+                    "reserved_notional": pos.reserved_notional or (pos.entry_price * pos.amount),
+                    "order_id": pos.order_id,
+                    "signal_id": pos.signal_id,
+                    "strategy": pos.strategy,
+                    "order_type": pos.order_type,
                     "status": pos.status,
                     "opened_at": pos.opened_at,
                 }
@@ -392,13 +397,52 @@ class PositionRecoveryManager:
                     "unrealized_pnl": pos.unrealized_pnl,
                     "realized_pnl": pos.realized_pnl,
                     "fees_paid": pos.fees_paid,
+                    "reserved_notional": pos.reserved_notional or (pos.entry_price * pos.amount),
+                    "order_id": pos.order_id,
+                    "signal_id": pos.signal_id,
+                    "strategy": pos.strategy,
+                    "order_type": pos.order_type,
                     "status": pos.status,
                     "opened_at": pos.opened_at,
                 }
                 recovered["futures"] += 1
 
+            trade_history = repo.get_trade_history(limit=None)
+            recovered_position_order_ids = {
+                position.get("order_id")
+                for position in (*self.simulator.spot_positions.values(), *self.simulator.futures_positions.values())
+                if position.get("order_id")
+            }
+            completed_order_ids = {trade.order_id for trade in trade_history if trade.order_id}
+
             for order in repo.get_open_orders():
                 signal = repo.get_signal(order.signal_id) if order.signal_id else None
+                status = order.status
+                if status == "FILLING":
+                    if order.order_id in recovered_position_order_ids or order.order_id in completed_order_ids:
+                        status = "FILLED"
+                    else:
+                        status = "RECOVERY_REVIEW"
+                    repo.save_order({
+                        "order_id": order.order_id,
+                        "signal_id": order.signal_id,
+                        "symbol": order.symbol,
+                        "market": order.market,
+                        "order_type": order.order_type,
+                        "side": order.side,
+                        "amount": order.amount,
+                        "price": order.price,
+                        "stop_loss": order.stop_loss,
+                        "take_profit": order.take_profit,
+                        "status": status,
+                        "filled_amount": order.filled_amount,
+                        "avg_fill_price": order.avg_fill_price,
+                        "fee": order.fee,
+                        "leverage": order.leverage,
+                        "created_at": order.created_at,
+                    })
+                if status == "FILLED":
+                    continue
                 self.simulator.open_orders[order.order_id] = {
                     "order_id": order.order_id,
                     "symbol": order.symbol,
@@ -410,18 +454,19 @@ class PositionRecoveryManager:
                     "take_profit": order.take_profit,
                     "leverage": order.leverage,
                     "order_type": order.order_type,
-                    "status": order.status,
+                    "status": status,
                     "created_at": order.created_at,
                     "signal_id": order.signal_id,
                     "filled_amount": order.filled_amount,
                     "avg_fill_price": order.avg_fill_price,
                     "fee": order.fee,
                     "strategy": signal.strategy if signal else "UNKNOWN",
+                    "quantity_override": order.amount,
                 }
                 recovered["orders"] += 1
 
-            # Recover balances from trade history
-            self._recover_balances()
+            # Recover balances and completed trade history
+            self._recover_balances(trade_history)
 
             logger.info(
                 "Recovered paper state: spot=%d, futures=%d, orders=%d",
@@ -429,34 +474,58 @@ class PositionRecoveryManager:
             )
             return recovered
 
-    def _recover_balances(self) -> None:
-        """Recover account balances from trade history."""
+    def _recover_balances(self, trades: list | None = None) -> None:
+        """Rebuild balances, daily P&L, and completed-trade cache from durable records."""
         from database.repositories import Repository
         repo = Repository(self.db.session_maker())
+        if trades is None:
+            trades = repo.get_trade_history(limit=None)
 
-        # Start with initial balances
-        from config import SPOT_INITIAL_BALANCE, FUTURES_INITIAL_BALANCE
-        self.simulator.initial_spot_balance = SPOT_INITIAL_BALANCE
-        self.simulator.initial_futures_balance = FUTURES_INITIAL_BALANCE
+        # Preserve runtime-configured starting equity loaded by the orchestrator.
         self.simulator.spot_balance = self.simulator.initial_spot_balance
         self.simulator.futures_balance = self.simulator.initial_futures_balance
-        # Apply all closed trade P&L
         today = datetime.now(timezone.utc).date()
         self.simulator.daily_pnl_date = today
         self.simulator.daily_pnl = 0.0
-        for trade in repo.get_trade_history(limit=None):
+        self.simulator.closed_trades = []
+
+        for trade in trades:
             if trade.market == "SPOT":
                 self.simulator.spot_balance += trade.pnl
             else:
                 self.simulator.futures_balance += trade.pnl
+            self.simulator.closed_trades.append({
+                "position_id": trade.position_id,
+                "symbol": trade.symbol,
+                "market": trade.market,
+                "side": trade.side,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "amount": trade.amount,
+                "leverage": trade.leverage,
+                "pnl": trade.pnl,
+                "pnl_pct": trade.pnl_pct,
+                "fee": trade.fee,
+                "strategy": trade.strategy,
+                "signal_id": trade.signal_id,
+                "order_id": trade.order_id,
+                "opened_at": trade.opened_at,
+                "closed_at": trade.closed_at,
+                "close_reason": trade.close_reason,
+            })
             closed_at = trade.closed_at
             if closed_at:
                 if closed_at.tzinfo is None:
                     closed_at = closed_at.replace(tzinfo=timezone.utc)
                 if closed_at.astimezone(timezone.utc).date() == today:
                     self.simulator.daily_pnl += trade.pnl
+
         for position in self.simulator.spot_positions.values():
-            self.simulator.spot_balance -= position.get("fees_paid", 0.0)
+            reserved = float(
+                position.get("reserved_notional")
+                or (position.get("entry_price", 0.0) * position.get("amount", 0.0))
+            )
+            self.simulator.spot_balance -= reserved + position.get("fees_paid", 0.0)
         for position in self.simulator.futures_positions.values():
             self.simulator.futures_balance -= position.get("fees_paid", 0.0)
 

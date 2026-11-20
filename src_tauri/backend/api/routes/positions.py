@@ -9,6 +9,7 @@ from .schemas import (
     PositionListResponse, PositionResponse, PositionUpdateRequest,
     ManualActionResponse,
 )
+from .trades import _validated_snapshot_price
 
 router = APIRouter(prefix="/positions", tags=["positions"])
 
@@ -43,10 +44,10 @@ async def close_position(position_id: str):
     if position is None or position.get("status") != "OPEN":
         raise HTTPException(404, "Open position not found.")
     snapshot = bridge.get_market_snapshot(position["symbol"], position["market"])
-    price = float((snapshot or {}).get("price") or position.get("current_price") or position["entry_price"])
-    if not math.isfinite(price) or price <= 0:
-        raise HTTPException(409, "No valid price is available to close this position.")
-    await simulator._close_position(position, price, "MANUAL")
+    price = _validated_snapshot_price(snapshot)
+    closed = await simulator._close_position(position, price, "MANUAL")
+    if not closed:
+        raise HTTPException(409, "Position is already closing or has been closed.")
     return ManualActionResponse(success=True, id=position_id, message="Paper position closed.")
 
 
@@ -58,21 +59,34 @@ async def update_position(position_id: str, request: PositionUpdateRequest):
         raise HTTPException(404, "Open position not found.")
     if request.stop_loss is None and request.take_profit is None:
         raise HTTPException(422, "Provide a stop loss or take profit update.")
-    entry = float(position["entry_price"])
+    current_price = float(position.get("current_price") or position["entry_price"])
+    if not math.isfinite(current_price) or current_price <= 0:
+        raise HTTPException(409, "A valid current position price is required.")
     long_side = position["side"] in ("LONG", "BUY")
     if request.stop_loss is not None and (
-        (long_side and request.stop_loss >= entry)
-        or (not long_side and request.stop_loss <= entry)
+        (long_side and request.stop_loss >= current_price)
+        or (not long_side and request.stop_loss <= current_price)
     ):
-        raise HTTPException(422, "Stop loss is on the invalid side of entry.")
+        raise HTTPException(422, "Stop loss must remain beyond the current market price.")
     if request.take_profit is not None and (
-        (long_side and request.take_profit <= entry)
-        or (not long_side and request.take_profit >= entry)
+        (long_side and request.take_profit <= current_price)
+        or (not long_side and request.take_profit >= current_price)
     ):
-        raise HTTPException(422, "Take profit is on the invalid side of entry.")
-    # Validate every supplied value before mutating either field.
+        raise HTTPException(422, "Take profit must remain beyond the current market price.")
+    # Validate every supplied value before mutating either field, then persist
+    # the complete position so restart recovery keeps the latest risk levels.
+    old_stop_loss = position.get("stop_loss")
+    old_take_profit = position.get("take_profit")
     if request.stop_loss is not None:
         position["stop_loss"] = request.stop_loss
     if request.take_profit is not None:
         position["take_profit"] = request.take_profit
+    try:
+        persist_position = getattr(simulator, "persist_position_callback", None)
+        if callable(persist_position):
+            persist_position(position)
+    except Exception as exc:
+        position["stop_loss"] = old_stop_loss
+        position["take_profit"] = old_take_profit
+        raise HTTPException(503, "Position risk levels could not be saved.") from exc
     return ManualActionResponse(success=True, id=position_id, message="Position risk levels updated.")

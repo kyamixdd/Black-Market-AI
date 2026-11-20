@@ -670,3 +670,391 @@ async def test_concurrent_price_updates_cannot_double_fill_one_limit_order():
     assert executions == 1
     assert order_id not in simulator.open_orders
     assert len(simulator.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_position_close_is_idempotent_and_does_not_double_credit_balance():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *args: 0.0
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-ONCE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before_close = simulator.spot_balance
+
+    assert await simulator._close_position(position, 51000.0, "MANUAL") is True
+    balance_after_close = simulator.spot_balance
+    assert balance_after_close > balance_before_close
+    assert await simulator._close_position(position, 51000.0, "MANUAL") is False
+    assert simulator.spot_balance == pytest.approx(balance_after_close)
+    assert len(simulator.closed_trades) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_position_close_attempts_only_realize_once():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "POSITION_CLOSED":
+                started.set()
+                await release.wait()
+            await super().publish(event)
+
+    simulator = Simulator(BlockingEventBus())
+    simulator.fee_calc.calculate = lambda *args: 0.0
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-RACE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+
+    first = asyncio.create_task(simulator._close_position(position, 51000.0, "MANUAL"))
+    await started.wait()
+    assert position["status"] == "CLOSED"
+    second = await simulator._close_position(position, 52000.0, "TAKE_PROFIT")
+    assert second is False
+    assert len(simulator.closed_trades) == 1
+
+    release.set()
+    assert await first is True
+    assert len(simulator.closed_trades) == 1
+
+
+def test_restore_marks_ambiguous_inflight_order_for_manual_reconciliation():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-IN-FLIGHT": {
+            "order_id": "ORD-IN-FLIGHT",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+
+    assert restored.open_orders["ORD-IN-FLIGHT"]["status"] == "RECOVERY_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_non_finite_fee_without_mutating_account():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-BAD-FEE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before = simulator.spot_balance
+    simulator.fee_calc.calculate = lambda *args: float("nan")
+
+    with pytest.raises(ValueError, match="non-finite"):
+        await simulator._close_position(position, 51000.0, "MANUAL")
+
+    assert position["status"] == "OPEN"
+    assert position_id in simulator.spot_positions
+    assert simulator.spot_balance == pytest.approx(balance_before)
+    assert simulator.closed_trades == []
+
+
+@pytest.mark.asyncio
+async def test_liquidation_does_not_emit_false_alert_after_concurrent_manual_close():
+    margin_alert_started = asyncio.Event()
+    release_margin_alert = asyncio.Event()
+
+    class PausingEventBus(EventBus):
+        def __init__(self):
+            super().__init__()
+            self.published = []
+
+        async def publish(self, event):
+            self.published.append(event)
+            payload = event.payload.get("payload", {})
+            if event.event_type == "RISK_ALERT" and payload.get("alert_type") == "MARGIN_RISK":
+                margin_alert_started.set()
+                await release_margin_alert.wait()
+            await super().publish(event)
+
+    bus = PausingEventBus()
+    simulator = Simulator(bus)
+    signal = {
+        "signal_id": "SIG-LIQ-CLOSE-RACE",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 35000.0,
+        "take_profit": [52000.0],
+        "leverage": 3.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.futures_positions[position_id]
+    simulator.liquidation.is_at_risk = lambda *_args: True
+    simulator.liquidation.check_liquidation = lambda *_args: True
+    simulator.liquidation.calculate_liquidation_price = lambda *_args: 36000.0
+
+    liquidation_task = asyncio.create_task(simulator._check_liquidation(position, 36000.0))
+    await margin_alert_started.wait()
+
+    assert await simulator._close_position(position, 40000.0, "MANUAL") is True
+    release_margin_alert.set()
+    await liquidation_task
+
+    liquidation_alerts = [
+        event for event in bus.published
+        if event.event_type == "RISK_ALERT"
+        and event.payload.get("payload", {}).get("alert_type") == "LIQUIDATION"
+    ]
+    assert liquidation_alerts == []
+    assert len(simulator.closed_trades) == 1
+
+
+@pytest.mark.asyncio
+async def test_limit_order_is_not_retried_if_position_commits_before_event_failure():
+    class FailingPositionEventBus(EventBus):
+        def __init__(self):
+            super().__init__()
+            self.fail_position_event = True
+
+        async def publish(self, event):
+            if event.event_type == "POSITION_OPENED" and self.fail_position_event:
+                self.fail_position_event = False
+                raise RuntimeError("simulated event persistence failure")
+            await super().publish(event)
+
+    simulator = Simulator(FailingPositionEventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-COMMIT-THEN-FAIL",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert order_id not in simulator.open_orders
+    assert len(simulator.spot_positions) == 1
+    position = next(iter(simulator.spot_positions.values()))
+    assert position["order_id"] == order_id
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert len(simulator.spot_positions) == 1
+
+
+def test_restore_marks_order_filled_when_matching_position_was_persisted():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-PERSISTED-FILL": {
+            "order_id": "ORD-PERSISTED-FILL",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+    state["spot_positions"] = {
+        "POS-RECOVERED": {"position_id": "POS-RECOVERED", "order_id": "ORD-PERSISTED-FILL", "status": "OPEN"}
+    }
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+
+    assert "ORD-PERSISTED-FILL" not in restored.open_orders
+
+
+@pytest.mark.asyncio
+async def test_limit_order_persistence_callback_records_state_transitions():
+    simulator = Simulator(EventBus())
+    persisted_statuses = []
+    simulator.persist_order_callback = lambda order: persisted_statuses.append(order["status"])
+    signal = {
+        "signal_id": "SIG-LIMIT-PERSIST",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert persisted_statuses == ["OPEN", "FILLING", "FILLED"]
+
+
+@pytest.mark.asyncio
+async def test_position_persistence_failure_rolls_back_opening_balance_and_position():
+    simulator = Simulator(EventBus())
+    balance_before = simulator.spot_balance
+
+    def fail_persist(_position):
+        raise RuntimeError("database write failed")
+
+    simulator.persist_position_callback = fail_persist
+    signal = {
+        "signal_id": "SIG-PERSIST-ROLLBACK",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        await simulator.execute_signal(signal)
+
+    assert simulator.spot_positions == {}
+    assert simulator.spot_balance == pytest.approx(balance_before)
+
+
+@pytest.mark.asyncio
+async def test_trade_persistence_failure_rolls_back_close_and_balance():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-CLOSE-PERSIST-ROLLBACK",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before = simulator.spot_balance
+
+    def fail_persist(_trade):
+        raise RuntimeError("trade write failed")
+
+    simulator.persist_trade_callback = fail_persist
+    with pytest.raises(RuntimeError, match="trade write failed"):
+        await simulator._close_position(position, 51000.0, "MANUAL")
+
+    assert position["status"] == "OPEN"
+    assert position_id in simulator.spot_positions
+    assert simulator.spot_balance == pytest.approx(balance_before)
+    assert simulator.closed_trades == []
+
+
+def test_restore_reconciles_filling_order_against_closed_trade_history():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-CLOSED-BEFORE-RESTART": {
+            "order_id": "ORD-CLOSED-BEFORE-RESTART",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+    state["closed_trades"] = [
+        {"position_id": "POS-CLOSED", "order_id": "ORD-CLOSED-BEFORE-RESTART"}
+    ]
+
+    simulator.restore_state(state)
+
+    assert "ORD-CLOSED-BEFORE-RESTART" not in simulator.open_orders
+
+
+@pytest.mark.asyncio
+async def test_durable_market_open_survives_event_publication_failure():
+    class FailingOpenEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "POSITION_OPENED":
+                raise RuntimeError("event bus unavailable")
+            await super().publish(event)
+
+    simulator = Simulator(FailingOpenEventBus())
+    persisted = []
+    simulator.persist_position_callback = lambda position: persisted.append(dict(position))
+    signal = {
+        "signal_id": "SIG-DURABLE-MARKET-OPEN",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    position_id = await simulator.execute_signal(signal)
+
+    assert position_id in simulator.spot_positions
+    assert persisted[0]["position_id"] == position_id
+
+
+@pytest.mark.asyncio
+async def test_durable_limit_placement_survives_order_event_failure():
+    class FailingOrderEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "ORDER_PLACED":
+                raise RuntimeError("event bus unavailable")
+            await super().publish(event)
+
+    simulator = Simulator(FailingOrderEventBus())
+    persisted = []
+    simulator.persist_order_callback = lambda order: persisted.append(order["status"])
+    signal = {
+        "signal_id": "SIG-DURABLE-ORDER-PLACE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    order_id = await simulator.place_limit_order(signal)
+
+    assert order_id in simulator.open_orders
+    assert persisted == ["OPEN"]

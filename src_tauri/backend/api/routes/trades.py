@@ -7,10 +7,31 @@ from fastapi import APIRouter, HTTPException, Query
 from ...bridge.orchestrator_bridge import get_bridge
 from .schemas import (
     TradeListResponse, TradeResponse, TradeStatisticsResponse,
-    ManualOrderRequest, ManualActionResponse,
+    OpenOrderListResponse, ManualOrderRequest, ManualActionResponse,
 )
 
 router = APIRouter(prefix="/trades", tags=["trades"])
+
+
+def _validated_snapshot_price(snapshot: dict | None) -> float:
+    """Require a finite positive price from a sufficiently fresh market snapshot."""
+    if not isinstance(snapshot, dict):
+        raise HTTPException(409, "A fresh market price is required.")
+    try:
+        price = float(snapshot.get("price"))
+        age = snapshot.get("data_age_seconds")
+        age = float(age) if age is not None else None
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(409, "A fresh market price is required.")
+    freshness = snapshot.get("data_freshness")
+    if (
+        not math.isfinite(price) or price <= 0
+        or freshness not in ("LIVE", "DELAYED")
+        or (age is not None and (not math.isfinite(age) or age > 300))
+        or (age is None and freshness != "LIVE")
+    ):
+        raise HTTPException(409, "A fresh market price is required.")
+    return price
 
 
 def _validated_manual_signal(request: ManualOrderRequest, bridge):
@@ -23,12 +44,7 @@ def _validated_manual_signal(request: ManualOrderRequest, bridge):
     if request.order_type == "LIMIT" and request.price is None:
         raise HTTPException(422, "Limit orders require a price.")
     snapshot = bridge.get_market_snapshot(request.symbol, market)
-    try:
-        market_price = float(snapshot.get("price")) if snapshot else 0.0
-    except (TypeError, ValueError, OverflowError):
-        market_price = 0.0
-    if not math.isfinite(market_price) or market_price <= 0:
-        raise HTTPException(409, "No fresh market price is available for this symbol.")
+    market_price = _validated_snapshot_price(snapshot)
     entry = float(request.price) if request.order_type == "LIMIT" else market_price
     if request.stop_loss >= entry and side in ("BUY", "LONG"):
         raise HTTPException(422, "Stop loss must be below entry for a long position.")
@@ -77,10 +93,13 @@ async def get_trade_stats():
     return get_bridge().get_trade_statistics()
 
 
-@router.get("/orders")
+@router.get("/orders", response_model=OpenOrderListResponse)
 async def get_open_orders():
     simulator = get_bridge().simulator
-    return {"orders": list(simulator.open_orders.values()), "total": len(simulator.open_orders)}
+    return OpenOrderListResponse(
+        orders=list(simulator.open_orders.values()),
+        total=len(simulator.open_orders),
+    )
 
 
 @router.post("", response_model=ManualActionResponse)
@@ -102,7 +121,16 @@ async def open_manual_trade(request: ManualOrderRequest):
 @router.delete("/orders/{order_id}", response_model=ManualActionResponse)
 async def cancel_order(order_id: str):
     simulator = get_bridge().simulator
-    order = await simulator.cancel_limit_order(order_id)
+    order = simulator.open_orders.get(order_id)
     if order is None:
         raise HTTPException(404, "Open order not found.")
+    if order.get("status") == "FILLING":
+        raise HTTPException(409, "Order is already filling and can no longer be cancelled.")
+    if order.get("status") == "RECOVERY_REVIEW":
+        raise HTTPException(409, "Order requires restart reconciliation before it can be cancelled.")
+    if order.get("status") != "OPEN":
+        raise HTTPException(409, "Order is not in a cancellable state.")
+    cancelled = await simulator.cancel_limit_order(order_id)
+    if cancelled is None:
+        raise HTTPException(409, "Order state changed before cancellation could complete.")
     return ManualActionResponse(success=True, id=order_id, message="Order cancelled.")
