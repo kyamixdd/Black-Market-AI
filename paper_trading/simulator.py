@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -439,37 +440,79 @@ class Simulator:
         logger.info("Placed LIMIT order %s %s %s @ %.4f", market, signal["direction"], signal["symbol"], signal["entry"])
         return order_id
 
+    async def cancel_limit_order(self, order_id: str) -> dict | None:
+        """Cancel an open simulated limit order exactly once."""
+        order = self.open_orders.get(order_id)
+        if order is None or order.get("status") != "OPEN":
+            return None
+
+        order["status"] = "CANCELLED"
+        self.open_orders.pop(order_id, None)
+        await self.event_bus.publish(make_event(
+            EventType.TRADE_CANCELLED, "simulator",
+            symbol=order["symbol"], market=order["market"], order=order,
+        ))
+        logger.info("Cancelled limit order %s", order_id)
+        return order
+
     async def check_limit_orders(self, market: str, symbol: str, price: float) -> None:
-        """Check if any limit orders should be filled at current price."""
+        """Fill eligible limit orders without losing orders rejected at execution time."""
+        try:
+            current_price = float(price)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not math.isfinite(current_price) or current_price <= 0:
+            return
+
         for order in list(self.open_orders.values()):
-            if order["market"] != market or order["symbol"] != symbol or order["status"] != "OPEN":
+            if order["market"] != market or order["symbol"] != symbol or order.get("status") != "OPEN":
                 continue
+
             side = order["side"]
-            limit_price = order["entry_price"]
-            hit = False
-            if side in ("LONG", "BUY") and price <= limit_price or side in ("SHORT", "SELL") and price >= limit_price:
-                hit = True
-            if hit:
-                # Convert limit order to position
-                order["status"] = "FILLED"
-                signal = {
-                    "signal_id": order.get("signal_id", "LIMIT-" + order["order_id"]),
-                    "symbol": order["symbol"],
-                    "market": order["market"],
-                    "direction": order["side"],
-                    "entry": order["entry_price"],
-                    "stop_loss": order["stop_loss"],
-                    "take_profit": [order["take_profit"]] if order["take_profit"] else [],
-                    "leverage": order["leverage"],
-                    "order_type": "LIMIT",
-                    "strategy": order.get("strategy", "UNKNOWN"),
-                }
-                await self.execute_signal(signal, float(order.get('quantity_override', order['amount'])))
-                del self.open_orders[order["order_id"]]
-                await self.event_bus.publish(make_event(
-                    EventType.ORDER_FILLED, "simulator",
-                    symbol=order["symbol"], market=order["market"], order=order
-                ))
+            limit_price = float(order["entry_price"])
+            hit = (
+                side in ("LONG", "BUY") and current_price <= limit_price
+            ) or (
+                side in ("SHORT", "SELL") and current_price >= limit_price
+            )
+            if not hit:
+                continue
+
+            # Claim the order before awaiting execution so concurrent price updates
+            # cannot create duplicate positions from the same pending order.
+            order["status"] = "FILLING"
+            signal = {
+                "signal_id": order.get("signal_id", "LIMIT-" + order["order_id"]),
+                "symbol": order["symbol"],
+                "market": order["market"],
+                "direction": order["side"],
+                "entry": order["entry_price"],
+                "stop_loss": order["stop_loss"],
+                "take_profit": [order["take_profit"]] if order["take_profit"] else [],
+                "leverage": order["leverage"],
+                "order_type": "LIMIT",
+                "strategy": order.get("strategy", "UNKNOWN"),
+            }
+            try:
+                position_id = await self.execute_signal(
+                    signal, float(order.get("quantity_override", order["amount"]))
+                )
+            except Exception:
+                order["status"] = "OPEN"
+                logger.exception("Limit order %s fill attempt failed; order remains open", order["order_id"])
+                continue
+
+            if not position_id:
+                order["status"] = "OPEN"
+                logger.info("Limit order %s was not filled because execution validation rejected it", order["order_id"])
+                continue
+
+            order["status"] = "FILLED"
+            self.open_orders.pop(order["order_id"], None)
+            await self.event_bus.publish(make_event(
+                EventType.ORDER_FILLED, "simulator",
+                symbol=order["symbol"], market=order["market"], order=order
+            ))
 
     # --- Restart Recovery ---
     def get_state_snapshot(self) -> dict[str, Any]:
