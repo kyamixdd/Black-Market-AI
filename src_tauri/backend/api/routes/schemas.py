@@ -621,8 +621,13 @@ class ManualOrderRequest(BaseModel):
 
 
 class PositionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     stop_loss: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     take_profit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
+class PartialCloseRequest(BaseModel):
+    quantity: float = Field(gt=0, allow_inf_nan=False)
 
 
 class ManualActionResponse(BaseModel):
