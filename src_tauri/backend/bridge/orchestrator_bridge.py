@@ -670,9 +670,10 @@ class OrchestratorBridge:
             SPOT_ENABLED, USDM_FUTURES_ENABLED, SCAN_ALL_ELIGIBLE_SYMBOLS,
             TIMEFRAMES, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
         )
-        saved = self.orch._runtime_settings
+        orchestrator = getattr(self, "orch", None)
+        saved = getattr(orchestrator, "_runtime_settings", {})
         return {
-            "spot_enabled": saved.get("spot_enabled", self.orch._discovery.spot_enabled if hasattr(self.orch, "_discovery") else SPOT_ENABLED),
+            "spot_enabled": saved.get("spot_enabled", getattr(getattr(orchestrator, "_discovery", None), "spot_enabled", SPOT_ENABLED)),
             "futures_enabled": saved.get("futures_enabled", USDM_FUTURES_ENABLED),
             "scan_all_eligible_symbols": saved.get("scan_all_eligible_symbols", SCAN_ALL_ELIGIBLE_SYMBOLS),
             "timeframes": saved.get("timeframes", TIMEFRAMES),
@@ -684,7 +685,7 @@ class OrchestratorBridge:
             "risk_max_leverage": self.risk_manager.max_leverage,
             "max_spot_positions": self.risk_manager.max_spot_positions,
             "max_futures_positions": self.risk_manager.max_futures_positions,
-            "telegram_enabled": saved.get("telegram_enabled", self.orch.telegram is not None),
+            "telegram_enabled": saved.get("telegram_enabled", getattr(orchestrator, "telegram", None) is not None),
             "telegram_bot_token_configured": bool(TELEGRAM_BOT_TOKEN),
             "telegram_chat_id_configured": bool(TELEGRAM_CHAT_ID),
         }
@@ -710,7 +711,11 @@ class OrchestratorBridge:
 
     def _volatility_metrics(self, market: str, symbol: str) -> tuple[float | None, float | None]:
         """Calculate 24h realized volatility and ATR as percentages from 1h candles."""
-        candles = self.candles.get_series(market, symbol, "1h", limit=25)
+        candle_manager = getattr(self, "candles", None)
+        get_series = getattr(candle_manager, "get_series", None)
+        if not callable(get_series):
+            return None, None
+        candles = get_series(market, symbol, "1h", limit=25)
         if len(candles) < 3:
             return None, None
         closes = [float(row["close"]) for row in candles[-25:] if float(row.get("close") or 0) > 0]
