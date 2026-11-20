@@ -129,10 +129,34 @@ class Orchestrator:
         if balance_changed and has_activity:
             raise ValueError("Paper starting balances cannot be changed after trading activity exists.")
 
-        next_settings = dict(self._runtime_settings)
-        next_settings.update(settings)
+        from config import (
+            SPOT_ENABLED, USDM_FUTURES_ENABLED, SCAN_ALL_ELIGIBLE_SYMBOLS,
+            TIMEFRAMES, TELEGRAM_ENABLED,
+        )
+        from src_tauri.backend.api.routes.schemas import SettingsRequest
 
-        from config import TELEGRAM_ENABLED
+        # Validate the complete effective configuration, not just fields present
+        # in this PATCH-like request. This prevents partial updates from making
+        # combinations invalid (for example risk/trade above total open risk).
+        effective = {
+            "spot_enabled": self._discovery.spot_enabled,
+            "futures_enabled": self._discovery.futures_enabled,
+            "scan_all_eligible_symbols": self.scanner.analysis_symbol_limit > 10,
+            "timeframes": list(self.scanner.analysis_timeframes),
+            "spot_initial_balance": simulator.initial_spot_balance,
+            "futures_initial_balance": simulator.initial_futures_balance,
+            "risk_per_trade_pct": risk.max_risk_pct,
+            "risk_max_daily_loss_pct": risk.max_daily_loss_pct,
+            "risk_max_total_open_pct": risk.max_open_risk_pct,
+            "risk_max_leverage": risk.max_leverage,
+            "max_spot_positions": risk.max_spot_positions,
+            "max_futures_positions": risk.max_futures_positions,
+            "telegram_enabled": self.telegram is not None,
+        }
+        next_settings = SettingsRequest.model_validate({
+            **effective, **self._runtime_settings, **settings
+        }).model_dump(exclude_none=True)
+
         telegram_enabled = bool(next_settings.get("telegram_enabled", TELEGRAM_ENABLED))
         if telegram_enabled:
             from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
