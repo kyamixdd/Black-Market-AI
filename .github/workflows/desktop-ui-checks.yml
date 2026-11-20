@@ -58,6 +58,10 @@ jobs:
         with:
           node-version: 22.12.0
 
+      - name: Install canonical desktop frontend dependencies
+        run: npm ci
+        working-directory: blackmarket-desktop
+
       - name: Install website dependencies
         run: npm install --no-audit --no-fund
         working-directory: blackmarket-web
