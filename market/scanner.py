@@ -33,7 +33,14 @@ class Scanner:
         self.futures_client = futures_client
         self.candle_manager = candle_manager
         self.intelligence = intelligence
-        self.analysis_symbol_limit = max(1, int(analysis_symbol_limit))
+        from config import SCAN_ALL_ELIGIBLE_SYMBOLS, SPOT_ENABLED, USDM_FUTURES_ENABLED, TIMEFRAMES
+
+        self.analysis_symbol_limit = 50 if SCAN_ALL_ELIGIBLE_SYMBOLS else max(1, int(analysis_symbol_limit))
+        self.enabled_markets = {
+            market for market, enabled in (("SPOT", SPOT_ENABLED), ("FUTURES", USDM_FUTURES_ENABLED))
+            if enabled
+        }
+        self.analysis_timeframes = tuple(TIMEFRAMES)
         self._running = False
         self._tasks: list[asyncio.Task] = []
 
@@ -55,10 +62,9 @@ class Scanner:
         if not prioritized:
             return
 
-        # Bounded 15m + 1h history gives strategies sufficient candles without
-        # requesting every listed symbol/timeframe on every polling cycle.
+        # Refresh each configured analysis timeframe for the prioritized universe.
         for _market, symbol in prioritized:
-            for timeframe in ("15m", "1h"):
+            for timeframe in self.analysis_timeframes:
                 await self.candle_manager.collect_historical(
                     self.spot_client, self.futures_client,
                     market, symbol, timeframe, limit=200,
@@ -69,6 +75,9 @@ class Scanner:
         client = self.spot_client if market == "SPOT" else self.futures_client
         while self._running:
             try:
+                if market not in self.enabled_markets:
+                    await asyncio.sleep(1)
+                    continue
                 tickers = await client.get_all_tickers()
                 for ticker in tickers:
                     symbol = ticker.get("symbol")
@@ -94,6 +103,9 @@ class Scanner:
     async def _scan_futures_extra(self) -> None:
         while self._running:
             try:
+                if "FUTURES" not in self.enabled_markets:
+                    await asyncio.sleep(1)
+                    continue
                 marks = await self.futures_client.get_mark_price()
                 if isinstance(marks, dict):
                     marks = [marks]

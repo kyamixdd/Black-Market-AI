@@ -8,6 +8,7 @@ on:
     branches:
       - black-market-ai-beta
       - implementation/complete-system-roadmap
+      - implementation/persistent-runtime-settings
 
 permissions:
   contents: read
@@ -28,7 +29,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
           cache-dependency-path: |
             requirements.txt

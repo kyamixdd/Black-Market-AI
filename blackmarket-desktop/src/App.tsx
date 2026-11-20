@@ -1426,6 +1426,10 @@ function App() {
           data={data}
           preferences={preferences}
           onPreferencesChange={changePreferences}
+          onSettingsSave={async (payload) => {
+            await mutateJson('/settings', 'POST', payload)
+            refreshScreenDataRef.current?.()
+          }}
           onManualTrade={async (payload) => {
             await mutateJson('/trades', 'POST', payload)
             refreshScreenDataRef.current?.()
