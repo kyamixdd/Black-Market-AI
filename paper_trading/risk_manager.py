@@ -14,9 +14,12 @@ class RiskManager:
         self.max_futures_positions = max_futures_positions
 
     def check_daily_loss(self, daily_pnl: float, total_balance: float) -> bool:
+        """Return False only when realized losses reach the configured daily limit."""
         if total_balance <= 0:
             return False
-        return abs(daily_pnl) / total_balance * 100 < self.max_daily_loss_pct
+        daily_loss = max(0.0, -float(daily_pnl))
+        loss_pct = daily_loss / total_balance * 100.0
+        return loss_pct < self.max_daily_loss_pct
 
     def check_position_limit(self, positions: dict, max_positions: int) -> bool:
         """Check if max positions limit is reached."""
@@ -36,11 +39,11 @@ class RiskManager:
         return (current_risk + new_risk) / total_balance * 100 <= self.max_open_risk_pct
 
     def calculate_position_size(self, balance: float, risk_amount: float, max_risk_pct: float | None = None) -> float:
-        """Calculate position size based on risk per trade."""
+        """Calculate position size based on stop distance and risk budget."""
+        if risk_amount <= 0 or balance <= 0:
+            return 0.0
         if max_risk_pct is None:
             max_risk_pct = self.max_risk_pct
-        if risk_amount <= 0:
-            return 0.0
         return balance * (max_risk_pct / 100.0) / risk_amount
 
     def validate_leverage(self, market: str, leverage: float) -> float:
