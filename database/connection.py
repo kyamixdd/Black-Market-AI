@@ -56,9 +56,7 @@ class Database:
         logger.info("Database initialized at %s", self.url)
 
     def _migrate_paper_trading_columns(self) -> None:
-        """Add recovery fields to existing SQLite databases without dropping data."""
-        if self.engine.dialect.name != "sqlite":
-            return
+        """Add recovery fields to existing SQL databases without dropping data."""
         additions = {
             "paper_positions": {
                 "reserved_notional": "FLOAT NOT NULL DEFAULT 0.0",
@@ -72,19 +70,21 @@ class Database:
             },
         }
         with self.engine.begin() as connection:
+            inspector = inspect(connection)
+            tables = set(inspector.get_table_names())
+            preparer = connection.dialect.identifier_preparer
             for table, columns in additions.items():
-                existing = {
-                    row[1] for row in connection.exec_driver_sql(
-                        f'PRAGMA table_info("{table}")'
-                    ).fetchall()
-                }
-                if not existing:
+                if table not in tables:
                     continue
+                existing = {column["name"] for column in inspector.get_columns(table)}
+                quoted_table = preparer.quote(table)
                 for name, definition in columns.items():
                     if name not in existing:
+                        quoted_name = preparer.quote(name)
                         connection.exec_driver_sql(
-                            f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}'
+                            f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_name} {definition}"
                         )
+                        existing.add(name)
 
 
     def integrity_check(self) -> str:
