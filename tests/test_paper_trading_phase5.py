@@ -1111,3 +1111,33 @@ def test_funding_rejects_unknown_position_side():
 
     with pytest.raises(ValueError, match="Unsupported futures position side"):
         calculator.calculate(position, 0.001)
+
+
+
+def test_funding_uses_exchange_mark_price_when_available():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "current_price": 105.0,
+        "leverage": 5.0,
+    }
+
+    # The exchange mark price is the funding reference, not last-traded price.
+    assert calculator.calculate(position, 0.01, mark_price=110.0) == pytest.approx(1.1)
+
+
+def test_funding_rejects_invalid_mark_price():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "leverage": 1.0,
+    }
+
+    with pytest.raises(ValueError, match="Funding mark price"):
+        calculator.calculate(position, 0.01, mark_price=float("nan"))
