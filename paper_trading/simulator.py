@@ -530,6 +530,13 @@ class Simulator:
                     order["status"] = "FILLED"
                     self.open_orders.pop(order_id, None)
                     logger.exception("Limit order %s created a position before a later failure; marked filled", order_id)
+                    try:
+                        await self.event_bus.publish(make_event(
+                            EventType.ORDER_FILLED, "simulator",
+                            symbol=order["symbol"], market=order["market"], order=order
+                        ))
+                    except Exception:
+                        logger.exception("Could not publish recovered fill event for order %s", order_id)
                 else:
                     order["status"] = "OPEN"
                     logger.exception("Limit order %s fill attempt failed; order remains open", order_id)
