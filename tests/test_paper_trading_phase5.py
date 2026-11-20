@@ -1226,9 +1226,11 @@ async def test_futures_margin_is_reserved_and_released_on_close():
     position_id = await sim.execute_signal(signal, quantity_override=0.1)
     assert position_id is not None
     position = sim.futures_positions[position_id]
-    assert position["reserved_margin"] == pytest.approx(5.0)
-    assert sim.futures_balance == pytest.approx(1000.0 - 5.0 - position["fees_paid"])
+    expected_margin = position["entry_price"] * position["amount"] / position["leverage"]
+    assert position["reserved_margin"] == pytest.approx(expected_margin)
+    assert sim.futures_balance == pytest.approx(1000.0 - expected_margin - position["fees_paid"])
 
+    expected_gross_pnl = (110.0 - position["entry_price"]) * position["amount"]
     assert await sim._close_position(position, 110.0, "MANUAL") is True
     assert position_id not in sim.futures_positions
-    assert sim.futures_balance == pytest.approx(1000.0 + 1.0 - position["fees_paid"])
+    assert sim.futures_balance == pytest.approx(1000.0 + expected_gross_pnl - position["fees_paid"])
