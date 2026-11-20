@@ -305,7 +305,7 @@ function App() {
   const [data, setData] = useState(EMPTY_DATA)
   const [startupStatus, setStartupStatus] = useState<StartupStatus>({
     state: 'checking',
-    message: 'Checking the local backend.',
+    message: 'Checking the backend connection.',
   })
   const [apiReady, setApiReady] = useState(false)
   const [websocketConnected, setWebsocketConnected] = useState(false)
@@ -460,8 +460,8 @@ function App() {
           } else if (!isTauri && Date.now() - startedAt >= 30000) {
             setStartupStatus({
               state: 'failed',
-              message: 'The backend is unavailable in this browser preview.',
-              details: 'The browser preview cannot launch the Python engine. Launch BlackMarket AI from its desktop application to manage backend startup.',
+              message: 'The hosted backend is unavailable.',
+              details: 'The website cannot launch the Python engine. Check the hosted backend service and its health endpoint.'
             })
           } else {
             setStartupStatus({
