@@ -15,34 +15,78 @@ logger = logging.getLogger(__name__)
 
 
 class Scanner:
-    def __init__(self, event_bus: EventBus, registry: SymbolRegistry,
-                 cache: MarketCache, spot_client: SpotClient,
-                 futures_client: FuturesClient):
+    def __init__(
+        self,
+        event_bus: EventBus,
+        registry: SymbolRegistry,
+        cache: MarketCache,
+        spot_client: SpotClient,
+        futures_client: FuturesClient,
+        candle_manager=None,
+        intelligence=None,
+        analysis_symbol_limit: int = 10,
+    ):
         self.event_bus = event_bus
         self.registry = registry
         self.cache = cache
         self.spot_client = spot_client
         self.futures_client = futures_client
+        self.candle_manager = candle_manager
+        self.intelligence = intelligence
+        self.analysis_symbol_limit = max(1, int(analysis_symbol_limit))
         self._running = False
         self._tasks: list[asyncio.Task] = []
+
+    async def _analyze_market(self, market: str) -> None:
+        """Refresh candles for the most liquid symbols, then run strategy analysis."""
+        if self.candle_manager is None or self.intelligence is None:
+            return
+        snapshots = self.cache.get_market_tickers(market)
+        candidates = [
+            item for item in snapshots
+            if item.get("symbol") and float(item.get("volume_24h") or 0) > 0
+            and self.registry.is_eligible(item["symbol"], market)
+        ]
+        candidates.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
+        prioritized = [
+            (market, str(item["symbol"]))
+            for item in candidates[:self.analysis_symbol_limit]
+        ]
+        if not prioritized:
+            return
+
+        # Bounded 15m + 1h history gives strategies sufficient candles without
+        # requesting every listed symbol/timeframe on every polling cycle.
+        for _market, symbol in prioritized:
+            for timeframe in ("15m", "1h"):
+                await self.candle_manager.collect_historical(
+                    self.spot_client, self.futures_client,
+                    market, symbol, timeframe, limit=200,
+                )
+        await self.intelligence.run_prioritized_scan(prioritized)
 
     async def _scan_market_tickers(self, market: str) -> None:
         client = self.spot_client if market == "SPOT" else self.futures_client
         while self._running:
             try:
                 tickers = await client.get_all_tickers()
-                for t in tickers:
-                    symbol = t.get("symbol")
+                for ticker in tickers:
+                    symbol = ticker.get("symbol")
                     if not self.registry.is_eligible(symbol, market):
                         continue
-                    price = float(t.get("lastPrice", 0))
-                    volume = float(t.get("quoteVolume", 0))
-                    change = float(t.get("priceChangePercent", 0))
+                    price = float(ticker.get("lastPrice", 0))
+                    volume = float(ticker.get("quoteVolume", 0))
+                    change = float(ticker.get("priceChangePercent", 0))
+                    if price <= 0:
+                        continue
                     self.cache.update_ticker(market, symbol, price, volume, change)
                 await self.event_bus.publish(make_event(
                     EventType.MARKET_SNAPSHOT, "scanner", market=market,
                     count=len(tickers)
                 ))
+                await self._analyze_market(market)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("%s ticker scan failed: %s", market, exc)
             await asyncio.sleep(30)
@@ -50,20 +94,28 @@ class Scanner:
     async def _scan_futures_extra(self) -> None:
         while self._running:
             try:
-                # Mark prices & Funding
                 marks = await self.futures_client.get_mark_price()
-                for m in marks:
-                    symbol = m.get("symbol")
+                if isinstance(marks, dict):
+                    marks = [marks]
+                for item in marks:
+                    symbol = item.get("symbol")
                     if not self.registry.is_eligible(symbol, "FUTURES"):
                         continue
-                    self.cache.update_mark("FUTURES", symbol,
-                                           float(m.get("markPrice", 0)),
-                                           float(m.get("lastFundingRate", 0)))
+                    mark_price = float(item.get("markPrice", 0))
+                    funding_rate = float(item.get("lastFundingRate", 0))
+                    if mark_price > 0:
+                        self.cache.update_mark(
+                            "FUTURES", symbol, mark_price, funding_rate
+                        )
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 logger.error("Futures extra scan failed: %s", exc)
             await asyncio.sleep(60)
 
     async def start(self) -> None:
+        if self._running:
+            return
         self._running = True
         self._tasks.append(asyncio.create_task(self._scan_market_tickers("SPOT")))
         self._tasks.append(asyncio.create_task(self._scan_market_tickers("FUTURES")))
@@ -72,8 +124,8 @@ class Scanner:
 
     async def stop(self) -> None:
         self._running = False
-        for t in self._tasks:
-            t.cancel()
+        for task in self._tasks:
+            task.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
