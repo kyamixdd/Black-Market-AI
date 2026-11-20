@@ -336,7 +336,7 @@ def test_futures_funding_timestamp_and_fee_survive_restart_without_double_charge
 
         assert restored_position["last_funding_time"] == charged_timestamp
         assert restored_position["fees_paid"] == charged_fee
-        assert restored.futures_balance == charged_balance
+        assert restored.futures_balance == charged_balance - position["reserved_margin"]
     finally:
         db.close()
 
@@ -467,7 +467,7 @@ def test_recovery_deducts_open_position_costs_and_futures_funding_once(tmp_path)
         PositionRecoveryManager(db, simulator).recover_positions()
 
         assert simulator.spot_balance == SPOT_INITIAL_BALANCE - 201.0
-        assert simulator.futures_balance == FUTURES_INITIAL_BALANCE - 2.75
+        assert simulator.futures_balance == FUTURES_INITIAL_BALANCE - 100.0 - 2.75
         assert simulator.spot_positions[spot["position_id"]]["fees_paid"] == 1.0
         assert simulator.futures_positions[futures["position_id"]]["last_funding_time"] == 1795200000000
     finally:
