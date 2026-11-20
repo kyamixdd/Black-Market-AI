@@ -4,9 +4,11 @@ on:
   pull_request:
     branches:
       - black-market-ai-beta
+      - ui/obsidian-terminal-integration
   push:
     branches:
       - ui/obsidian-terminal-integration
+      - architecture/shared-frontend-two-targets
 
 permissions:
   contents: read
@@ -42,3 +44,35 @@ jobs:
       - name: Market-data unit tests
         run: npm test
         working-directory: blackmarket-desktop
+
+      - name: Validate backend Python syntax
+        run: python -m compileall -q src_tauri/backend/main.py
+
+  website:
+    name: Shared website frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+
+      - name: Install canonical desktop frontend dependencies
+        run: npm ci
+        working-directory: blackmarket-desktop
+
+      - name: Install website dependencies
+        run: npm install --no-audit --no-fund
+        working-directory: blackmarket-web
+
+      - name: TypeScript check
+        run: npm run lint
+        working-directory: blackmarket-web
+
+      - name: Production website build
+        run: npm run build
+        working-directory: blackmarket-web

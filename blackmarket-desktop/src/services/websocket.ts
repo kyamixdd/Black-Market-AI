@@ -23,6 +23,7 @@ interface WebSocketMessage {
 
 class WebSocketService {
   private ws: WebSocket | null = null
+  private eventSource: EventSource | null = null
   private readonly url: string
   private reconnectAttempts = 0
   private reconnectDelay = 1000
@@ -64,6 +65,69 @@ class WebSocketService {
   }
 
   connect(): Promise<void> {
+    if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
+      if (this.eventSource?.readyState === EventSource.OPEN || this.eventSource?.readyState === EventSource.CONNECTING) return Promise.resolve()
+      this.manuallyDisconnected = false
+      this.setState(this.reconnectAttempts ? 'reconnecting' : 'connecting')
+      return new Promise((resolve, reject) => {
+        const source = new EventSource('/api/backend/events/stream')
+        this.eventSource = source
+        let settled = false
+        source.onopen = () => {
+          if (this.eventSource !== source) return
+          this.reconnectAttempts = 0
+          this.setState('connected')
+          this.emit('connected')
+          if (!settled) { settled = true; resolve() }
+        }
+        source.onmessage = (message) => {
+          try {
+            const event: unknown = JSON.parse(message.data)
+            if (typeof event !== 'object' || event === null || !('event_type' in event)) return
+            const eventType = String(event.event_type)
+            const channels: Record<string, WebSocketChannel[]> = {
+              MARKET_DATA: ['price_updates'],
+              MARKET_SNAPSHOT: ['market_updates'],
+              SIGNAL_PROPOSED: ['signal_updates'],
+              SIGNAL_VALIDATED: ['signal_updates'],
+              SIGNAL_REJECTED: ['signal_updates', 'system_events'],
+              SIGNAL_EXPIRED: ['signal_updates'],
+              PREDICTION: ['learning_updates'],
+              TRADE_EXECUTED: ['portfolio_updates', 'position_updates'],
+              TRADE_PARTIALLY_FILLED: ['portfolio_updates', 'position_updates'],
+              TRADE_CLOSED: ['portfolio_updates', 'position_updates'],
+              TRADE_CANCELLED: ['portfolio_updates', 'system_events'],
+              TRADE_REJECTED: ['portfolio_updates', 'system_events'],
+              POSITION_OPENED: ['position_updates', 'portfolio_updates'],
+              POSITION_CLOSED: ['position_updates', 'portfolio_updates'],
+              ORDER_PLACED: ['portfolio_updates'],
+              ORDER_FILLED: ['portfolio_updates', 'position_updates'],
+              LEARNING_UPDATE: ['learning_updates'],
+              MODEL_TRAINED: ['learning_updates'],
+              MODEL_PROMOTED: ['learning_updates'],
+              MODEL_ROLLED_BACK: ['learning_updates'],
+              RISK_ALERT: ['risk_updates', 'system_events'],
+              SYSTEM_HEALTH: ['system_events'],
+              NOTIFICATION: ['system_events'],
+            }
+            for (const channel of channels[eventType] ?? []) {
+              this.subscriptions.get(channel)?.forEach((callback) => callback(event))
+              this.emit(channel, event)
+            }
+            this.emit('event', event)
+          } catch (error) { this.emit('error', error) }
+        }
+        source.onerror = () => {
+          if (this.eventSource !== source) return
+          this.setState('reconnecting')
+          this.emit('error', 'The authenticated website event stream disconnected.')
+          if (!settled) { settled = true; reject(new Error('Website event stream unavailable')) }
+          source.close()
+          this.eventSource = null
+          if (!this.manuallyDisconnected) this.scheduleReconnect()
+        }
+      })
+    }
     if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return Promise.resolve()
     }
@@ -204,6 +268,8 @@ class WebSocketService {
 
   disconnect() {
     this.manuallyDisconnected = true
+    this.eventSource?.close()
+    this.eventSource = null
     this.stopPing()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
