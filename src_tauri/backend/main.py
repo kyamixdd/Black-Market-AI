@@ -213,14 +213,14 @@ async def event_stream():
 
     async def stream():
         try:
-            yield "retry: 3000\\n\\n"
+            yield "retry: 3000\n\n"
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15)
-                    yield "data: " + json.dumps(event, default=str, separators=(",", ":")) + "\\n\\n"
+                    yield "data: " + json.dumps(event, default=str, separators=(",", ":")) + "\n\n"
                     queue.task_done()
                 except asyncio.TimeoutError:
-                    yield ": keep-alive\\n\\n"
+                    yield ": keep-alive\n\n"
         finally:
             subscribers = event_bus._subscribers.get("*", [])
             if on_event in subscribers:
