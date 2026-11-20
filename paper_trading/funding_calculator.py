@@ -14,11 +14,16 @@ class FundingCalculator:
         """
         if position["market"] != "FUTURES":
             return 0.0
-        notional = position["amount"] * position["entry_price"] * position["leverage"]
-        if position["side"] == "LONG":
-            return notional * funding_rate
-        else:
-            return -notional * funding_rate  # Shorts receive when rate is positive
+        # Funding is charged on the position's current notional value, not
+        # the initial margin. Leverage changes required margin, not the
+        # quantity of underlying exposure being funded.
+        mark_price = position.get("current_price") or position["entry_price"]
+        notional = float(position["amount"]) * float(mark_price)
+        if position["side"] in ("LONG", "BUY"):
+            return notional * float(funding_rate)
+        if position["side"] in ("SHORT", "SELL"):
+            return -notional * float(funding_rate)  # Shorts receive when rate is positive
+        raise ValueError(f"Unsupported futures position side: {position['side']}")
 
     def should_apply_funding(self, position: dict, current_time_ms: int) -> bool:
         """Check if funding should be applied based on position open time and interval."""
