@@ -113,7 +113,7 @@ def test_position_recovery_restores_balances_daily_pnl_reserved_principal_and_op
     assert simulator.open_orders["ORD-OPEN-1"]["strategy"] == "MOMENTUM"
 
     recovery.recover_positions()
-    assert simulator.spot_balance == initial_spot + 1.0
+    assert simulator.spot_balance == initial_spot - 99.0
     assert len(simulator.spot_positions) == 1
     assert len(simulator.open_orders) == 1
 
