@@ -823,7 +823,7 @@ class OrchestratorBridge:
         change = ((current_24h / avg_daily) - 1) * 100 if avg_daily and avg_daily > 0 else None
         result = {
             "symbol": symbol, "market": market, "buy_volume": buy_volume, "sell_volume": sell_volume,
-            "total_volume": current_24h, "volume_change_24h": change,
+            "total_volume": current_24h, "volume_change_24h": None,
             "buy_volume_7d_avg": None, "sell_volume_7d_avg": None,
             "average_daily_quote_volume_7d": avg_daily, "volume_change_vs_7d_avg_pct": change,
             "comparison_period": "Current rolling 24h vs mean of up to 7 completed UTC daily candles",
