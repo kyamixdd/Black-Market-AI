@@ -635,17 +635,17 @@ class OrchestratorBridge:
     # ===== Settings =====
 
     def get_settings(self) -> dict:
-        """Get current settings."""
+        """Return effective runtime settings without exposing secret values."""
         from config import (
             SPOT_ENABLED, USDM_FUTURES_ENABLED, SCAN_ALL_ELIGIBLE_SYMBOLS,
-            TIMEFRAMES,
-            TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+            TIMEFRAMES, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
         )
+        saved = self.orch._runtime_settings
         return {
-            "spot_enabled": SPOT_ENABLED,
-            "futures_enabled": USDM_FUTURES_ENABLED,
-            "scan_all_eligible_symbols": SCAN_ALL_ELIGIBLE_SYMBOLS,
-            "timeframes": TIMEFRAMES,
+            "spot_enabled": saved.get("spot_enabled", self.orch._discovery.spot_enabled if hasattr(self.orch, "_discovery") else SPOT_ENABLED),
+            "futures_enabled": saved.get("futures_enabled", USDM_FUTURES_ENABLED),
+            "scan_all_eligible_symbols": saved.get("scan_all_eligible_symbols", SCAN_ALL_ELIGIBLE_SYMBOLS),
+            "timeframes": saved.get("timeframes", TIMEFRAMES),
             "spot_initial_balance": self.simulator.initial_spot_balance,
             "futures_initial_balance": self.simulator.initial_futures_balance,
             "risk_per_trade_pct": self.risk_manager.max_risk_pct,
@@ -654,14 +654,15 @@ class OrchestratorBridge:
             "risk_max_leverage": self.risk_manager.max_leverage,
             "max_spot_positions": self.risk_manager.max_spot_positions,
             "max_futures_positions": self.risk_manager.max_futures_positions,
-            "telegram_enabled": TELEGRAM_ENABLED,
+            "telegram_enabled": saved.get("telegram_enabled", self.orch.telegram is not None),
             "telegram_bot_token_configured": bool(TELEGRAM_BOT_TOKEN),
             "telegram_chat_id_configured": bool(TELEGRAM_CHAT_ID),
         }
 
     def update_settings(self, updates: dict) -> dict:
-        """Report that runtime settings updates are not implemented."""
-        raise NotImplementedError("Settings updates are not supported.")
+        """Persist and apply settings to the live orchestrator."""
+        self.orch.apply_runtime_settings(updates, persist=True)
+        return self.get_settings()
 
     # ===== Health =====
 
