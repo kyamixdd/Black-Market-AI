@@ -763,7 +763,6 @@ def test_restore_marks_ambiguous_inflight_order_for_manual_reconciliation():
 @pytest.mark.asyncio
 async def test_close_rejects_non_finite_fee_without_mutating_account():
     simulator = Simulator(EventBus())
-    simulator.fee_calc.calculate = lambda *args: float("nan")
     simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
     signal = {
         "signal_id": "SIG-CLOSE-BAD-FEE",
@@ -778,6 +777,7 @@ async def test_close_rejects_non_finite_fee_without_mutating_account():
     position_id = await simulator.execute_signal(signal)
     position = simulator.spot_positions[position_id]
     balance_before = simulator.spot_balance
+    simulator.fee_calc.calculate = lambda *args: float("nan")
 
     with pytest.raises(ValueError, match="non-finite"):
         await simulator._close_position(position, 51000.0, "MANUAL")
