@@ -29,6 +29,10 @@ export type WorkspaceMarket = {
   orderbook_imbalance?: number | null
   regime?: string
   timestamp?: string
+  volatility_24h_pct?: number | null
+  atr_24h_pct?: number | null
+  data_age_seconds?: number | null
+  data_freshness?: string
 }
 
 export type WorkspaceSignal = {
@@ -226,6 +230,18 @@ export type DashboardPreferences = {
 }
 
 export type WorkspaceData = {
+  volumeAnalytics?: {
+    total_volume?: number
+    average_daily_quote_volume_7d?: number | null
+    volume_change_vs_7d_avg_pct?: number | null
+    comparison_period?: string | null
+    data_age_seconds?: number | null
+    data_freshness?: string
+    buy_volume?: number | null
+    sell_volume?: number | null
+    flow_sample_size?: number
+    flow_sample_scope?: string | null
+  } | null
   markets: WorkspaceMarket[]
   signals: WorkspaceSignal[]
   portfolio: WorkspacePortfolio | null
@@ -446,16 +462,17 @@ function MarketScreen({ data, onSelectMarket }: Pick<Props, 'data' | 'onSelectMa
       </div>
       {markets.length ? (
         <Table minWidth={900}>
-          <TableHead labels={['SYMBOL', 'MARKET', 'LAST PRICE', '24H CHANGE', '24H QUOTE VOL', 'SPREAD', 'BOOK IMBALANCE', 'REGIME', 'ACTION']} />
+          <TableHead labels={['SYMBOL', 'MARKET', 'LAST PRICE', '24H CHANGE', '24H QUOTE VOL', 'REALIZED VOL', 'ATR 24H', 'DATA AGE', 'FRESHNESS', 'ACTION']} />
           {markets.slice(0, 1000).map((market, index) => (
             <tr key={`${market.market}-${market.symbol}-${index}`}>
               <td className="table-primary">{market.symbol ?? '—'}</td><td>{market.market ?? '—'}</td>
               <td>{price(num(market.price))}</td>
               <td className={(market.price_change_24h ?? 0) >= 0 ? 'positive' : 'negative'}>{pct(num(market.price_change_24h))}</td>
               <td>{compact(num(market.volume_24h))}</td>
-              <td>{market.bid_ask_spread == null ? '—' : `${market.bid_ask_spread.toFixed(2)} bps`}</td>
-              <td>{market.orderbook_imbalance == null ? '—' : market.orderbook_imbalance.toFixed(3)}</td>
-              <td>{market.regime ?? '—'}</td>
+              <td>{market.volatility_24h_pct == null ? '—' : `${market.volatility_24h_pct.toFixed(2)}%`}</td>
+              <td>{market.atr_24h_pct == null ? '—' : `${market.atr_24h_pct.toFixed(2)}%`}</td>
+              <td>{market.data_age_seconds == null ? '—' : `${Math.round(market.data_age_seconds)}s`}</td>
+              <td>{market.data_freshness ?? 'UNKNOWN'}</td>
               <td><button className="table-action" disabled={!market.symbol} onClick={() => onSelectMarket(market.symbol ?? '', market.market === 'FUTURES' ? 'FUTURES' : 'SPOT')}>Analyze</button></td>
             </tr>
           ))}
@@ -492,11 +509,17 @@ function SignalsScreen({ signals, onSelectMarket }: Pick<Props, 'onSelectMarket'
   )
 }
 
-function AnalysisScreen({ symbol, marketType, candles }: { symbol: string; marketType: string; candles: WorkspaceData['analysisCandles'] }) {
+function AnalysisScreen({ symbol, marketType, candles, volumeAnalytics }: { symbol: string; marketType: string; candles: WorkspaceData['analysisCandles']; volumeAnalytics: WorkspaceData['volumeAnalytics'] }) {
   return (
     <>
       <ScreenHeader title="Market Analysis" description={`${symbol} · ${marketType} · technical readings computed from loaded Binance public candles across configured intervals`} />
       <div className="workspace-summary"><SummaryCard label="SYMBOL" value={symbol} /><SummaryCard label="MARKET" value={marketType} /><SummaryCard label="TIMEFRAMES" value="9" detail="1m → 1w" /><SummaryCard label="ANALYSIS" value="DESCRIPTIVE" detail="Not a forecast" /></div>
+      <div className="workspace-summary">
+        <SummaryCard label="ROLLING 24H QUOTE VOLUME" value={compact(num(volumeAnalytics?.total_volume))} />
+        <SummaryCard label="7D AVG DAILY QUOTE VOL" value={compact(num(volumeAnalytics?.average_daily_quote_volume_7d))} />
+        <SummaryCard label="VS 7D DAILY AVG" value={pct(num(volumeAnalytics?.volume_change_vs_7d_avg_pct))} detail={volumeAnalytics?.comparison_period ?? 'Insufficient completed daily candles'} />
+        <SummaryCard label="TRADE-FLOW SAMPLE" value={String(volumeAnalytics?.flow_sample_size ?? 0)} detail={volumeAnalytics?.flow_sample_scope ?? 'Unavailable'} />
+      </div>
       <Table minWidth={980}>
         <TableHead labels={['TIMEFRAME', 'CANDLES', 'LAST CLOSE', 'PERIOD CHANGE', 'RSI (14)', 'SMA (20)', 'CLOSE VS SMA20', 'LAST CANDLE UTC']} />
         {TIMEFRAMES.map((timeframe) => {
@@ -890,7 +913,7 @@ export function DashboardScreen(props: Props) {
     <section className={`workspace-screen workspace-${screen.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`} aria-label={`${screen} screen`}>
       {screen === 'Markets' && <MarketScreen data={data} onSelectMarket={props.onSelectMarket} />}
       {screen === 'AI Signals' && <SignalsScreen signals={data.signals} onSelectMarket={props.onSelectMarket} />}
-      {screen === 'Market Analysis' && <AnalysisScreen symbol={props.symbol} marketType={props.marketType} candles={data.analysisCandles} />}
+      {screen === 'Market Analysis' && <AnalysisScreen symbol={props.symbol} marketType={props.marketType} candles={data.analysisCandles} volumeAnalytics={data.volumeAnalytics} />}
       {screen === 'Portfolio' && <PortfolioScreen portfolio={data.portfolio} positions={data.positions} trades={data.trades} stats={data.tradeStats} onPositionAction={props.onPositionAction} />}
       {screen === 'Positions' && <PositionsScreen positions={data.positions} onPositionAction={props.onPositionAction} onManualTrade={props.onManualTrade} />}
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}

@@ -9,6 +9,7 @@ on:
       - black-market-ai-beta
       - implementation/complete-system-roadmap
       - implementation/persistent-runtime-settings
+      - implementation/market-analytics-completion
 
 permissions:
   contents: read
