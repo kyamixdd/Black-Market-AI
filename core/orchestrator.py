@@ -88,6 +88,19 @@ class Orchestrator:
         self._current_regime: str = "UNKNOWN"
         self.apply_runtime_settings(self._load_runtime_settings(), persist=False)
 
+        self.disaster_recovery = create_disaster_recovery_orchestrator(
+            db=self.db,
+            simulator=self.simulator,
+            ws_manager=self.ws_manager,
+            spot_client=self.spot_client,
+            futures_client=self.futures_client,
+            symbol_registry=self.registry,
+            candle_manager=self.candle_manager,
+            telegram_client=self.telegram,
+            persist_state=self._persist_state,
+            reconnect_callback=self.ws_manager.restart,
+        )
+
     @staticmethod
     def _load_runtime_settings() -> dict:
         from core.runtime_settings_store import load_runtime_settings
@@ -163,18 +176,7 @@ class Orchestrator:
 
         self._runtime_settings = next_settings
 
-        self.disaster_recovery = create_disaster_recovery_orchestrator(
-            db=self.db,
-            simulator=self.simulator,
-            ws_manager=self.ws_manager,
-            spot_client=self.spot_client,
-            futures_client=self.futures_client,
-            symbol_registry=self.registry,
-            candle_manager=self.candle_manager,
-            telegram_client=self.telegram,
-            persist_state=self._persist_state,
-            reconnect_callback=self.ws_manager.restart,
-        )
+
 
     async def initialize(self) -> None:
         logger.info("Initializing BlackMarket AI...")
