@@ -132,7 +132,8 @@ class Orchestrator:
         next_settings = dict(self._runtime_settings)
         next_settings.update(settings)
 
-        telegram_enabled = bool(next_settings.get("telegram_enabled", False))
+        from config import TELEGRAM_ENABLED
+        telegram_enabled = bool(next_settings.get("telegram_enabled", TELEGRAM_ENABLED))
         if telegram_enabled:
             from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
             if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
