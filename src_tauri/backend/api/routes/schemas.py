@@ -98,6 +98,8 @@ class MarketSnapshotResponse(BaseModel):
     bid_ask_spread: float | None = None
     orderbook_imbalance: float | None = None
     regime: str
+    data_age_seconds: float | None = None
+    data_freshness: str = "UNKNOWN"
 
 
 class MarketListResponse(BaseModel):
@@ -426,6 +428,9 @@ class MarketHeatmapItemResponse(BaseModel):
     relative_strength_pct: float | None = None
     volume_rank_pct: float | None = None
     volatility_24h_pct: float | None = None
+    atr_24h_pct: float | None = None
+    data_age_seconds: float | None = None
+    data_freshness: str = "UNKNOWN"
 
 
 class MarketHeatmapResponse(BaseModel):
@@ -450,6 +455,12 @@ class VolumeResponse(BaseModel):
     volume_change_24h: float | None = None
     buy_volume_7d_avg: float | None = None
     sell_volume_7d_avg: float | None = None
+    average_daily_quote_volume_7d: float | None = None
+    volume_change_vs_7d_avg_pct: float | None = None
+    comparison_period: str | None = None
+    data_timestamp: datetime | None = None
+    data_age_seconds: float | None = None
+    data_freshness: str = "UNKNOWN"
     flow_is_estimated: bool = False
     flow_sample_size: int = 0
     flow_sample_scope: str | None = None
