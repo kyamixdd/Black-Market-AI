@@ -70,16 +70,9 @@ def test_portfolio_uses_configured_baselines_and_utc_periods():
     assert portfolio["unrealized_pnl"] == 15.0
 
 
-@pytest.mark.asyncio
-async def test_settings_update_returns_explicit_unsupported_response(monkeypatch):
-    from src_tauri.backend.api.routes import settings as settings_routes
+def test_settings_request_rejects_out_of_range_risk_limit():
+    from pydantic import ValidationError
     from src_tauri.backend.api.routes.schemas import SettingsRequest
 
-    bridge = object.__new__(OrchestratorBridge)
-    monkeypatch.setattr(settings_routes, "get_bridge", lambda: bridge)
-
-    with pytest.raises(HTTPException) as error:
-        await settings_routes.update_settings(SettingsRequest(risk_max_total_open_pct=1000))
-
-    assert error.value.status_code == 501
-    assert error.value.detail == "Settings updates are not supported."
+    with pytest.raises(ValidationError):
+        SettingsRequest(risk_max_total_open_pct=1000)
