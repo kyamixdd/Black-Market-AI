@@ -979,3 +979,26 @@ async def test_trade_persistence_failure_rolls_back_close_and_balance():
     assert position_id in simulator.spot_positions
     assert simulator.spot_balance == pytest.approx(balance_before)
     assert simulator.closed_trades == []
+
+
+def test_restore_reconciles_filling_order_against_closed_trade_history():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-CLOSED-BEFORE-RESTART": {
+            "order_id": "ORD-CLOSED-BEFORE-RESTART",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+    state["closed_trades"] = [
+        {"position_id": "POS-CLOSED", "order_id": "ORD-CLOSED-BEFORE-RESTART"}
+    ]
+
+    simulator.restore_state(state)
+
+    assert "ORD-CLOSED-BEFORE-RESTART" not in simulator.open_orders
