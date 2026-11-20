@@ -29,6 +29,10 @@ export type WorkspaceMarket = {
   orderbook_imbalance?: number | null
   regime?: string
   timestamp?: string
+  volatility_24h_pct?: number | null
+  atr_24h_pct?: number | null
+  data_age_seconds?: number | null
+  data_freshness?: string
 }
 
 export type WorkspaceSignal = {
@@ -446,16 +450,17 @@ function MarketScreen({ data, onSelectMarket }: Pick<Props, 'data' | 'onSelectMa
       </div>
       {markets.length ? (
         <Table minWidth={900}>
-          <TableHead labels={['SYMBOL', 'MARKET', 'LAST PRICE', '24H CHANGE', '24H QUOTE VOL', 'SPREAD', 'BOOK IMBALANCE', 'REGIME', 'ACTION']} />
+          <TableHead labels={['SYMBOL', 'MARKET', 'LAST PRICE', '24H CHANGE', '24H QUOTE VOL', 'REALIZED VOL', 'ATR 24H', 'DATA AGE', 'FRESHNESS', 'ACTION']} />
           {markets.slice(0, 1000).map((market, index) => (
             <tr key={`${market.market}-${market.symbol}-${index}`}>
               <td className="table-primary">{market.symbol ?? '—'}</td><td>{market.market ?? '—'}</td>
               <td>{price(num(market.price))}</td>
               <td className={(market.price_change_24h ?? 0) >= 0 ? 'positive' : 'negative'}>{pct(num(market.price_change_24h))}</td>
               <td>{compact(num(market.volume_24h))}</td>
-              <td>{market.bid_ask_spread == null ? '—' : `${market.bid_ask_spread.toFixed(2)} bps`}</td>
-              <td>{market.orderbook_imbalance == null ? '—' : market.orderbook_imbalance.toFixed(3)}</td>
-              <td>{market.regime ?? '—'}</td>
+              <td>{market.volatility_24h_pct == null ? '—' : `${market.volatility_24h_pct.toFixed(2)}%`}</td>
+              <td>{market.atr_24h_pct == null ? '—' : `${market.atr_24h_pct.toFixed(2)}%`}</td>
+              <td>{market.data_age_seconds == null ? '—' : `${Math.round(market.data_age_seconds)}s`}</td>
+              <td>{market.data_freshness ?? 'UNKNOWN'}</td>
               <td><button className="table-action" disabled={!market.symbol} onClick={() => onSelectMarket(market.symbol ?? '', market.market === 'FUTURES' ? 'FUTURES' : 'SPOT')}>Analyze</button></td>
             </tr>
           ))}
