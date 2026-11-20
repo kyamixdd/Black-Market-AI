@@ -148,7 +148,14 @@ class Simulator:
             return False, f"Position already open for {signal['symbol']} on {market}"
 
         # Risk manager - daily loss check
-        total_balance = self.spot_balance + self.futures_balance
+        # Spot principal is held in open positions rather than free cash; include
+        # it in account equity so open trades do not shrink the risk denominator.
+        spot_position_value = sum(
+            float(position.get("reserved_notional", position.get("entry_price", 0.0) * position.get("amount", 0.0)))
+            for position in self.spot_positions.values()
+            if position.get("status") == "OPEN"
+        )
+        total_balance = self.spot_balance + self.futures_balance + spot_position_value
         if not self.risk_manager.check_daily_loss(self.get_daily_pnl(), total_balance):
             return False, "Daily loss limit exceeded"
 
