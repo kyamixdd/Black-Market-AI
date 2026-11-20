@@ -20,7 +20,7 @@ class FeeCalculator:
     def calculate(self, market: str, direction: str, amount: float, price: float,
                   leverage: float = 1.0) -> float:
         """Calculate trading fee for a position."""
-        notional = amount * price * leverage
+        notional = amount * price
         if market == "SPOT":
             return notional * SPOT_TAKER
         return notional * FUTURES_TAKER
@@ -31,7 +31,7 @@ class FeeCalculator:
 
         Returns the slippage-adjusted price impact (positive for buys, negative for sells).
         """
-        notional = amount * price * leverage
+        notional = amount * price
 
         if order_type == "LIMIT":
             return 0.0
