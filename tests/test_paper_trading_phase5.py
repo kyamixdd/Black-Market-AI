@@ -838,3 +838,64 @@ async def test_liquidation_does_not_emit_false_alert_after_concurrent_manual_clo
     ]
     assert liquidation_alerts == []
     assert len(simulator.closed_trades) == 1
+
+
+@pytest.mark.asyncio
+async def test_limit_order_is_not_retried_if_position_commits_before_event_failure():
+    class FailingPositionEventBus(EventBus):
+        def __init__(self):
+            super().__init__()
+            self.fail_position_event = True
+
+        async def publish(self, event):
+            if event.event_type == "POSITION_OPENED" and self.fail_position_event:
+                self.fail_position_event = False
+                raise RuntimeError("simulated event persistence failure")
+            await super().publish(event)
+
+    simulator = Simulator(FailingPositionEventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-COMMIT-THEN-FAIL",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert order_id not in simulator.open_orders
+    assert len(simulator.spot_positions) == 1
+    position = next(iter(simulator.spot_positions.values()))
+    assert position["order_id"] == order_id
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert len(simulator.spot_positions) == 1
+
+
+def test_restore_marks_order_filled_when_matching_position_was_persisted():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-PERSISTED-FILL": {
+            "order_id": "ORD-PERSISTED-FILL",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+    state["spot_positions"] = {
+        "POS-RECOVERED": {"position_id": "POS-RECOVERED", "order_id": "ORD-PERSISTED-FILL", "status": "OPEN"}
+    }
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+
+    assert "ORD-PERSISTED-FILL" not in restored.open_orders

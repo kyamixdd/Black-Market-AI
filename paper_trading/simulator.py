@@ -232,6 +232,7 @@ class Simulator:
             "opened_at": datetime.now(timezone.utc),
             "order_type": order_type,
             "signal_id": signal.get("signal_id"),
+            "order_id": signal.get("order_id"),
             "strategy": signal.get("strategy", "UNKNOWN"),
         }
         if market == "SPOT":
@@ -399,6 +400,7 @@ class Simulator:
             "fee": position["fees_paid"],
             "strategy": position.get("strategy", "UNKNOWN"),
             "signal_id": position.get("signal_id"),
+            "order_id": position.get("order_id"),
             "opened_at": position["opened_at"],
             "closed_at": datetime.now(timezone.utc),
             "close_reason": reason,
@@ -500,6 +502,7 @@ class Simulator:
             order["status"] = "FILLING"
             signal = {
                 "signal_id": order.get("signal_id", "LIMIT-" + order["order_id"]),
+                "order_id": order["order_id"],
                 "symbol": order["symbol"],
                 "market": order["market"],
                 "direction": order["side"],
@@ -515,8 +518,21 @@ class Simulator:
                     signal, float(order.get("quantity_override", order["amount"]))
                 )
             except Exception:
-                order["status"] = "OPEN"
-                logger.exception("Limit order %s fill attempt failed; order remains open", order["order_id"])
+                # execute_signal may have committed the position before a later
+                # event publication failed. Never retry if this order already
+                # owns an open position or a closed trade.
+                order_id = order["order_id"]
+                already_executed = any(
+                    position.get("order_id") == order_id
+                    for position in (*self.spot_positions.values(), *self.futures_positions.values())
+                ) or any(trade.get("order_id") == order_id for trade in self.closed_trades)
+                if already_executed:
+                    order["status"] = "FILLED"
+                    self.open_orders.pop(order_id, None)
+                    logger.exception("Limit order %s created a position before a later failure; marked filled", order_id)
+                else:
+                    order["status"] = "OPEN"
+                    logger.exception("Limit order %s fill attempt failed; order remains open", order_id)
                 continue
 
             if not position_id:
@@ -555,8 +571,17 @@ class Simulator:
         # A crash during execution is ambiguous: the position may already have
         # been created even if the order's FILLED state was not persisted.
         # Hold for reconciliation rather than risking a duplicate fill.
-        for order in self.open_orders.values():
-            if order.get("status") == "FILLING":
+        for order_id, order in list(self.open_orders.items()):
+            if order.get("status") != "FILLING":
+                continue
+            already_executed = any(
+                position.get("order_id") == order_id
+                for position in (*self.spot_positions.values(), *self.futures_positions.values())
+            ) or any(trade.get("order_id") == order_id for trade in self.closed_trades)
+            if already_executed:
+                order["status"] = "FILLED"
+                self.open_orders.pop(order_id, None)
+            else:
                 order["status"] = "RECOVERY_REVIEW"
         self.closed_trades = state.get("closed_trades", [])
         daily_pnl_date = state.get("daily_pnl_date")
