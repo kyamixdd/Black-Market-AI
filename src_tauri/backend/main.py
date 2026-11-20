@@ -316,11 +316,17 @@ async def system_status():
 
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    logger.exception("Unhandled exception: %s", exc)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Log diagnostic details locally without exposing them to API clients."""
+    logger.exception(
+        "Unhandled API exception for %s %s",
+        request.method,
+        request.url.path,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     return JSONResponse(
         status_code=500,
-        content={"error": "Internal server error", "detail": str(exc)},
+        content={"error": "Internal server error"},
     )
 
 
