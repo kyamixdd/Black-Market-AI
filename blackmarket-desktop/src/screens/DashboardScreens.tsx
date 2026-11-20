@@ -519,7 +519,7 @@ function AnalysisScreen({ symbol, marketType, candles }: { symbol: string; marke
   )
 }
 
-function PortfolioScreen({ portfolio, positions, trades, stats }: { portfolio: WorkspacePortfolio | null; positions: WorkspacePosition[]; trades: WorkspaceTrade[]; stats: WorkspaceTradeStats | null }) {
+function PortfolioScreen({ portfolio, positions, trades, stats, onPositionAction }: { portfolio: WorkspacePortfolio | null; positions: WorkspacePosition[]; trades: WorkspaceTrade[]; stats: WorkspaceTradeStats | null; onPositionAction: Props['onPositionAction'] }) {
   const [accountView, setAccountView] = useState<'ALL' | 'SPOT' | 'FUTURES'>('ALL')
   const [selectedPosition, setSelectedPosition] = useState<WorkspacePosition | null>(null)
   const visiblePositions = positions.filter((position) => accountView === 'ALL' || position.market === accountView)
@@ -631,7 +631,7 @@ function PositionsScreen({ positions, onPositionAction, onManualTrade }: { posit
           <td><button className="table-action" onClick={() => setSelectedPosition(position)}>Inspect</button></td>
         </tr>)}
       </Table> : <EmptyState text="No open positions in the paper simulator." />}
-      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} />}
+      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} onPositionAction={onPositionAction} />}
     </>
   )
 }
@@ -891,7 +891,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'Markets' && <MarketScreen data={data} onSelectMarket={props.onSelectMarket} />}
       {screen === 'AI Signals' && <SignalsScreen signals={data.signals} onSelectMarket={props.onSelectMarket} />}
       {screen === 'Market Analysis' && <AnalysisScreen symbol={props.symbol} marketType={props.marketType} candles={data.analysisCandles} />}
-      {screen === 'Portfolio' && <PortfolioScreen portfolio={data.portfolio} positions={data.positions} trades={data.trades} stats={data.tradeStats} />}
+      {screen === 'Portfolio' && <PortfolioScreen portfolio={data.portfolio} positions={data.positions} trades={data.trades} stats={data.tradeStats} onPositionAction={props.onPositionAction} />}
       {screen === 'Positions' && <PositionsScreen positions={data.positions} onPositionAction={props.onPositionAction} onManualTrade={props.onManualTrade} />}
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
