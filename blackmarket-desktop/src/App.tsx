@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
-import { invoke } from '@tauri-apps/api/core'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   Activity,
   ArrowDownToLine,
@@ -131,6 +129,15 @@ type StartupStatus = {
 }
 
 const API_ORIGIN = 'http://127.0.0.1:8765'
+
+async function invoke<T>(command: string): Promise<T> {
+  const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
+  return tauriInvoke<T>(command)
+}
+
+function apiBaseUrl(): string {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? `${API_ORIGIN}/api` : '/api/backend'
+}
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
 const WEBSOCKET_CHANNELS: WebSocketChannel[] = [
   'market_updates',
@@ -215,10 +222,11 @@ function readPreferences(): DashboardPreferences {
 }
 
 async function requestJson<T>(path: string, api = true): Promise<T | null> {
-  const url = api ? `${API_ORIGIN}/api${path}` : `${API_ORIGIN}${path}`
+  const url = api ? `${apiBaseUrl()}${path}` : `${API_ORIGIN}${path}`
   try {
     const response = await fetch(url, {
-      headers: api ? getApiAuthorization() : undefined,
+      headers: api && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? getApiAuthorization() : undefined,
+      cache: 'no-store',
     })
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
     return (await response.json()) as T
@@ -370,20 +378,28 @@ function App() {
       const controller = new AbortController()
       const requestTimeout = window.setTimeout(() => controller.abort(), 2000)
       try {
-        const response = await fetch(`${API_ORIGIN}/health`, { signal: controller.signal })
+        const response = await fetch(isTauri ? `${API_ORIGIN}/health` : '/api/health', { signal: controller.signal, cache: 'no-store' })
         if (!response.ok) {
           healthError = `The local API returned HTTP ${response.status}.`
         } else {
-          const health: unknown = await response.json()
-          if (typeof health === 'object' && health !== null && 'backend_ready' in health
-            && health.backend_ready === true && 'database_connected' in health
-            && health.database_connected === true && 'websocket_connected' in health
-            && health.websocket_connected === true) {
-            if (!isTauri) {
+          const healthPayload: unknown = await response.json()
+          const health = !isTauri && typeof healthPayload === 'object' && healthPayload !== null && 'backend' in healthPayload ? healthPayload.backend : healthPayload
+          if (typeof health === 'object' && health !== null && 'backend_ready' in health && health.backend_ready === true && 'database_connected' in health && health.database_connected === true) {
+            if (isTauri) {
+              const token = await invoke<string>('backend_api_token')
+              if (!token) throw new Error('The desktop supervisor returned an empty API token.')
+              setApiToken(token)
+            }
+            const authenticatedResponse = await fetch(isTauri ? `${API_ORIGIN}/api/system/status` : '/api/backend/system/status', {
+              headers: isTauri ? getApiAuthorization() : undefined, signal: controller.signal, cache: 'no-store',
+            })
+            if (authenticatedResponse.ok) ready = true
+            else {
+              authenticationFailed = authenticatedResponse.status === 401
+              healthError = `The authenticated API check returned HTTP ${authenticatedResponse.status}.`
               setApiToken(null)
-              healthError = 'Authenticated API access is available only through the managed desktop application.'
-              authenticationFailed = true
-            } else {
+            }
+          } else {
               const token = await invoke<string>('backend_api_token')
               if (!token) throw new Error('The desktop supervisor returned an empty API token.')
               setApiToken(token)
@@ -419,7 +435,7 @@ function App() {
         if (ready) {
           setStartupStatus({
             state: 'ready',
-            message: 'The backend API, database, and WebSocket service are ready.',
+            message: isTauri ? 'The local backend API and database are ready.' : 'The hosted backend API and database are ready.',
           })
         } else {
           setMarketDataStatus('disconnected')
@@ -903,8 +919,7 @@ function App() {
 
   const runWindowAction = (action: 'minimize' | 'toggleMaximize' | 'close') => {
     if (!isTauri) return
-    const appWindow = getCurrentWindow()
-    void appWindow[action]().catch((error: unknown) => console.error(`Unable to ${action} application window`, error))
+    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow()[action]()).catch((error: unknown) => console.error(`Unable to ${action} application window`, error))
   }
 
   const downloadRiskData = () => {
