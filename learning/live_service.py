@@ -70,7 +70,7 @@ class LiveLearningService:
             snapshots = self.orch.cache.get_market_tickers(market)
             usdt = [s for s in snapshots if str(s.get("symbol", "")).endswith("USDT") and (s.get("volume_24h") or 0) > 0]
             usdt.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
-            for item in usdt[:max(1, min(20, int(SCANNER_ANALYSIS_BATCH_SIZE)))]:
+            for item in usdt[:max(1, min(10, int(SCANNER_ANALYSIS_BATCH_SIZE)))]:
                 pairs.append((market, str(item["symbol"])))
         if not pairs:
             pairs = [(market, symbol) for market in ("SPOT", "FUTURES")
