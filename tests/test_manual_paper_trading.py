@@ -127,3 +127,39 @@ async def test_cancel_inflight_order_returns_conflict_not_not_found(monkeypatch)
     with pytest.raises(HTTPException) as error:
         await trades.cancel_order("ORD-FILLING")
     assert error.value.status_code == 409
+
+
+@pytest.mark.parametrize("snapshot", [
+    None,
+    {"price": 100000, "data_freshness": "STALE", "data_age_seconds": 600},
+    {"price": 100000, "data_freshness": "UNKNOWN", "data_age_seconds": None},
+    {"price": 100000, "data_freshness": "LIVE", "data_age_seconds": float("inf")},
+    {"price": float("nan"), "data_freshness": "LIVE", "data_age_seconds": 1},
+])
+def test_manual_trade_rejects_stale_or_invalid_market_snapshots(snapshot):
+    from fastapi import HTTPException
+    from src_tauri.backend.api.routes.trades import _validated_manual_signal
+
+    order = ManualOrderRequest(
+        symbol="BTCUSDT", market="SPOT", side="BUY",
+        quantity=0.001, stop_loss=90000,
+    )
+
+    class FakeBridge:
+        @staticmethod
+        def get_market_snapshot(_symbol, _market):
+            return snapshot
+
+        class simulator:
+            @staticmethod
+            def get_balance(_market):
+                return 500.0
+
+            class risk_manager:
+                @staticmethod
+                def calculate_position_size(balance, risk):
+                    return 1.0
+
+    with pytest.raises(HTTPException) as error:
+        _validated_manual_signal(order, FakeBridge())
+    assert error.value.status_code == 409

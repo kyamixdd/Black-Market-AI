@@ -13,6 +13,27 @@ from .schemas import (
 router = APIRouter(prefix="/trades", tags=["trades"])
 
 
+def _validated_snapshot_price(snapshot: dict | None) -> float:
+    """Require a finite positive price from a sufficiently fresh market snapshot."""
+    if not isinstance(snapshot, dict):
+        raise HTTPException(409, "A fresh market price is required.")
+    try:
+        price = float(snapshot.get("price"))
+        age = snapshot.get("data_age_seconds")
+        age = float(age) if age is not None else None
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(409, "A fresh market price is required.")
+    freshness = snapshot.get("data_freshness")
+    if (
+        not math.isfinite(price) or price <= 0
+        or freshness not in ("LIVE", "DELAYED")
+        or (age is not None and (not math.isfinite(age) or age > 300))
+        or (age is None and freshness != "LIVE")
+    ):
+        raise HTTPException(409, "A fresh market price is required.")
+    return price
+
+
 def _validated_manual_signal(request: ManualOrderRequest, bridge):
     market = request.market.value
     side = request.side.upper()
@@ -23,12 +44,7 @@ def _validated_manual_signal(request: ManualOrderRequest, bridge):
     if request.order_type == "LIMIT" and request.price is None:
         raise HTTPException(422, "Limit orders require a price.")
     snapshot = bridge.get_market_snapshot(request.symbol, market)
-    try:
-        market_price = float(snapshot.get("price")) if snapshot else 0.0
-    except (TypeError, ValueError, OverflowError):
-        market_price = 0.0
-    if not math.isfinite(market_price) or market_price <= 0:
-        raise HTTPException(409, "No fresh market price is available for this symbol.")
+    market_price = _validated_snapshot_price(snapshot)
     entry = float(request.price) if request.order_type == "LIMIT" else market_price
     if request.stop_loss >= entry and side in ("BUY", "LONG"):
         raise HTTPException(422, "Stop loss must be below entry for a long position.")

@@ -9,6 +9,7 @@ from .schemas import (
     PositionListResponse, PositionResponse, PositionUpdateRequest,
     ManualActionResponse,
 )
+from .trades import _validated_snapshot_price
 
 router = APIRouter(prefix="/positions", tags=["positions"])
 
@@ -43,16 +44,7 @@ async def close_position(position_id: str):
     if position is None or position.get("status") != "OPEN":
         raise HTTPException(404, "Open position not found.")
     snapshot = bridge.get_market_snapshot(position["symbol"], position["market"])
-    try:
-        price = float(snapshot.get("price")) if snapshot else 0.0
-    except (TypeError, ValueError, OverflowError):
-        price = 0.0
-    if (
-        not math.isfinite(price) or price <= 0
-        or snapshot.get("data_freshness") in ("STALE", "UNKNOWN")
-        or (snapshot.get("data_age_seconds") is not None and snapshot["data_age_seconds"] > 300)
-    ):
-        raise HTTPException(409, "A fresh market price is required to close this position.")
+    price = _validated_snapshot_price(snapshot)
     closed = await simulator._close_position(position, price, "MANUAL")
     if not closed:
         raise HTTPException(409, "Position is already closing or has been closed.")

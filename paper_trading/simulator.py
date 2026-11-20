@@ -358,10 +358,12 @@ class Simulator:
             if not math.isfinite(float(fill_price)) or float(fill_price) <= 0:
                 raise ValueError("Exit fill price must be finite and positive.")
 
-            pnl = self.pnl_calc.realized(position, fill_price)
-            fee = self.fee_calc.calculate(market, position["side"], position["amount"], fill_price, position["leverage"])
+            pnl = float(self.pnl_calc.realized(position, fill_price))
+            fee = float(self.fee_calc.calculate(market, position["side"], position["amount"], fill_price, position["leverage"]))
             balance_delta = pnl - fee
             trade_pnl = pnl - position.get("fees_paid", 0.0) - fee
+            if not all(math.isfinite(value) for value in (pnl, fee, balance_delta, trade_pnl)):
+                raise ValueError("Close accounting produced a non-finite value.")
         except Exception:
             position["status"] = "OPEN"
             raise

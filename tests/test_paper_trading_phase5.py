@@ -758,3 +758,31 @@ def test_restore_marks_ambiguous_inflight_order_for_manual_reconciliation():
     restored.restore_state(state)
 
     assert restored.open_orders["ORD-IN-FLIGHT"]["status"] == "RECOVERY_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_non_finite_fee_without_mutating_account():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *args: float("nan")
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-BAD-FEE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before = simulator.spot_balance
+
+    with pytest.raises(ValueError, match="non-finite"):
+        await simulator._close_position(position, 51000.0, "MANUAL")
+
+    assert position["status"] == "OPEN"
+    assert position_id in simulator.spot_positions
+    assert simulator.spot_balance == pytest.approx(balance_before)
+    assert simulator.closed_trades == []
