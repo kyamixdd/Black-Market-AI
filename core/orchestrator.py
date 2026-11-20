@@ -63,6 +63,9 @@ class Orchestrator:
         self.feature_engine: FeatureEngine = self.intelligence.feature_engine
         self.predictor: Predictor = self.intelligence.predictor
         self.simulator: Simulator = Simulator(self.event_bus, self.cache)
+        self.simulator.persist_order_callback = self._persist_paper_order
+        self.simulator.persist_position_callback = self.repo.save_position
+        self.simulator.persist_trade_callback = self.repo.save_trade_history
         self.scanner: Scanner = Scanner(
             self.event_bus, self.registry, self.cache,
             self.spot_client, self.futures_client,
@@ -246,6 +249,7 @@ class Orchestrator:
         self.event_bus.subscribe(EventType.POSITION_OPENED, self._on_position_opened)
         self.event_bus.subscribe(EventType.ORDER_PLACED, self._on_order_placed)
         self.event_bus.subscribe(EventType.ORDER_FILLED, self._on_order_filled)
+        self.event_bus.subscribe(EventType.TRADE_CANCELLED, self._on_order_cancelled)
         # Risk alerts
         self.event_bus.subscribe(EventType.RISK_ALERT, self._on_risk_alert)
         # System health
@@ -337,6 +341,9 @@ class Orchestrator:
         self._persist_paper_order(event.payload.get("order"))
 
     async def _on_order_filled(self, event) -> None:
+        self._persist_paper_order(event.payload.get("order"))
+
+    async def _on_order_cancelled(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
 
     def _persist_paper_order(self, order: dict[str, Any] | None) -> None:

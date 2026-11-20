@@ -52,7 +52,40 @@ class Database:
 
     def init_db(self) -> None:
         Base.metadata.create_all(self.engine)
+        self._migrate_paper_trading_columns()
         logger.info("Database initialized at %s", self.url)
+
+    def _migrate_paper_trading_columns(self) -> None:
+        """Add recovery fields to existing SQLite databases without dropping data."""
+        if self.engine.dialect.name != "sqlite":
+            return
+        additions = {
+            "paper_positions": {
+                "reserved_notional": "FLOAT NOT NULL DEFAULT 0.0",
+                "order_id": "VARCHAR(64)",
+                "signal_id": "VARCHAR(64)",
+                "strategy": "VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN'",
+                "order_type": "VARCHAR(16) NOT NULL DEFAULT 'MARKET'",
+            },
+            "trade_history": {
+                "order_id": "VARCHAR(64)",
+            },
+        }
+        with self.engine.begin() as connection:
+            for table, columns in additions.items():
+                existing = {
+                    row[1] for row in connection.exec_driver_sql(
+                        f'PRAGMA table_info("{table}")'
+                    ).fetchall()
+                }
+                if not existing:
+                    continue
+                for name, definition in columns.items():
+                    if name not in existing:
+                        connection.exec_driver_sql(
+                            f'ALTER TABLE "{table}" ADD COLUMN "{name}" {definition}'
+                        )
+
 
     def integrity_check(self) -> str:
         if self.engine.dialect.name != "sqlite":

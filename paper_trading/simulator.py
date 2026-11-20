@@ -32,6 +32,9 @@ class Simulator:
     def __init__(self, event_bus: EventBus, market_cache=None):
         self.event_bus = event_bus
         self.market_cache = market_cache
+        self.persist_order_callback = None
+        self.persist_position_callback = None
+        self.persist_trade_callback = None
         self.initial_spot_balance = SPOT_INITIAL_BALANCE
         self.initial_futures_balance = FUTURES_INITIAL_BALANCE
         self.spot_balance = self.initial_spot_balance
@@ -241,6 +244,20 @@ class Simulator:
         else:
             self.futures_positions[position_id] = position
             self.futures_balance -= fee
+
+        # Persist the position before publishing an event that may be delayed or lost.
+        try:
+            if callable(self.persist_position_callback):
+                self.persist_position_callback(position)
+        except Exception:
+            if market == "SPOT":
+                self.spot_positions.pop(position_id, None)
+                self.spot_balance += reserved_notional + fee
+            else:
+                self.futures_positions.pop(position_id, None)
+                self.futures_balance += fee
+            raise
+
         await self.event_bus.publish(make_event(
             EventType.POSITION_OPENED, "simulator",
             symbol=signal["symbol"], market=market, position=position
@@ -370,6 +387,12 @@ class Simulator:
             position["status"] = "OPEN"
             raise
 
+        balance_before_close = self.get_balance(market)
+        daily_pnl_before_close = self.daily_pnl
+        daily_pnl_date_before_close = self.daily_pnl_date
+        fees_paid_before_close = position.get("fees_paid", 0.0)
+        realized_before_close = position.get("realized_pnl", 0.0)
+
         position["status"] = "CLOSED"
         position["closed_at"] = datetime.now(timezone.utc)
         position["close_price"] = fill_price
@@ -408,6 +431,25 @@ class Simulator:
         self.closed_trades.append(trade)
         self.get_daily_pnl()
         self.daily_pnl += trade_pnl
+        try:
+            if callable(self.persist_trade_callback):
+                self.persist_trade_callback(trade)
+        except Exception:
+            # Keep in-memory balances and position state aligned with the database
+            # transaction when durable trade persistence fails.
+            self.closed_trades.pop()
+            self.daily_pnl = daily_pnl_before_close
+            self.daily_pnl_date = daily_pnl_date_before_close
+            if market == "SPOT":
+                self.spot_balance = balance_before_close
+            else:
+                self.futures_balance = balance_before_close
+            position["status"] = "OPEN"
+            position["fees_paid"] = fees_paid_before_close
+            position["realized_pnl"] = realized_before_close
+            position.pop("closed_at", None)
+            position.pop("close_price", None)
+            raise
         del pos_dict[position["position_id"]]
         await self.event_bus.publish(make_event(
             EventType.POSITION_CLOSED, "simulator",
@@ -452,6 +494,12 @@ class Simulator:
             "quantity_override": qty,
         }
         self.open_orders[order_id] = order
+        try:
+            if callable(self.persist_order_callback):
+                self.persist_order_callback(order)
+        except Exception:
+            self.open_orders.pop(order_id, None)
+            raise
         await self.event_bus.publish(make_event(
             EventType.ORDER_PLACED, "simulator",
             symbol=signal["symbol"], market=market, order=order
@@ -466,6 +514,12 @@ class Simulator:
             return None
 
         order["status"] = "CANCELLED"
+        try:
+            if callable(self.persist_order_callback):
+                self.persist_order_callback(order)
+        except Exception:
+            order["status"] = "OPEN"
+            raise
         self.open_orders.pop(order_id, None)
         await self.event_bus.publish(make_event(
             EventType.TRADE_CANCELLED, "simulator",
@@ -500,6 +554,13 @@ class Simulator:
             # Claim the order before awaiting execution so concurrent price updates
             # cannot create duplicate positions from the same pending order.
             order["status"] = "FILLING"
+            try:
+                if callable(self.persist_order_callback):
+                    self.persist_order_callback(order)
+            except Exception:
+                order["status"] = "OPEN"
+                logger.exception("Could not persist FILLING state for order %s; fill deferred", order["order_id"])
+                continue
             signal = {
                 "signal_id": order.get("signal_id", "LIMIT-" + order["order_id"]),
                 "order_id": order["order_id"],
@@ -529,6 +590,11 @@ class Simulator:
                 if already_executed:
                     order["status"] = "FILLED"
                     self.open_orders.pop(order_id, None)
+                    try:
+                        if callable(self.persist_order_callback):
+                            self.persist_order_callback(order)
+                    except Exception:
+                        logger.exception("Could not persist recovered FILLED state for order %s", order_id)
                     logger.exception("Limit order %s created a position before a later failure; marked filled", order_id)
                     try:
                         await self.event_bus.publish(make_event(
@@ -539,16 +605,33 @@ class Simulator:
                         logger.exception("Could not publish recovered fill event for order %s", order_id)
                 else:
                     order["status"] = "OPEN"
+                    try:
+                        if callable(self.persist_order_callback):
+                            self.persist_order_callback(order)
+                    except Exception:
+                        logger.exception("Could not persist retryable OPEN state for order %s", order_id)
                     logger.exception("Limit order %s fill attempt failed; order remains open", order_id)
                 continue
 
             if not position_id:
                 order["status"] = "OPEN"
+                try:
+                    if callable(self.persist_order_callback):
+                        self.persist_order_callback(order)
+                except Exception:
+                    logger.exception("Could not persist rejected-fill OPEN state for order %s", order["order_id"])
                 logger.info("Limit order %s was not filled because execution validation rejected it", order["order_id"])
                 continue
 
             order["status"] = "FILLED"
             self.open_orders.pop(order["order_id"], None)
+            try:
+                if callable(self.persist_order_callback):
+                    self.persist_order_callback(order)
+            except Exception:
+                # Position.order_id was persisted before execution; restart recovery
+                # can safely reconcile a stale FILLING order against that position.
+                logger.exception("Could not persist FILLED state for order %s", order["order_id"])
             await self.event_bus.publish(make_event(
                 EventType.ORDER_FILLED, "simulator",
                 symbol=order["symbol"], market=order["market"], order=order

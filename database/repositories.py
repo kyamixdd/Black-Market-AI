@@ -227,19 +227,23 @@ class Repository:
 
     def get_open_orders(self, market: str | None = None) -> list[PaperOrderModel]:
         with self._get_session() as session:
-            stmt = select(PaperOrderModel).where(PaperOrderModel.status.in_(["OPEN", "PARTIAL"]))
+            stmt = select(PaperOrderModel).where(
+                PaperOrderModel.status.in_(["OPEN", "PARTIAL", "FILLING", "RECOVERY_REVIEW"])
+            )
             if market:
                 stmt = stmt.where(PaperOrderModel.market == market)
             return list(session.scalars(stmt).all())
 
     def save_position(self, pos: dict[str, Any]) -> str:
         with self._get_session() as session:
+            allowed = {column.key for column in PaperPositionModel.__table__.columns}
+            values = {key: value for key, value in pos.items() if key in allowed}
             existing = session.get(PaperPositionModel, pos["position_id"])
             if existing:
-                for k, v in pos.items():
-                    setattr(existing, k, v)
+                for key, value in values.items():
+                    setattr(existing, key, value)
             else:
-                session.add(PaperPositionModel(**pos))
+                session.add(PaperPositionModel(**values))
             session.commit()
             return pos["position_id"]
 
@@ -284,6 +288,7 @@ class Repository:
                 "fee": trade.get("fee", 0.0),
                 "strategy": trade.get("strategy", "UNKNOWN"),
                 "signal_id": trade.get("signal_id"),
+                "order_id": trade.get("order_id"),
                 "opened_at": trade["opened_at"],
                 "closed_at": trade["closed_at"],
                 "close_reason": trade.get("close_reason", "UNKNOWN"),
