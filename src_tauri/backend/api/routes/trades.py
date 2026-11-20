@@ -102,7 +102,16 @@ async def open_manual_trade(request: ManualOrderRequest):
 @router.delete("/orders/{order_id}", response_model=ManualActionResponse)
 async def cancel_order(order_id: str):
     simulator = get_bridge().simulator
-    order = await simulator.cancel_limit_order(order_id)
+    order = simulator.open_orders.get(order_id)
     if order is None:
         raise HTTPException(404, "Open order not found.")
+    if order.get("status") == "FILLING":
+        raise HTTPException(409, "Order is already filling and can no longer be cancelled.")
+    if order.get("status") == "RECOVERY_REVIEW":
+        raise HTTPException(409, "Order requires restart reconciliation before it can be cancelled.")
+    if order.get("status") != "OPEN":
+        raise HTTPException(409, "Order is not in a cancellable state.")
+    cancelled = await simulator.cancel_limit_order(order_id)
+    if cancelled is None:
+        raise HTTPException(409, "Order state changed before cancellation could complete.")
     return ManualActionResponse(success=True, id=order_id, message="Order cancelled.")

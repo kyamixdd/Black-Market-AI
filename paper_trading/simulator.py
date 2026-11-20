@@ -339,20 +339,33 @@ class Simulator:
             self.futures_balance -= payment
         logger.debug("Funding payment for %s: %.4f (rate: %.6f)", position["symbol"], payment, funding_rate)
 
-    async def _close_position(self, position: dict, exit_price: float, reason: str) -> None:
-        market = position["market"]
-        # Get realistic fill price with spread and slippage on exit
-        volume_24h = self._get_volume_24h(market, position["symbol"])
-        order_type = position.get("order_type", "MARKET")
-        fill_price = self.fee_calc.get_fill_price(
-            market, position["side"], order_type, exit_price,
-            position["amount"], position["leverage"], volume_24h
-        )
+    async def _close_position(self, position: dict, exit_price: float, reason: str) -> bool:
+        """Close an open position once; concurrent close attempts become no-ops."""
+        if position.get("status") != "OPEN":
+            return False
 
-        pnl = self.pnl_calc.realized(position, fill_price)
-        fee = self.fee_calc.calculate(market, position["side"], position["amount"], fill_price, position["leverage"])
-        balance_delta = pnl - fee
-        trade_pnl = pnl - position.get("fees_paid", 0.0) - fee
+        # Claim the position before any await so manual, stop, TP and liquidation
+        # paths cannot realize the same position more than once.
+        position["status"] = "CLOSING"
+        market = position["market"]
+        try:
+            volume_24h = self._get_volume_24h(market, position["symbol"])
+            order_type = position.get("order_type", "MARKET")
+            fill_price = self.fee_calc.get_fill_price(
+                market, position["side"], order_type, exit_price,
+                position["amount"], position["leverage"], volume_24h
+            )
+            if not math.isfinite(float(fill_price)) or float(fill_price) <= 0:
+                raise ValueError("Exit fill price must be finite and positive.")
+
+            pnl = self.pnl_calc.realized(position, fill_price)
+            fee = self.fee_calc.calculate(market, position["side"], position["amount"], fill_price, position["leverage"])
+            balance_delta = pnl - fee
+            trade_pnl = pnl - position.get("fees_paid", 0.0) - fee
+        except Exception:
+            position["status"] = "OPEN"
+            raise
+
         position["status"] = "CLOSED"
         position["closed_at"] = datetime.now(timezone.utc)
         position["close_price"] = fill_price
@@ -396,6 +409,7 @@ class Simulator:
             symbol=position["symbol"], market=market, trade=trade
         ))
         logger.info("Closed %s %s PnL: %.2f (%s, fill: %.4f)", position["symbol"], position["side"], trade_pnl, reason, fill_price)
+        return True
 
     # --- Limit Order Handling ---
     async def place_limit_order(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
@@ -535,6 +549,12 @@ class Simulator:
         self.spot_positions = state.get("spot_positions", {})
         self.futures_positions = state.get("futures_positions", {})
         self.open_orders = state.get("open_orders", {})
+        # A crash during execution is ambiguous: the position may already have
+        # been created even if the order's FILLED state was not persisted.
+        # Hold for reconciliation rather than risking a duplicate fill.
+        for order in self.open_orders.values():
+            if order.get("status") == "FILLING":
+                order["status"] = "RECOVERY_REVIEW"
         self.closed_trades = state.get("closed_trades", [])
         daily_pnl_date = state.get("daily_pnl_date")
         try:

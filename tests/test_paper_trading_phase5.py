@@ -670,3 +670,91 @@ async def test_concurrent_price_updates_cannot_double_fill_one_limit_order():
     assert executions == 1
     assert order_id not in simulator.open_orders
     assert len(simulator.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_position_close_is_idempotent_and_does_not_double_credit_balance():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *args: 0.0
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-ONCE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before_close = simulator.spot_balance
+
+    assert await simulator._close_position(position, 51000.0, "MANUAL") is True
+    balance_after_close = simulator.spot_balance
+    assert balance_after_close > balance_before_close
+    assert await simulator._close_position(position, 51000.0, "MANUAL") is False
+    assert simulator.spot_balance == pytest.approx(balance_after_close)
+    assert len(simulator.closed_trades) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_position_close_attempts_only_realize_once():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "POSITION_CLOSED":
+                started.set()
+                await release.wait()
+            await super().publish(event)
+
+    simulator = Simulator(BlockingEventBus())
+    simulator.fee_calc.calculate = lambda *args: 0.0
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-RACE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+
+    first = asyncio.create_task(simulator._close_position(position, 51000.0, "MANUAL"))
+    await started.wait()
+    assert position["status"] == "CLOSED"
+    second = await simulator._close_position(position, 52000.0, "TAKE_PROFIT")
+    assert second is False
+    assert len(simulator.closed_trades) == 1
+
+    release.set()
+    assert await first is True
+    assert len(simulator.closed_trades) == 1
+
+
+def test_restore_marks_ambiguous_inflight_order_for_manual_reconciliation():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-IN-FLIGHT": {
+            "order_id": "ORD-IN-FLIGHT",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+
+    assert restored.open_orders["ORD-IN-FLIGHT"]["status"] == "RECOVERY_REVIEW"

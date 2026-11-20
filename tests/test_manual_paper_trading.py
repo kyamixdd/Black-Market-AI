@@ -107,3 +107,23 @@ def test_manual_trade_rejects_invalid_market_snapshot_without_server_error(marke
     with pytest.raises(HTTPException) as error:
         _validated_manual_signal(order, FakeBridge())
     assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_cancel_inflight_order_returns_conflict_not_not_found(monkeypatch):
+    from fastapi import HTTPException
+    from src_tauri.backend.api.routes import trades
+
+    class FakeSimulator:
+        open_orders = {"ORD-FILLING": {"order_id": "ORD-FILLING", "status": "FILLING"}}
+
+        async def cancel_limit_order(self, _order_id):
+            raise AssertionError("A filling order must not be sent to cancellation.")
+
+    class FakeBridge:
+        simulator = FakeSimulator()
+
+    monkeypatch.setattr(trades, "get_bridge", lambda: FakeBridge())
+    with pytest.raises(HTTPException) as error:
+        await trades.cancel_order("ORD-FILLING")
+    assert error.value.status_code == 409
