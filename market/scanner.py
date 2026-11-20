@@ -40,10 +40,12 @@ class Scanner:
         self.max_concurrent_scans = max(1, int(max_concurrent_scans))
         self._analysis_offsets: dict[str, int] = {"SPOT": 0, "FUTURES": 0}
         self._stream_symbols: dict[str, tuple[str, ...]] = {"SPOT": (), "FUTURES": ()}
-        from config import SCAN_ALL_ELIGIBLE_SYMBOLS, SPOT_ENABLED, USDM_FUTURES_ENABLED, TIMEFRAMES
+        from config import SCAN_ALL_ELIGIBLE_SYMBOLS, SPOT_ENABLED, USDM_FUTURES_ENABLED, TIMEFRAMES, SCANNER_ANALYSIS_BATCH_SIZE, SCANNER_STREAM_SYMBOL_LIMIT, MAX_CONCURRENT_SCANS
 
         self.scan_all_eligible = bool(SCAN_ALL_ELIGIBLE_SYMBOLS)
-        self.analysis_symbol_limit = max(1, int(analysis_symbol_limit))
+        self.analysis_symbol_limit = max(1, int(SCANNER_ANALYSIS_BATCH_SIZE or analysis_symbol_limit))
+        self.stream_symbol_limit = max(1, int(SCANNER_STREAM_SYMBOL_LIMIT))
+        self.max_concurrent_scans = max(1, int(MAX_CONCURRENT_SCANS))
         self.enabled_markets = {
             market for market, enabled in (("SPOT", SPOT_ENABLED), ("FUTURES", USDM_FUTURES_ENABLED))
             if enabled
@@ -124,7 +126,7 @@ class Scanner:
         candidates.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
         # Use a bounded liquid universe for live ticker streams; the scanner rotates
         # through the full eligible universe for historical/timeframe analysis.
-        selected = tuple(str(item["symbol"]).lower() for item in candidates[:self.analysis_symbol_limit])
+        selected = tuple(str(item["symbol"]).lower() for item in candidates[:self.stream_symbol_limit])
         if selected == self._stream_symbols.get(market):
             return
         self._stream_symbols[market] = selected
