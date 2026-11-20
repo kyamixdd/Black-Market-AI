@@ -58,8 +58,10 @@ bridge: "OrchestratorBridge" | None = None
 ws_manager: WebSocketManager | None = None
 _shutdown_token = os.environ.get("BLACKMARKET_SHUTDOWN_TOKEN")
 _api_token = os.environ.get("BLACKMARKET_API_TOKEN")
+_REMOTE_API_ENABLED = os.environ.get("BLACKMARKET_REMOTE_API_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+_ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get("BLACKMARKET_ALLOWED_ORIGINS", "").split(",") if origin.strip()]
 _request_server_shutdown: Callable[[], None] | None = None
-_tauri_origins = ["http://tauri.localhost", "tauri://localhost"]
+_tauri_origins = ["http://tauri.localhost", "tauri://localhost", *_ALLOWED_ORIGINS]
 if os.environ.get("BLACKMARKET_DESKTOP_DEV") == "1":
     _tauri_origins.extend(["http://localhost:3000", "http://127.0.0.1:3000"])
 
@@ -87,8 +89,14 @@ def _matches_bearer_token(authorization: str | None, expected: str | None) -> bo
 
 def _api_host() -> str:
     host = os.environ.get("BLACKMARKET_API_HOST", "127.0.0.1")
+    if _REMOTE_API_ENABLED:
+        if not _api_token:
+            raise RuntimeError("BLACKMARKET_API_TOKEN is required when remote API mode is enabled.")
+        if host not in {"0.0.0.0", "::"} and not _is_loopback(host):
+            raise RuntimeError("Remote API host must be 0.0.0.0, ::, or loopback.")
+        return host
     if not _is_loopback(host):
-        raise RuntimeError("BLACKMARKET_API_HOST must be a loopback IP address.")
+        raise RuntimeError("BLACKMARKET_API_HOST must be a loopback IP address unless remote API mode is explicitly enabled.")
     return host
 
 
@@ -156,8 +164,8 @@ app = FastAPI(
 @app.middleware("http")
 async def require_local_api_auth(request: Request, call_next):
     client_host = request.client.host if request.client else None
-    if not _is_loopback(client_host):
-        return JSONResponse(status_code=403, content={"detail": "Loopback clients only"})
+    if not _is_loopback(client_host) and not _REMOTE_API_ENABLED:
+        return JSONResponse(status_code=403, content={"detail": "Remote API access is disabled"})
 
     if request.url.path == "/api" or request.url.path.startswith("/api/"):
         if request.method != "OPTIONS":
