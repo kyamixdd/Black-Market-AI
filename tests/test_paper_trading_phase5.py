@@ -26,7 +26,7 @@ class TestFeeCalculator:
     def test_futures_fee_calculation(self):
         calc = FeeCalculator()
         fee = calc.calculate("FUTURES", "LONG", 0.1, 50000.0, 3.0)
-        expected = 0.1 * 50000.0 * 3.0 * 0.0005  # 0.05%
+        expected = 0.1 * 50000.0 * 0.0005  # 0.05% of notional, independent of leverage
         assert fee == expected
 
     def test_slippage_market_order_spot(self):
@@ -1141,3 +1141,27 @@ def test_funding_rejects_invalid_mark_price():
 
     with pytest.raises(ValueError, match="Funding mark price"):
         calculator.calculate(position, 0.01, mark_price=float("nan"))
+
+
+
+def test_futures_fee_is_independent_of_leverage():
+    calc = FeeCalculator()
+    low = calc.calculate("FUTURES", "LONG", 0.2, 50000.0, 1.0)
+    high = calc.calculate("FUTURES", "LONG", 0.2, 50000.0, 20.0)
+    assert low == pytest.approx(5.0)
+    assert high == pytest.approx(low)
+
+
+def test_spot_fee_is_independent_of_leverage_argument():
+    calc = FeeCalculator()
+    low = calc.calculate("SPOT", "BUY", 0.2, 50000.0, 1.0)
+    high = calc.calculate("SPOT", "BUY", 0.2, 50000.0, 5.0)
+    assert low == pytest.approx(10.0)
+    assert high == pytest.approx(low)
+
+
+def test_slippage_volume_impact_uses_notional_not_leveraged_margin():
+    calc = FeeCalculator()
+    low = calc.calculate_slippage("FUTURES", "MARKET", 1.0, 100.0, 1.0, 10000.0)
+    high = calc.calculate_slippage("FUTURES", "MARKET", 1.0, 100.0, 20.0, 10000.0)
+    assert high == pytest.approx(low)
