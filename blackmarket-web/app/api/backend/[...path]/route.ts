@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/session";
+import { sameOriginMutation, rateLimited } from "@/lib/request-security";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ path: string[] }> };
 async function proxy(request: NextRequest, context: Context) {
+  const client = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+  if (request.method !== "GET" && request.method !== "HEAD" && !sameOriginMutation(request)) return NextResponse.json({ error: "Invalid request origin" }, { status: 403 });
+  if (rateLimited("proxy:" + client, 180)) return NextResponse.json({ error: "Too many requests" }, { status: 429, headers: { "Retry-After": "60" } });
   if (!(await isAuthenticated())) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const base = process.env.BLACKMARKET_BACKEND_URL?.replace(/\/$/, "");
   const token = process.env.BLACKMARKET_API_TOKEN;
