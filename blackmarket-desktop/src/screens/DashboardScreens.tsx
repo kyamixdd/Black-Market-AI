@@ -252,6 +252,7 @@ type Props = {
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
   onSelectMarket: (symbol: string, market: 'SPOT' | 'FUTURES') => void
+  onPositionAction: (positionId: string, action: 'close' | 'update', values?: { stop_loss?: number; take_profit?: number }) => Promise<void>
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -358,10 +359,16 @@ function SignalInspector({
 function PositionInspector({
   position,
   onClose,
+  onPositionAction,
 }: {
   position: WorkspacePosition
   onClose: () => void
+  onPositionAction: Props['onPositionAction']
 }) {
+  const [stopLoss, setStopLoss] = useState(position.stop_loss?.toString() ?? '')
+  const [takeProfit, setTakeProfit] = useState(position.take_profit?.toString() ?? '')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
   return (
     <section className="workspace-inspector" aria-label="Position details">
       <div className="workspace-inspector-heading">
@@ -377,6 +384,29 @@ function PositionInspector({
         <DetailCard label="LIQUIDATION / MARGIN" value={`${price(num(position.liquidation_price ?? undefined))} / ${position.margin_ratio == null ? '—' : `${(position.margin_ratio * 100).toFixed(2)}%`}`} />
         <DetailCard label="FEES / STRATEGY" value={`${money(num(position.fees_paid))} / ${position.strategy ?? '—'}`} />
         <DetailCard label="OPENED" value={timestamp(position.opened_at)} />
+      </div>
+      <div className="workspace-inspector-actions">
+        <label>Stop loss <input className="workspace-search" type="number" min="0" step="any" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} /></label>
+        <label>Take profit <input className="workspace-search" type="number" min="0" step="any" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} /></label>
+        <button className="table-action" disabled={busy || (!stopLoss && !takeProfit)} onClick={async () => {
+          setBusy(true); setMessage('')
+          try {
+            await onPositionAction(position.position_id ?? '', 'update', {
+              ...(stopLoss ? { stop_loss: Number(stopLoss) } : {}),
+              ...(takeProfit ? { take_profit: Number(takeProfit) } : {}),
+            })
+            setMessage('Risk levels updated.')
+          } catch (error) { setMessage(error instanceof Error ? error.message : 'Update failed.') }
+          finally { setBusy(false) }
+        }}>Update risk levels</button>
+        <button className="table-action" disabled={busy} onClick={async () => {
+          if (!window.confirm('Close this paper position at the latest available market price?')) return
+          setBusy(true); setMessage('')
+          try { await onPositionAction(position.position_id ?? '', 'close'); onClose() }
+          catch (error) { setMessage(error instanceof Error ? error.message : 'Close failed.') }
+          finally { setBusy(false) }
+        }}>Close position</button>
+        {message && <span role="status">{message}</span>}
       </div>
     </section>
   )
@@ -528,7 +558,7 @@ function PortfolioScreen({ portfolio, positions, trades, stats }: { portfolio: W
           <td><button className="table-action" onClick={() => setSelectedPosition(position)}>Inspect</button></td>
         </tr>)}
       </Table> : <EmptyState text={`No open simulated ${accountView === 'ALL' ? '' : `${accountView} `}positions.`} />}
-      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} />}
+      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} onPositionAction={onPositionAction} />}
       <div className="workspace-note">Balances and trade activity are simulated only. No Binance order endpoints or live execution are used.</div>
       <h2 className="workspace-section-title">Recent completed trades · {visibleTrades.length} shown / {stats?.total ?? trades.length} total</h2>
       {visibleTrades.length ? <Table minWidth={900}>
@@ -543,7 +573,7 @@ function PortfolioScreen({ portfolio, positions, trades, stats }: { portfolio: W
   )
 }
 
-function PositionsScreen({ positions }: { positions: WorkspacePosition[] }) {
+function PositionsScreen({ positions, onPositionAction }: { positions: WorkspacePosition[]; onPositionAction: Props['onPositionAction'] }) {
   const [selectedPosition, setSelectedPosition] = useState<WorkspacePosition | null>(null)
   return (
     <>
@@ -794,7 +824,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'AI Signals' && <SignalsScreen signals={data.signals} onSelectMarket={props.onSelectMarket} />}
       {screen === 'Market Analysis' && <AnalysisScreen symbol={props.symbol} marketType={props.marketType} candles={data.analysisCandles} />}
       {screen === 'Portfolio' && <PortfolioScreen portfolio={data.portfolio} positions={data.positions} trades={data.trades} stats={data.tradeStats} />}
-      {screen === 'Positions' && <PositionsScreen positions={data.positions} />}
+      {screen === 'Positions' && <PositionsScreen positions={data.positions} onPositionAction={props.onPositionAction} />}
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
