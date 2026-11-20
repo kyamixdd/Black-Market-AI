@@ -311,7 +311,7 @@ def test_futures_funding_timestamp_and_fee_survive_restart_without_double_charge
             "last_funding_time": 0,
             "reserved_notional": 0.0,
             "status": "OPEN",
-            "opened_at": datetime.now(timezone.utc),
+            "opened_at": datetime.now(timezone.utc).replace(microsecond=0) - __import__("datetime").timedelta(hours=9),
         }
         repo.save_position(position)
         simulator = Simulator(EventBus())
@@ -364,4 +364,31 @@ def test_funding_persistence_failure_rolls_back_fee_timestamp_and_balance():
 
     assert position["fees_paid"] == 0.0
     assert position["last_funding_time"] == 0
+    assert simulator.futures_balance == balance_before
+
+
+
+def test_new_futures_position_waits_for_scheduled_funding_boundary():
+    import asyncio
+
+    simulator = Simulator(EventBus())
+    opened_at = datetime.now(timezone.utc)
+    position = {
+        "position_id": "POS-NEW-FUNDING",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "side": "LONG",
+        "entry_price": 100.0,
+        "amount": 1.0,
+        "leverage": 1.0,
+        "fees_paid": 0.0,
+        "last_funding_time": 0,
+        "opened_at": opened_at,
+    }
+    balance_before = simulator.futures_balance
+
+    asyncio.run(simulator._apply_funding(position, 0.001))
+
+    assert position["last_funding_time"] == 0
+    assert position["fees_paid"] == 0.0
     assert simulator.futures_balance == balance_before

@@ -252,6 +252,9 @@ async def test_paper_trading_funding():
 
     pos_id = await sim.execute_signal(signal)
     position = sim.futures_positions[pos_id]
+    # This test covers an eligible position at a scheduled settlement boundary,
+    # not the immediate first update after opening.
+    position["opened_at"] = datetime.now(timezone.utc) - timedelta(hours=9)
     initial_balance = sim.futures_balance
 
     # Apply funding
