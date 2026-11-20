@@ -194,11 +194,10 @@ class Scanner:
                 logger.error("Futures extra scan failed: %s", exc)
             await asyncio.sleep(60)
 
-    async def _spot_stream_handler(self, message: dict) -> None:
-        await self._handle_stream_message("SPOT", message)
-
-    async def _futures_stream_handler(self, message: dict) -> None:
-        await self._handle_stream_message("FUTURES", message)
+    async def _stream_handler(self, message: dict) -> None:
+        market = message.get("_market") if isinstance(message, dict) else None
+        if market in {"SPOT", "FUTURES"}:
+            await self._handle_stream_message(market, message)
 
     async def start(self) -> None:
         if self._running:
@@ -206,8 +205,7 @@ class Scanner:
         self._running = True
         self._tasks.append(asyncio.create_task(self._scan_market_tickers("SPOT")))
         if self.websocket_manager is not None:
-            self.websocket_manager.add_handler(self._spot_stream_handler)
-            self.websocket_manager.add_handler(self._futures_stream_handler)
+            self.websocket_manager.add_handler(self._stream_handler)
         self._tasks.append(asyncio.create_task(self._scan_market_tickers("FUTURES")))
         self._tasks.append(asyncio.create_task(self._scan_futures_extra()))
         logger.info("Scanner started")
