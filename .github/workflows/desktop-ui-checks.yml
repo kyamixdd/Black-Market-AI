@@ -8,6 +8,7 @@ on:
     branches:
       - black-market-ai-beta
       - implementation/complete-system-roadmap
+      - implementation/persistent-runtime-settings
 
 permissions:
   contents: read
