@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
@@ -30,9 +30,17 @@ class Database:
                 self._engine = create_engine(
                     f"sqlite:///{path}",
                     future=True,
-                    connect_args={"check_same_thread": False},
+                    connect_args={"check_same_thread": False, "timeout": 30},
                     echo=False,
                 )
+                @event.listens_for(self._engine, "connect")
+                def _configure_sqlite_connection(connection, _record):
+                    cursor = connection.cursor()
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                    cursor.execute("PRAGMA busy_timeout=30000")
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=FULL")
+                    cursor.close()
             else:
                 self._engine = create_engine(self.url, future=True)
         return self._engine

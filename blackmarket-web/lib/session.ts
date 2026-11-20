@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 
 const COOKIE = "bm_session";
 const ttl = 8 * 60 * 60;
+const clockSkewSeconds = 30;
 
 function secret() {
   const value = process.env.BLACKMARKET_SESSION_SECRET;
@@ -20,7 +21,7 @@ export function passwordMatches(candidate: string) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 export function makeSession() {
-  const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + ttl })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + ttl, nonce: crypto.randomUUID() })).toString("base64url");
   return payload + "." + sign(payload);
 }
 export function validSession(value?: string) {
@@ -32,7 +33,12 @@ export function validSession(value?: string) {
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return false;
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return Number.isFinite(data.exp) && data.exp > Math.floor(Date.now() / 1000);
+    const now = Math.floor(Date.now() / 1000);
+    return Number.isFinite(data.iat) && data.iat <= now + clockSkewSeconds
+      && data.iat >= now - ttl - clockSkewSeconds
+      && Number.isFinite(data.exp) && data.exp > now
+      && data.exp <= data.iat + ttl
+      && typeof data.nonce === "string" && data.nonce.length >= 16;
   } catch { return false; }
 }
 export async function isAuthenticated() {

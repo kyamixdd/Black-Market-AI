@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import sys
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable
@@ -161,8 +163,31 @@ app = FastAPI(
 )
 
 
+_request_buckets: dict[str, deque[float]] = defaultdict(deque)
+_RATE_LIMIT_WINDOW_SECONDS = max(1, int(os.environ.get("BLACKMARKET_RATE_LIMIT_WINDOW_SECONDS", "60")))
+_API_RATE_LIMIT = max(10, int(os.environ.get("BLACKMARKET_API_RATE_LIMIT", "120")))
+_LOGIN_RATE_LIMIT = max(3, int(os.environ.get("BLACKMARKET_LOGIN_RATE_LIMIT", "10")))
+
+
+def _rate_limit_exceeded(key: str, limit: int, now: float | None = None) -> bool:
+    """Fixed-window sliding counter; process-local protection for a single API worker."""
+    current = time.monotonic() if now is None else now
+    bucket = _request_buckets[key]
+    cutoff = current - _RATE_LIMIT_WINDOW_SECONDS
+    while bucket and bucket[0] <= cutoff:
+        bucket.popleft()
+    if len(bucket) >= limit:
+        return True
+    bucket.append(current)
+    return False
+
+
 @app.middleware("http")
 async def require_local_api_auth(request: Request, call_next):
+    client_host = request.client.host if request.client else "unknown"
+    if request.url.path.startswith("/api/") and _rate_limit_exceeded(f"api:{client_host}", _API_RATE_LIMIT):
+        return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"}, headers={"Retry-After": str(_RATE_LIMIT_WINDOW_SECONDS)})
+
     client_host = request.client.host if request.client else None
     if not _is_loopback(client_host) and not _REMOTE_API_ENABLED:
         return JSONResponse(status_code=403, content={"detail": "Remote API access is disabled"})
@@ -246,6 +271,9 @@ async def websocket_endpoint(websocket: WebSocket):
     client_host = websocket.client.host if websocket.client else None
     if not _is_loopback(client_host):
         await websocket.close(code=4403, reason="Loopback clients only")
+        return
+    if _rate_limit_exceeded(f"ws:{client_host}", 30):
+        await websocket.close(code=4429, reason="WebSocket connection rate limit exceeded")
         return
     if not _api_token:
         await websocket.close(code=1011, reason="Local API authentication is not configured")
