@@ -54,20 +54,22 @@ class Orchestrator:
         self.futures_client: FuturesClient = FuturesClient(self.rate_limiter)
         self.ws_manager: WebSocketManager = WebSocketManager(self.rate_limiter)
         self.candle_manager: CandleManager = CandleManager()
-        self.scanner: Scanner = Scanner(self.event_bus, self.registry, self.cache,
-                                       self.spot_client, self.futures_client)
-        self.decision_engine: DecisionEngine = DecisionEngine(self.event_bus)
-        self.strategy_selector: StrategySelector = StrategySelector()
-        self.feature_engine: FeatureEngine = FeatureEngine()
-        self.predictor: Predictor = Predictor()
-        self.simulator: Simulator = Simulator(self.event_bus)
-        self.telegram: TelegramClient | None = TelegramClient() if TELEGRAM_ENABLED else None
-        # Data integrity
         self.integrity: DataIntegrityGuardian = DataIntegrityGuardian(self.candle_manager)
-        # Intelligence core
-        self.intelligence: IntelligenceCore = IntelligenceCore(self.event_bus, self.candle_manager, self.integrity)
+        self.intelligence: IntelligenceCore = IntelligenceCore(
+            self.event_bus, self.candle_manager, self.integrity
+        )
+        self.decision_engine: DecisionEngine = self.intelligence.decision_engine
+        self.strategy_selector: StrategySelector = self.intelligence.strategy_selector
+        self.feature_engine: FeatureEngine = self.intelligence.feature_engine
+        self.predictor: Predictor = self.intelligence.predictor
+        self.simulator: Simulator = Simulator(self.event_bus, self.cache)
+        self.scanner: Scanner = Scanner(
+            self.event_bus, self.registry, self.cache,
+            self.spot_client, self.futures_client,
+            self.candle_manager, self.intelligence,
+        )
+        self.telegram: TelegramClient | None = TelegramClient() if TELEGRAM_ENABLED else None
         # Keep one canonical predictor for the API, live inference, and learning loop.
-        self.predictor = self.intelligence.predictor
         self.learning_service = LiveLearningService(self)
         # Learning accountability
         self.outcome_labeler = OutcomeLabeler(self.repo, self.simulator)
@@ -131,6 +133,7 @@ class Orchestrator:
         self.event_bus.subscribe(EventType.SIGNAL_EXPIRED, self._on_signal_expired)
         # Market data for price updates
         self.event_bus.subscribe(EventType.MARKET_DATA, self._on_market_data)
+        self.event_bus.subscribe(EventType.MARKET_SNAPSHOT, self._on_market_snapshot)
         # Learning feedback
         self.event_bus.subscribe(EventType.POSITION_CLOSED, self._on_position_closed)
         # Position opened
@@ -178,6 +181,36 @@ class Orchestrator:
         price = payload.get("price")
         if price and symbol:
             await self.simulator.update_prices(market, symbol, price)
+
+    async def _on_market_snapshot(self, event) -> None:
+        """Mark open positions and check pending limits from the scanner's latest cache."""
+        market = event.market or event.payload.get("market", "SPOT")
+        positions = self.simulator._get_positions(market)
+        symbols = {
+            position.get("symbol") for position in positions.values()
+            if position.get("status") == "OPEN"
+        }
+        for symbol in symbols:
+            snapshot = self.cache.get_snapshot(market, symbol)
+            if not snapshot:
+                continue
+            price = snapshot.get("price")
+            if not price or price <= 0:
+                continue
+            await self.simulator.update_prices(
+                market, symbol, price,
+                mark_price=snapshot.get("mark_price"),
+                funding_rate=snapshot.get("funding_rate"),
+            )
+
+        pending_symbols = {
+            order.get("symbol") for order in self.simulator.open_orders.values()
+            if order.get("market") == market and order.get("status") == "OPEN"
+        }
+        for symbol in pending_symbols:
+            price = self.cache.get_price(market, symbol)
+            if price and price > 0:
+                await self.simulator.check_limit_orders(market, symbol, price)
 
     async def _on_position_closed(self, event) -> None:
         # Learning feedback: evaluate prediction if any
