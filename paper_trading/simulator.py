@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 
 
 class Simulator:
-    def __init__(self, event_bus: EventBus):
+    def __init__(self, event_bus: EventBus, market_cache=None):
         self.event_bus = event_bus
+        self.market_cache = market_cache
         self.initial_spot_balance = SPOT_INITIAL_BALANCE
         self.initial_futures_balance = FUTURES_INITIAL_BALANCE
         self.spot_balance = self.initial_spot_balance
@@ -80,9 +81,57 @@ class Simulator:
         return total
 
     def _get_volume_24h(self, market: str, symbol: str) -> float:
-        """Get 24h volume for slippage calculation - placeholder, will be wired to market cache."""
-        # This should be replaced with actual market cache data
-        return 1000000.0  # Default 1M USDT volume
+        """Return exchange quote-volume cached by the market scanner."""
+        if self.market_cache is None:
+            return 0.0
+        volume = self.market_cache.get_volume(market, symbol)
+        try:
+            value = float(volume)
+        except (TypeError, ValueError):
+            return 0.0
+        return value if value > 0 else 0.0
+
+    def _calculate_order_quantity(self, signal: dict[str, Any], balance: float) -> tuple[float, float]:
+        """Size by stop risk, then cap Spot buys to available cash including fees."""
+        entry = float(signal["entry"])
+        stop_loss = float(signal["stop_loss"])
+        risk_distance = abs(entry - stop_loss)
+        if risk_distance <= 0 or balance <= 0:
+            return 0.0, 1.0
+
+        market = signal["market"]
+        direction = signal["direction"]
+        leverage = self.risk_manager.validate_leverage(
+            market, float(signal.get("leverage", 1.0))
+        )
+        quantity = self.risk_manager.calculate_position_size(balance, risk_distance)
+        if market != "SPOT":
+            return quantity, leverage
+        if direction not in ("LONG", "BUY"):
+            return 0.0, leverage
+
+        volume_24h = self._get_volume_24h(market, signal["symbol"])
+        # Fill price depends on quantity through market-impact slippage. Recalculate
+        # the affordable amount and include the Spot taker fee in the cash ceiling.
+        for _ in range(4):
+            if quantity <= 0:
+                return 0.0, leverage
+            fill_price = self.fee_calc.get_fill_price(
+                market, direction, signal.get("order_type", "MARKET"),
+                entry, quantity, 1.0, volume_24h
+            )
+            if fill_price <= 0:
+                return 0.0, leverage
+            fee_per_unit = self.fee_calc.calculate(
+                market, direction, 1.0, fill_price, 1.0
+            )
+            affordable = balance / (fill_price + fee_per_unit)
+            capped = min(quantity, affordable)
+            if abs(capped - quantity) <= max(1e-12, quantity * 1e-9):
+                quantity = capped
+                break
+            quantity = capped
+        return max(0.0, quantity), leverage
 
     def validate_new_position(self, signal: dict[str, Any]) -> tuple[bool, str]:
         market = signal["market"]
@@ -105,15 +154,16 @@ class Simulator:
 
         # Risk manager check
         balance = self.get_balance(market)
-        risk_amount = abs(signal["entry"] - signal["stop_loss"])
+        risk_amount = abs(float(signal["entry"]) - float(signal["stop_loss"]))
         if risk_amount <= 0:
             return False, "Invalid stop loss"
-        qty = self.risk_manager.calculate_position_size(balance, risk_amount)
+        qty, leverage = self._calculate_order_quantity(signal, balance)
         if qty <= 0:
-            return False, "Calculated quantity is zero"
-        # Leverage
-        leverage = signal.get("leverage", 1.0)
-        leverage = self.risk_manager.validate_leverage(market, leverage)
+            return False, (
+                "Spot short positions are not supported" if market == "SPOT"
+                and signal.get("direction") not in ("LONG", "BUY")
+                else "Calculated quantity is zero"
+            )
         # Total open risk
         total_risk = self._get_total_risk()
         new_risk = risk_amount * qty
@@ -129,11 +179,9 @@ class Simulator:
             return None
         market = signal["market"]
         balance = self.get_balance(market)
-        risk_amount = abs(signal["entry"] - signal["stop_loss"])
-        qty = balance * (RISK_PER_TRADE_PCT / 100.0) / risk_amount
-        leverage = signal.get("leverage", 1.0)
-        if market == "FUTURES" and leverage > RISK_MAX_LEVERAGE:
-            leverage = RISK_MAX_LEVERAGE
+        qty, leverage = self._calculate_order_quantity(signal, balance)
+        if qty <= 0:
+            return None
 
         # Get realistic fill price with spread and slippage
         volume_24h = self._get_volume_24h(market, signal["symbol"])
@@ -145,6 +193,11 @@ class Simulator:
 
         # Deduct fees upfront
         fee = self.fee_calc.calculate(market, signal["direction"], qty, fill_price, leverage)
+        reserved_notional = qty * fill_price if market == "SPOT" else 0.0
+        if market == "SPOT" and reserved_notional + fee > self.spot_balance + 1e-9:
+            logger.warning("Spot order %s exceeds available cash after fees", signal["signal_id"])
+            return None
+
         position_id = f"POS-{uuid.uuid4().hex[:8].upper()}"
         position = {
             "position_id": position_id,
@@ -160,6 +213,7 @@ class Simulator:
             "unrealized_pnl": 0.0,
             "realized_pnl": 0.0,
             "fees_paid": fee,
+            "reserved_notional": reserved_notional,
             "status": "OPEN",
             "opened_at": datetime.now(timezone.utc),
             "order_type": order_type,
@@ -168,7 +222,7 @@ class Simulator:
         }
         if market == "SPOT":
             self.spot_positions[position_id] = position
-            self.spot_balance -= fee
+            self.spot_balance -= reserved_notional + fee
         else:
             self.futures_positions[position_id] = position
             self.futures_balance -= fee
@@ -291,7 +345,11 @@ class Simulator:
         position["realized_pnl"] = trade_pnl
         position["fees_paid"] += fee
         if market == "SPOT":
-            self.spot_balance += balance_delta
+            # Release the entry principal, then apply price P&L and the exit fee.
+            reserved = float(position.get(
+                "reserved_notional", position["entry_price"] * position["amount"]
+            ))
+            self.spot_balance += reserved + balance_delta
             pos_dict = self.spot_positions
         else:
             self.futures_balance += balance_delta
@@ -335,11 +393,9 @@ class Simulator:
 
         market = signal["market"]
         balance = self.get_balance(market)
-        risk_amount = abs(signal["entry"] - signal["stop_loss"])
-        qty = balance * (RISK_PER_TRADE_PCT / 100.0) / risk_amount
-        leverage = signal.get("leverage", 1.0)
-        if market == "FUTURES" and leverage > RISK_MAX_LEVERAGE:
-            leverage = RISK_MAX_LEVERAGE
+        qty, leverage = self._calculate_order_quantity(signal, balance)
+        if qty <= 0:
+            return None
 
         # Limit orders don't fill immediately - they go to open_orders
         order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
