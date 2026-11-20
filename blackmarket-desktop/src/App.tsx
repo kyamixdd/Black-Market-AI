@@ -1426,6 +1426,10 @@ function App() {
           data={data}
           preferences={preferences}
           onPreferencesChange={changePreferences}
+          onManualTrade={async (payload) => {
+            await mutateJson('/trades', 'POST', payload)
+            refreshScreenDataRef.current?.()
+          }}
           onPositionAction={async (positionId, action, values) => {
             if (!positionId) throw new Error('Missing position identifier.')
             if (action === 'close') {
