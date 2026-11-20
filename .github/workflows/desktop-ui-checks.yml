@@ -45,6 +45,9 @@ jobs:
         run: npm test
         working-directory: blackmarket-desktop
 
+      - name: Validate backend Python syntax
+        run: python -m compileall -q src_tauri/backend/main.py
+
   website:
     name: Shared website frontend build
     runs-on: ubuntu-latest
