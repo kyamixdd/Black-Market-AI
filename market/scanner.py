@@ -33,9 +33,14 @@ class Scanner:
         self.futures_client = futures_client
         self.candle_manager = candle_manager
         self.intelligence = intelligence
-        self.analysis_symbol_limit = max(1, int(analysis_symbol_limit))
-        self.enabled_markets = {"SPOT", "FUTURES"}
-        self.analysis_timeframes = ("15m", "1h")
+        from config import SCAN_ALL_ELIGIBLE_SYMBOLS, SPOT_ENABLED, USDM_FUTURES_ENABLED, TIMEFRAMES
+
+        self.analysis_symbol_limit = 50 if SCAN_ALL_ELIGIBLE_SYMBOLS else max(1, int(analysis_symbol_limit))
+        self.enabled_markets = {
+            market for market, enabled in (("SPOT", SPOT_ENABLED), ("FUTURES", USDM_FUTURES_ENABLED))
+            if enabled
+        }
+        self.analysis_timeframes = tuple(TIMEFRAMES)
         self._running = False
         self._tasks: list[asyncio.Task] = []
 
@@ -57,8 +62,7 @@ class Scanner:
         if not prioritized:
             return
 
-        # Bounded 15m + 1h history gives strategies sufficient candles without
-        # requesting every listed symbol/timeframe on every polling cycle.
+        # Refresh each configured analysis timeframe for the prioritized universe.
         for _market, symbol in prioritized:
             for timeframe in self.analysis_timeframes:
                 await self.candle_manager.collect_historical(
