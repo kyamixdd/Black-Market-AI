@@ -202,6 +202,7 @@ const EMPTY_DATA: DashboardData = {
   riskAlerts: [],
   settings: null,
   analysisCandles: {},
+  volumeAnalytics: null,
   health: null,
 }
 
@@ -629,6 +630,7 @@ function App() {
         heatmapPayload,
         breadth,
         volume,
+        volumeAnalytics: volume,
         longShort,
         risk,
         signalPayload,
