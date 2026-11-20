@@ -133,7 +133,7 @@ class Simulator:
             quantity = capped
         return max(0.0, quantity), leverage
 
-    def validate_new_position(self, signal: dict[str, Any]) -> tuple[bool, str]:
+    def validate_new_position(self, signal: dict[str, Any], quantity_override: float | None = None) -> tuple[bool, str]:
         market = signal["market"]
         direction = signal["direction"]
         positions = self._get_positions(market)
@@ -165,6 +165,10 @@ class Simulator:
         if risk_amount <= 0:
             return False, "Invalid stop loss"
         qty, leverage = self._calculate_order_quantity(signal, balance)
+        if quantity_override is not None:
+            if quantity_override <= 0 or quantity_override > qty + 1e-9:
+                return False, "Requested quantity exceeds risk-sized maximum"
+            qty = float(quantity_override)
         if qty <= 0:
             return False, (
                 "Spot short positions are not supported" if market == "SPOT"
@@ -178,15 +182,17 @@ class Simulator:
             return False, "Total open risk limit exceeded"
         return True, "OK"
 
-    async def execute_signal(self, signal: dict[str, Any]) -> str | None:
+    async def execute_signal(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
         """Execute a validated signal into a paper position."""
-        ok, reason = self.validate_new_position(signal)
+        ok, reason = self.validate_new_position(signal, quantity_override)
         if not ok:
             logger.warning("Signal %s risk check failed: %s", signal["signal_id"], reason)
             return None
         market = signal["market"]
         balance = self.get_balance(market)
         qty, leverage = self._calculate_order_quantity(signal, balance)
+        if quantity_override is not None:
+            qty = float(quantity_override)
         if qty <= 0:
             return None
 
@@ -391,9 +397,9 @@ class Simulator:
         logger.info("Closed %s %s PnL: %.2f (%s, fill: %.4f)", position["symbol"], position["side"], trade_pnl, reason, fill_price)
 
     # --- Limit Order Handling ---
-    async def place_limit_order(self, signal: dict[str, Any]) -> str | None:
+    async def place_limit_order(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
         """Place a simulated limit order."""
-        ok, reason = self.validate_new_position(signal)
+        ok, reason = self.validate_new_position(signal, quantity_override)
         if not ok:
             logger.warning("Limit order %s risk check failed: %s", signal["signal_id"], reason)
             return None
@@ -401,6 +407,8 @@ class Simulator:
         market = signal["market"]
         balance = self.get_balance(market)
         qty, leverage = self._calculate_order_quantity(signal, balance)
+        if quantity_override is not None:
+            qty = float(quantity_override)
         if qty <= 0:
             return None
 
@@ -421,6 +429,7 @@ class Simulator:
             "created_at": datetime.now(timezone.utc),
             "signal_id": signal.get("signal_id"),
             "strategy": signal.get("strategy", "UNKNOWN"),
+            "quantity_override": qty,
         }
         self.open_orders[order_id] = order
         await self.event_bus.publish(make_event(
@@ -455,7 +464,7 @@ class Simulator:
                     "order_type": "LIMIT",
                     "strategy": order.get("strategy", "UNKNOWN"),
                 }
-                await self.execute_signal(signal)
+                await self.execute_signal(signal, float(order.get('quantity_override', order['amount'])))
                 del self.open_orders[order["order_id"]]
                 await self.event_bus.publish(make_event(
                     EventType.ORDER_FILLED, "simulator",
