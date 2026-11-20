@@ -373,25 +373,37 @@ function App() {
 
       let ready = false
       let authenticationFailed = false
-      let healthError = 'The local API is not responding yet.'
+      let healthError = isTauri ? 'The local API is not responding yet.' : 'The hosted API is not responding yet.'
       const controller = new AbortController()
-      const requestTimeout = window.setTimeout(() => controller.abort(), 2000)
+      const requestTimeout = window.setTimeout(() => controller.abort(), 5000)
       try {
-        const response = await fetch(isTauri ? `${API_ORIGIN}/health` : '/api/health', { signal: controller.signal, cache: 'no-store' })
+        const response = await fetch(isTauri ? `${API_ORIGIN}/health` : '/api/health', {
+          signal: controller.signal,
+          cache: 'no-store',
+        })
         if (!response.ok) {
-          healthError = `The local API returned HTTP ${response.status}.`
+          healthError = `The ${isTauri ? 'local' : 'hosted'} API returned HTTP ${response.status}.`
         } else {
           const healthPayload: unknown = await response.json()
-          const health = !isTauri && typeof healthPayload === 'object' && healthPayload !== null && 'backend' in healthPayload ? healthPayload.backend : healthPayload
-          if (typeof health === 'object' && health !== null && 'backend_ready' in health && health.backend_ready === true && 'database_connected' in health && health.database_connected === true) {
+          const health = !isTauri && typeof healthPayload === 'object' && healthPayload !== null && 'backend' in healthPayload
+            ? healthPayload.backend
+            : healthPayload
+          if (typeof health === 'object' && health !== null && 'backend_ready' in health
+            && health.backend_ready === true && 'database_connected' in health
+            && health.database_connected === true) {
             if (isTauri) {
               const token = await invoke<string>('backend_api_token')
               if (!token) throw new Error('The desktop supervisor returned an empty API token.')
               setApiToken(token)
             }
-            const authenticatedResponse = await fetch(isTauri ? `${API_ORIGIN}/api/system/status` : '/api/backend/system/status', {
-              headers: isTauri ? getApiAuthorization() : undefined, signal: controller.signal, cache: 'no-store',
-            })
+            const authenticatedResponse = await fetch(
+              isTauri ? `${API_ORIGIN}/api/system/status` : '/api/backend/system/status',
+              {
+                headers: isTauri ? getApiAuthorization() : undefined,
+                signal: controller.signal,
+                cache: 'no-store',
+              },
+            )
             if (authenticatedResponse.ok) ready = true
             else {
               authenticationFailed = authenticatedResponse.status === 401
@@ -399,31 +411,15 @@ function App() {
               setApiToken(null)
             }
           } else {
-              const token = await invoke<string>('backend_api_token')
-              if (!token) throw new Error('The desktop supervisor returned an empty API token.')
-              setApiToken(token)
-              const authenticatedResponse = await fetch(`${API_ORIGIN}/api/system/status`, {
-                headers: getApiAuthorization(),
-                signal: controller.signal,
-              })
-              if (authenticatedResponse.ok) {
-                ready = true
-              } else {
-                authenticationFailed = authenticatedResponse.status === 401
-                healthError = `The authenticated local API check returned HTTP ${authenticatedResponse.status}.`
-                setApiToken(null)
-              }
-            }
-          } else {
             setApiToken(null)
-            healthError = 'The backend is responding but has not reported database and WebSocket readiness.'
+            healthError = 'The backend is responding but has not reported database readiness.'
           }
         }
       } catch (error) {
         setApiToken(null)
         healthError = error instanceof Error && error.message.includes('API token')
           ? error.message
-          : 'The local API is not responding or its authenticated startup check failed. Check the backend startup log for details.'
+          : `The ${isTauri ? 'local' : 'hosted'} API is unreachable or its authenticated startup check failed.`
         authenticationFailed = isTauri && nativeStatus?.state === 'ready'
       } finally {
         window.clearTimeout(requestTimeout)
