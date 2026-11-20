@@ -289,7 +289,7 @@ class Simulator:
 
                 # Apply funding if rate provided
                 if market == "FUTURES" and pos["status"] == "OPEN" and funding_rate is not None:
-                    await self._apply_funding(pos, funding_rate)
+                    await self._apply_funding(pos, funding_rate, mark_price or price)
 
     async def _check_exit(self, position: dict, price: float, market: str) -> None:
         side = position["side"]
@@ -346,7 +346,7 @@ class Simulator:
                     }
                 ))
 
-    async def _apply_funding(self, position: dict, funding_rate: float) -> None:
+    async def _apply_funding(self, position: dict, funding_rate: float, mark_price: float | None = None) -> None:
         """Apply funding payment to futures position."""
         # Funding settles on fixed UTC boundaries (00:00, 08:00, 16:00),
         # not eight hours after the first market-data update seen by this process.
@@ -370,7 +370,7 @@ class Simulator:
         if current_boundary_ms <= last_funding or current_boundary_ms <= opened_at_ms:
             return
 
-        payment = float(self.funding_calc.calculate(position, funding_rate))
+        payment = float(self.funding_calc.calculate(position, funding_rate, mark_price))
         if not math.isfinite(payment):
             raise ValueError("Funding payment must be finite.")
 

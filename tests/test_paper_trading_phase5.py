@@ -157,14 +157,15 @@ class TestFundingCalculator:
         fc = FundingCalculator()
         pos = {"market": "FUTURES", "side": "LONG", "amount": 0.1, "entry_price": 50000.0, "leverage": 3.0}
         payment = fc.calculate(pos, 0.0001)  # 0.01%
-        expected = 0.1 * 50000.0 * 3.0 * 0.0001
+        # Funding uses current position notional; leverage does not multiply it.
+        expected = 0.1 * 50000.0 * 0.0001
         assert payment == expected
 
     def test_short_funding_payment(self):
         fc = FundingCalculator()
         pos = {"market": "FUTURES", "side": "SHORT", "amount": 0.1, "entry_price": 50000.0, "leverage": 3.0}
         payment = fc.calculate(pos, 0.0001)
-        expected = 0.1 * 50000.0 * 3.0 * 0.0001
+        expected = 0.1 * 50000.0 * 0.0001
         # Shorts receive when rate is positive (negative payment = they receive)
         assert payment == -expected
 
@@ -1061,3 +1062,82 @@ async def test_durable_limit_placement_survives_order_event_failure():
 
     assert order_id in simulator.open_orders
     assert persisted == ["OPEN"]
+
+
+
+def test_funding_uses_current_mark_notional_and_ignores_leverage():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "amount": 0.25,
+        "entry_price": 40000.0,
+        "current_price": 42000.0,
+        "leverage": 20.0,
+    }
+
+    assert calculator.calculate(position, 0.001) == pytest.approx(10.5)
+
+
+@pytest.mark.parametrize(("side", "expected"), [
+    ("LONG", 5.0),
+    ("BUY", 5.0),
+    ("SHORT", -5.0),
+    ("SELL", -5.0),
+])
+def test_funding_direction_aliases_are_consistent(side, expected):
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": side,
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "current_price": 100.0,
+        "leverage": 10.0,
+    }
+
+    assert calculator.calculate(position, 0.05) == pytest.approx(expected)
+
+
+def test_funding_rejects_unknown_position_side():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "SIDEWAYS",
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "leverage": 1.0,
+    }
+
+    with pytest.raises(ValueError, match="Unsupported futures position side"):
+        calculator.calculate(position, 0.001)
+
+
+
+def test_funding_uses_exchange_mark_price_when_available():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "current_price": 105.0,
+        "leverage": 5.0,
+    }
+
+    # The exchange mark price is the funding reference, not last-traded price.
+    assert calculator.calculate(position, 0.01, mark_price=110.0) == pytest.approx(1.1)
+
+
+def test_funding_rejects_invalid_mark_price():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "leverage": 1.0,
+    }
+
+    with pytest.raises(ValueError, match="Funding mark price"):
+        calculator.calculate(position, 0.01, mark_price=float("nan"))
