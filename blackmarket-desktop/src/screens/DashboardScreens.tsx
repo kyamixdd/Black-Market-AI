@@ -254,6 +254,7 @@ type Props = {
   onSelectMarket: (symbol: string, market: 'SPOT' | 'FUTURES') => void
   onPositionAction: (positionId: string, action: 'close' | 'update', values?: { stop_loss?: number; take_profit?: number }) => Promise<void>
   onManualTrade: (payload: { symbol: string; market: 'SPOT' | 'FUTURES'; side: 'BUY' | 'SELL' | 'LONG' | 'SHORT'; order_type: 'MARKET' | 'LIMIT'; quantity: number; price?: number; stop_loss: number; take_profit?: number; leverage: number }) => Promise<void>
+  onSettingsSave: (settings: Record<string, unknown>) => Promise<void>
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -812,15 +813,21 @@ function SettingsScreen({
   settings,
   preferences,
   onPreferencesChange,
+  onSettingsSave,
 }: {
   settings: WorkspaceSettings | null
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
+  onSettingsSave: Props['onSettingsSave']
 }) {
+  const [draft, setDraft] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const value = (key: keyof WorkspaceSettings) => draft[key] ?? (Array.isArray(settings?.[key]) ? (settings?.[key] as string[]).join(', ') : String(settings?.[key] ?? ''))
   const updatePreference = (key: keyof DashboardPreferences) => onPreferencesChange({ ...preferences, [key]: !preferences[key] })
   return (
     <>
-      <ScreenHeader title="Settings" description="Dashboard preferences are stored locally. Engine configuration is reported read-only; edits require changing local configuration and restarting." />
+      <ScreenHeader title="Settings" description="Engine settings are validated, saved locally by the backend, and applied to the running scanner and risk controls." />
       <h2 className="workspace-section-title">Dashboard preferences · this device</h2>
       <div className="settings-card-list">
         {([
@@ -833,7 +840,28 @@ function SettingsScreen({
           </button>
         ))}
       </div>
-      <h2 className="workspace-section-title">Engine configuration · read-only</h2>
+      <h2 className="workspace-section-title">Engine configuration · persistent</h2>
+      <form className="settings-card-list" onSubmit={async (event) => {
+        event.preventDefault(); setSaving(true); setMessage('')
+        const payload: Record<string, unknown> = {}
+        const boolKeys = ['spot_enabled','futures_enabled','scan_all_eligible_symbols','telegram_enabled']
+        const numberKeys = ['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions']
+        for (const key of boolKeys) if (draft[key] !== undefined) payload[key] = draft[key] === 'true'
+        for (const key of numberKeys) if (draft[key] !== undefined && draft[key] !== '') payload[key] = Number(draft[key])
+        if (draft.timeframes !== undefined) payload.timeframes = draft.timeframes.split(',').map((item) => item.trim()).filter(Boolean)
+        try { await onSettingsSave(payload); setDraft({}); setMessage('Settings saved and applied.') }
+        catch (error) { setMessage(error instanceof Error ? error.message : 'Settings could not be saved.') }
+        finally { setSaving(false) }
+      }}>
+        <label className="settings-card"><span><b>Spot market data</b><small>Enable or pause Spot scanning</small></span><select className="workspace-select" value={value('spot_enabled')} onChange={(event) => setDraft((state) => ({ ...state, spot_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+        <label className="settings-card"><span><b>USDⓈ-M Futures</b><small>Enable or pause Futures scanning</small></span><select className="workspace-select" value={value('futures_enabled')} onChange={(event) => setDraft((state) => ({ ...state, futures_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+        <label className="settings-card"><span><b>Scan broader symbol set</b><small>Uses up to 50 high-volume eligible symbols per market</small></span><select className="workspace-select" value={value('scan_all_eligible_symbols')} onChange={(event) => setDraft((state) => ({ ...state, scan_all_eligible_symbols: event.target.value }))}><option value="true">Enabled</option><option value="false">Top 10</option></select></label>
+        <label className="settings-card"><span><b>Analysis timeframes</b><small>Comma-separated Binance intervals</small></span><input className="workspace-search" value={value('timeframes')} onChange={(event) => setDraft((state) => ({ ...state, timeframes: event.target.value }))} /></label>
+        {(['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions'] as const).map((key) => <label className="settings-card" key={key}><span><b>{key.replaceAll('_',' ').toUpperCase()}</b></span><input className="workspace-search" type="number" min="0.01" step="any" value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))} /></label>)}
+        <label className="settings-card"><span><b>Telegram notifications</b><small>Uses credentials already configured in the private environment</small></span><select className="workspace-select" value={value('telegram_enabled')} onChange={(event) => setDraft((state) => ({ ...state, telegram_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+        <button className="table-action" type="submit" disabled={saving || !Object.keys(draft).length}>{saving ? 'Saving…' : 'Save engine settings'}</button>
+        {message && <span role="status">{message}</span>}
+      </form>
       <div className="workspace-summary">
         <SummaryCard label="SPOT MARKET DATA" value={settings ? settings.spot_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} />
         <SummaryCard label="USDⓈ-M FUTURES" value={settings ? settings.futures_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} />
@@ -851,7 +879,7 @@ function SettingsScreen({
         <SummaryCard label="POSITION LIMITS" value={settings ? `${settings.max_spot_positions ?? '—'} Spot / ${settings.max_futures_positions ?? '—'} Futures` : '—'} />
         <SummaryCard label="TIMEFRAMES" value={settings?.timeframes?.length ? settings.timeframes.join(', ') : '—'} />
       </div>
-      <div className="workspace-note">Risk controls and notification credentials are not editable in this dashboard. Configure Telegram secrets only through the private local environment file. Binance public market data requires no API credentials; real trading is disabled.</div>
+      <div className="workspace-note">Telegram credentials remain secret and cannot be changed here. Starting balances can only be changed before the first paper trade. Real exchange trading remains disabled.</div>
     </>
   )
 }
@@ -870,7 +898,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'Learning' && <LearningScreen data={data} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
-      {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} />}
+      {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
     </section>
   )
 }
