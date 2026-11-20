@@ -272,3 +272,12 @@ def test_partial_close_request_rejects_invalid_quantity(payload):
 def test_position_update_rejects_unknown_fields():
     with pytest.raises(ValidationError):
         PositionUpdateRequest(stop_loss=90.0, trailing_mode=True)
+
+
+def test_manual_order_request_rejects_unknown_fields():
+    payload = {
+        "symbol": "BTCUSDT", "market": "SPOT", "side": "BUY",
+        "quantity": 0.001, "stop_loss": 90.0, "unexpected_override": True,
+    }
+    with pytest.raises(ValidationError):
+        ManualOrderRequest(**payload)
