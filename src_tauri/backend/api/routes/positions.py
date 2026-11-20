@@ -1,7 +1,6 @@
 """Open paper-position API routes."""
 from __future__ import annotations
 
-import math
 from fastapi import APIRouter, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
