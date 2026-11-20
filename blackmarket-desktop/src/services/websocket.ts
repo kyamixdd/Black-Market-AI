@@ -83,8 +83,35 @@ class WebSocketService {
         source.onmessage = (message) => {
           try {
             const event: unknown = JSON.parse(message.data)
-            for (const [channel, callbacks] of this.subscriptions) {
-              callbacks.forEach((callback) => callback(event))
+            if (typeof event !== 'object' || event === null || !('event_type' in event)) return
+            const eventType = String(event.event_type)
+            const channels: Record<string, WebSocketChannel[]> = {
+              MARKET_DATA: ['price_updates'],
+              MARKET_SNAPSHOT: ['market_updates'],
+              SIGNAL_PROPOSED: ['signal_updates'],
+              SIGNAL_VALIDATED: ['signal_updates'],
+              SIGNAL_REJECTED: ['signal_updates', 'system_events'],
+              SIGNAL_EXPIRED: ['signal_updates'],
+              PREDICTION: ['learning_updates'],
+              TRADE_EXECUTED: ['portfolio_updates', 'position_updates'],
+              TRADE_PARTIALLY_FILLED: ['portfolio_updates', 'position_updates'],
+              TRADE_CLOSED: ['portfolio_updates', 'position_updates'],
+              TRADE_CANCELLED: ['portfolio_updates', 'system_events'],
+              TRADE_REJECTED: ['portfolio_updates', 'system_events'],
+              POSITION_OPENED: ['position_updates', 'portfolio_updates'],
+              POSITION_CLOSED: ['position_updates', 'portfolio_updates'],
+              ORDER_PLACED: ['portfolio_updates'],
+              ORDER_FILLED: ['portfolio_updates', 'position_updates'],
+              LEARNING_UPDATE: ['learning_updates'],
+              MODEL_TRAINED: ['learning_updates'],
+              MODEL_PROMOTED: ['learning_updates'],
+              MODEL_ROLLED_BACK: ['learning_updates'],
+              RISK_ALERT: ['risk_updates', 'system_events'],
+              SYSTEM_HEALTH: ['system_events'],
+              NOTIFICATION: ['system_events'],
+            }
+            for (const channel of channels[eventType] ?? []) {
+              this.subscriptions.get(channel)?.forEach((callback) => callback(event))
               this.emit(channel, event)
             }
             this.emit('event', event)
