@@ -318,6 +318,17 @@ function App() {
   const [popup, setPopup] = useState<Popup>(null)
   const [activeScreen, setActiveScreen] = useState<ScreenName>('Overview')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
+  useEffect(() => {
+    if (!mobileMenuOpen && !popup) return
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setMobileMenuOpen(false)
+      setPopup(null)
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [mobileMenuOpen, popup])
   const [assistantHelpOpen, setAssistantHelpOpen] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -1049,7 +1060,7 @@ function App() {
   return (
     <main className="terminal">
       <header className="topbar" data-tauri-drag-region>
-        <button className={`mobile-menu icon-button ${mobileMenuOpen ? 'selected' : ''}`} aria-label="Toggle navigation" onClick={() => setMobileMenuOpen((open) => !open)}>
+        <button className={`mobile-menu icon-button ${mobileMenuOpen ? 'selected' : ''}`} type="button" aria-label="Toggle navigation" aria-expanded={mobileMenuOpen} aria-controls="application-navigation" onClick={() => setMobileMenuOpen((open) => !open)}>
           <MoreHorizontal size={16} />
         </button>
         <a className="brand" href="#" aria-label="BlackMarket AI home" onClick={() => changeNavigation('Overview')}>
@@ -1127,7 +1138,7 @@ function App() {
         )}
       </header>
 
-      <nav className={`screen-navigation ${mobileMenuOpen ? 'mobile-open' : ''}`} aria-label="Application screens">
+      <nav id="application-navigation" className={`screen-navigation ${mobileMenuOpen ? 'mobile-open' : ''}`} aria-label="Application screens">
         {NAV_ITEMS.map((item) => (
           <button
             key={item.label}
