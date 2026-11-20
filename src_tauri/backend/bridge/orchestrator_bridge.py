@@ -39,7 +39,11 @@ class OrchestratorBridge:
         """Get latest market snapshot for a symbol."""
         cached = self.orch.cache.get_snapshot(market, symbol)
         if cached and cached.get("price") is not None:
-            return self._with_freshness(cached)
+            enriched = self._with_freshness(cached)
+            volatility, atr = self._volatility_metrics(market, symbol)
+            enriched["volatility_24h_pct"] = volatility
+            enriched["atr_24h_pct"] = atr
+            return enriched
         snap = self.repo.get_latest_snapshot(symbol, market)
         if not snap:
             return None
