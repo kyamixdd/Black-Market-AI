@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 
 class MarketType(str, Enum):
@@ -494,19 +494,44 @@ class SignalRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     spot_enabled: bool | None = None
     futures_enabled: bool | None = None
     scan_all_eligible_symbols: bool | None = None
     timeframes: list[str] | None = None
-    spot_initial_balance: float | None = None
-    futures_initial_balance: float | None = None
-    risk_per_trade_pct: float | None = None
-    risk_max_daily_loss_pct: float | None = None
-    risk_max_total_open_pct: float | None = None
-    risk_max_leverage: float | None = None
-    max_spot_positions: int | None = None
-    max_futures_positions: int | None = None
+    spot_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000)
+    futures_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000)
+    risk_per_trade_pct: float | None = Field(default=None, gt=0, le=5)
+    risk_max_daily_loss_pct: float | None = Field(default=None, gt=0, le=25)
+    risk_max_total_open_pct: float | None = Field(default=None, gt=0, le=50)
+    risk_max_leverage: float | None = Field(default=None, ge=1, le=125)
+    max_spot_positions: int | None = Field(default=None, ge=1, le=100)
+    max_futures_positions: int | None = Field(default=None, ge=1, le=100)
     telegram_enabled: bool | None = None
+
+    @field_validator("timeframes")
+    @classmethod
+    def validate_timeframes(cls, value):
+        allowed = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"}
+        if value is None:
+            return value
+        if not value or len(value) > 15 or len(set(value)) != len(value):
+            raise ValueError("Select between 1 and 15 unique timeframes.")
+        invalid = sorted(set(value) - allowed)
+        if invalid:
+            raise ValueError(f"Unsupported timeframes: {', '.join(invalid)}")
+        return value
+
+    @model_validator(mode="after")
+    def validate_risk_relationships(self):
+        if (self.risk_per_trade_pct is not None and self.risk_max_total_open_pct is not None
+                and self.risk_per_trade_pct > self.risk_max_total_open_pct):
+            raise ValueError("Risk per trade cannot exceed maximum total open risk.")
+        if (self.risk_max_daily_loss_pct is not None and self.risk_max_total_open_pct is not None
+                and self.risk_max_total_open_pct > self.risk_max_daily_loss_pct * 10):
+            raise ValueError("Maximum total open risk is inconsistent with the daily loss limit.")
+        return self
 
 
 class SettingsResponse(BaseModel):
