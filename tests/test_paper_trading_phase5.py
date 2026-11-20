@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
+import asyncio
+
 import pytest
 
 from core.event_bus import EventBus
@@ -625,3 +627,46 @@ async def test_cancel_limit_order_is_idempotent_and_publishes_cancellation():
     assert placed_event.event_type == "ORDER_PLACED"
     assert cancelled_event.event_type == "TRADE_CANCELLED"
     assert cancelled_event.payload["order"]["status"] == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_price_updates_cannot_double_fill_one_limit_order():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-CONCURRENT",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_execute = simulator.execute_signal
+    executions = 0
+
+    async def delayed_execute(*args, **kwargs):
+        nonlocal executions
+        executions += 1
+        started.set()
+        await release.wait()
+        return await original_execute(*args, **kwargs)
+
+    simulator.execute_signal = delayed_execute
+    first = asyncio.create_task(simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0))
+    await started.wait()
+
+    assert simulator.open_orders[order_id]["status"] == "FILLING"
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert executions == 1
+
+    release.set()
+    await first
+    assert executions == 1
+    assert order_id not in simulator.open_orders
+    assert len(simulator.spot_positions) == 1
