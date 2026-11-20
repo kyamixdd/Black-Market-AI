@@ -11,8 +11,9 @@ from typing import Any
 import joblib
 import numpy as np
 from river import compose, preprocessing, tree
+from sklearn.metrics import accuracy_score, f1_score
 
-from config import AUTO_MODEL_TRAINING, MODELS_DIR
+from config import AUTO_MODEL_TRAINING, MODELS_DIR, SCANNER_ANALYSIS_BATCH_SIZE, MIN_VALIDATION_ACCURACY, MIN_VALIDATION_F1
 from core.event_models import EventType, make_event
 from learning.feature_engine import FeatureEngine
 from learning.outcome_labeler import OutcomeLabeler
@@ -69,7 +70,7 @@ class LiveLearningService:
             snapshots = self.orch.cache.get_market_tickers(market)
             usdt = [s for s in snapshots if str(s.get("symbol", "")).endswith("USDT") and (s.get("volume_24h") or 0) > 0]
             usdt.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
-            for item in usdt[:3]:
+            for item in usdt[:max(1, min(20, int(SCANNER_ANALYSIS_BATCH_SIZE)))]:
                 pairs.append((market, str(item["symbol"])))
         if not pairs:
             pairs = [(market, symbol) for market in ("SPOT", "FUTURES")
@@ -186,19 +187,24 @@ class LiveLearningService:
             self.last_cycle_status = "validated_batch_models_trained"
             logger.info("Historical model bootstrap validated and trained on %d samples", len(y))
         else:
-            self._river_model = await asyncio.to_thread(self.trainer.train_river_online, X, y)
-            if self._river_model is not None:
+            river_result = await asyncio.to_thread(self._train_validate_river, X, y)
+            if river_result.get("passes", False) and river_result.get("model") is not None:
+                self._river_model = river_result["model"]
                 self.predictor.river_model = self._river_model
                 self.predictor.is_trained = True
-                self.predictor.version = self.trainer.last_river_path.stem if self.trainer.last_river_path else "river_online"
-                if self.trainer.last_river_path:
-                    self.repo.promote_model(self.trainer.last_river_path.stem)
+                self.predictor.version = river_result["version"]
+                self.repo.save_model_registry({
+                    "version": river_result["version"], "model_type": "river",
+                    "metrics": river_result["metrics"],
+                    "file_path": str(river_result["path"]),
+                    "status": "VALIDATED", "is_active": True,
+                })
+                self.repo.promote_model(river_result["version"])
                 self.state = "online_only"
-                self.last_cycle_status = "batch_validation_rejected_river_online_trained"
-                logger.warning("Batch models did not pass validation; using the trained River online model")
+                self.last_cycle_status = "batch_rejected_river_walk_forward_holdout_passed"
             else:
                 self.state = "validation_failed"
-                self.last_cycle_status = str(result.get("status", "training_failed"))
+                self.last_cycle_status = f"all_models_rejected:{river_result.get('reason', result.get('status', 'training_failed'))}"
         self.last_training_at = datetime.now(timezone.utc).isoformat()
         self._river_seen.update(
             prediction.prediction_id
@@ -206,6 +212,45 @@ class LiveLearningService:
             if prediction.is_correct is not None
         )
         await self._predict_latest(histories)
+
+    def _train_validate_river(self, X: np.ndarray, y: np.ndarray) -> dict[str, Any]:
+        """Chronologically hold out the newest 20% before allowing River promotion."""
+        if len(X) < 100 or len(np.unique(y)) < 2:
+            return {"passes": False, "reason": "insufficient_validation_history"}
+        split = max(1, int(len(X) * 0.8))
+        model = compose.Pipeline(
+            ("scaler", preprocessing.StandardScaler()),
+            ("model", tree.HoeffdingTreeClassifier(grace_period=100, delta=1e-5, tau=0.05)),
+        )
+        for features, label in zip(X[:split], y[:split]):
+            model.learn_one(dict(enumerate(features.tolist())), int(label))
+        predictions = []
+        actual = []
+        # Evaluate before learning each held-out label; then update chronologically.
+        for features, label in zip(X[split:], y[split:]):
+            prediction = model.predict_one(dict(enumerate(features.tolist())))
+            if prediction is not None:
+                predictions.append(int(prediction))
+                actual.append(int(label))
+            model.learn_one(dict(enumerate(features.tolist())), int(label))
+        if not actual:
+            return {"passes": False, "reason": "empty_holdout"}
+        accuracy = float(accuracy_score(actual, predictions))
+        f1 = float(f1_score(actual, predictions, average="macro", zero_division=0))
+        metrics = {
+            "samples": int(len(X)), "train_samples": int(split),
+            "holdout_samples": len(actual), "accuracy": accuracy, "f1_macro": f1,
+            "validation_method": "chronological_80_20_prequential_holdout",
+        }
+        passes = accuracy >= MIN_VALIDATION_ACCURACY and f1 >= MIN_VALIDATION_F1
+        if not passes:
+            return {"passes": False, "reason": "holdout_threshold_not_met", "metrics": metrics}
+        version = f"river_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        path = MODELS_DIR / f"{version}.pkl"
+        temporary = path.with_suffix(".tmp")
+        joblib.dump(model, temporary)
+        temporary.replace(path)
+        return {"passes": True, "model": model, "version": version, "path": path, "metrics": metrics}
 
     def _activate_batch_models(self, result: dict[str, Any]) -> None:
         version = result.get("version")
