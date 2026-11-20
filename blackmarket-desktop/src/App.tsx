@@ -630,7 +630,6 @@ function App() {
         heatmapPayload,
         breadth,
         volume,
-        volumeAnalytics: volume,
         longShort,
         risk,
         signalPayload,
