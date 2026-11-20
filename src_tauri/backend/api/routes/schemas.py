@@ -500,12 +500,12 @@ class SettingsRequest(BaseModel):
     futures_enabled: bool | None = None
     scan_all_eligible_symbols: bool | None = None
     timeframes: list[str] | None = None
-    spot_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000)
-    futures_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000)
-    risk_per_trade_pct: float | None = Field(default=None, gt=0, le=5)
-    risk_max_daily_loss_pct: float | None = Field(default=None, gt=0, le=25)
-    risk_max_total_open_pct: float | None = Field(default=None, gt=0, le=50)
-    risk_max_leverage: float | None = Field(default=None, ge=1, le=125)
+    spot_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000, allow_inf_nan=False)
+    futures_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000, allow_inf_nan=False)
+    risk_per_trade_pct: float | None = Field(default=None, gt=0, le=5, allow_inf_nan=False)
+    risk_max_daily_loss_pct: float | None = Field(default=None, gt=0, le=25, allow_inf_nan=False)
+    risk_max_total_open_pct: float | None = Field(default=None, gt=0, le=50, allow_inf_nan=False)
+    risk_max_leverage: float | None = Field(default=None, ge=1, le=125, allow_inf_nan=False)
     max_spot_positions: int | None = Field(default=None, ge=1, le=100)
     max_futures_positions: int | None = Field(default=None, ge=1, le=100)
     telegram_enabled: bool | None = None
@@ -528,9 +528,6 @@ class SettingsRequest(BaseModel):
         if (self.risk_per_trade_pct is not None and self.risk_max_total_open_pct is not None
                 and self.risk_per_trade_pct > self.risk_max_total_open_pct):
             raise ValueError("Risk per trade cannot exceed maximum total open risk.")
-        if (self.risk_max_daily_loss_pct is not None and self.risk_max_total_open_pct is not None
-                and self.risk_max_total_open_pct > self.risk_max_daily_loss_pct * 10):
-            raise ValueError("Maximum total open risk is inconsistent with the daily loss limit.")
         return self
 
 
