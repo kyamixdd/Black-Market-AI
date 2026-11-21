@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import numpy as np
 from datetime import datetime, timezone
 from typing import Any
 
