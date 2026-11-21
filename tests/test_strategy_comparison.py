@@ -82,8 +82,10 @@ def test_promotion_gate_fails_closed_for_insufficient_samples_or_folds():
     assert result["failure_reasons"]
 
 
-def test_promotion_gate_accepts_only_nonoverlapping_stable_folds():
+def test_promotion_gate_requires_economic_calibration_and_champion_evidence_even_for_stable_folds():
     folds = [{"f1_macro": 0.7, "train_end_index": 99, "test_start_index": 100} for _ in range(3)]
     model = {"valid": True, "passes_threshold": True, "folds": folds, "aggregated": {"mean_f1": 0.7}}
     result = ModelPromotionGate(PromotionGateCriteria(min_samples=100, min_folds=3, min_mean_f1=0.5)).evaluate({"ensemble_passes": True, "rf": model, "xgb": model}, sample_count=200)
-    assert result["passes"] is True
+    assert result["passes"] is False
+    assert any("out-of-fold predictions/probabilities missing" in reason for reason in result["failure_reasons"])
+    assert any("active champion comparison evidence missing" in reason for reason in result["failure_reasons"])
