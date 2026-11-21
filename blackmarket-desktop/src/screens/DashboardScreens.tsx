@@ -229,6 +229,18 @@ export type DashboardPreferences = {
   showRiskAlerts: boolean
 }
 
+export type ModelPerformance = {
+  prediction_count: number
+  accuracy_pct: number | null
+  precision_macro_pct: number | null
+  recall_macro_pct: number | null
+  trade_count: number
+  profit_factor: number | 'infinite' | null
+  win_rate_pct: number | null
+  max_drawdown_pct: number | null
+  sharpe_ratio: number | null
+}
+
 export type WorkspaceData = {
   volumeAnalytics?: {
     total_volume?: number
@@ -251,6 +263,7 @@ export type WorkspaceData = {
   strategies: WorkspaceStrategy[]
   strategyWeights: Record<string, unknown>
   predictions: WorkspacePrediction[]
+  performance: ModelPerformance | null
   models: WorkspaceModel[]
   learning: WorkspaceLearning | null
   risk: WorkspaceRisk | null
@@ -769,12 +782,30 @@ function IntelligenceScreen({ data }: { data: WorkspaceData }) {
   )
 }
 
+function metricPercent(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(2)}%`
+}
+function metricNumber(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '—' : value.toFixed(2)
+}
 function LearningScreen({ data }: { data: WorkspaceData }) {
   const promotions = data.events.filter((event) => ['MODEL_PROMOTED', 'MODEL_ROLLED_BACK', 'MODEL_TRAINED'].includes(event.event_type ?? ''))
   return (
     <>
       <ScreenHeader title="Learning" description="Local model status, predictions, outcomes, and persisted promotion or rollback events" />
       <div className="workspace-summary"><SummaryCard label="MODEL STATUS" value={data.learning?.model_status ?? 'Unavailable'} /><SummaryCard label="LEARNING LOOP" value={data.learning?.training_state ?? '—'} detail={data.learning?.last_cycle_status ?? 'No cycle reported'} /><SummaryCard label="ACTIVE VERSION" value={data.learning?.version ?? '—'} /><SummaryCard label="BOOTSTRAP SAMPLES" value={String(data.learning?.training_samples ?? '—')} detail="Historical labeled hourly candles" /><SummaryCard label="ONLINE UPDATES" value={String(data.learning?.river_updates ?? '—')} /><SummaryCard label="PREDICTIONS" value={String(data.learning?.predictions_total ?? '—')} /><SummaryCard label="RESOLVED" value={String(data.learning?.predictions_resolved ?? '—')} /><SummaryCard label="MEASURED ACCURACY" value={data.learning?.accuracy == null ? '—' : `${data.learning.accuracy.toFixed(2)}%`} detail="Resolved outcomes only" /></div>
+      <h2 className="workspace-section-title">Model performance · evaluated data only</h2>
+      <div className="workspace-summary">
+        <SummaryCard label="PREDICTION ACCURACY" value={metricPercent(data.performance?.accuracy_pct)} detail={`${data.performance?.prediction_count ?? 0} resolved predictions`} />
+        <SummaryCard label="PRECISION · MACRO" value={metricPercent(data.performance?.precision_macro_pct)} detail="Macro average across observed classes" />
+        <SummaryCard label="RECALL · MACRO" value={metricPercent(data.performance?.recall_macro_pct)} detail="Macro average across observed classes" />
+        <SummaryCard label="PROFIT FACTOR" value={data.performance?.profit_factor === 'infinite' ? '∞' : metricNumber(data.performance?.profit_factor)} detail="Gross profit / gross loss" />
+        <SummaryCard label="WIN RATE" value={metricPercent(data.performance?.win_rate_pct)} detail={`${data.performance?.trade_count ?? 0} closed paper trades`} />
+        <SummaryCard label="MAX DRAWDOWN" value={metricPercent(data.performance?.max_drawdown_pct)} detail="Closed-trade equity sequence" />
+        <SummaryCard label="SHARPE RATIO" value={metricNumber(data.performance?.sharpe_ratio)} detail="Daily realized P&L; annualized" />
+        <SummaryCard label="TRADES EVALUATED" value={String(data.performance?.trade_count ?? 0)} detail="Closed paper trades only" />
+      </div>
+      <div className="workspace-note">Classification metrics use resolved predictions; trading metrics use closed paper trades. Sharpe uses daily realized P&L divided by initial paper equity, annualized with √365, and is unavailable with fewer than two daily observations. Missing metrics are shown as unavailable, not zero.</div>
       <h2 className="workspace-section-title">Model registry · candidate / champion state</h2>
       {data.models.length ? <Table minWidth={900}>
         <TableHead labels={['VERSION', 'MODEL', 'STATUS', 'ACTIVE', 'CHAMPION', 'PARENT', 'TRAINED']} />

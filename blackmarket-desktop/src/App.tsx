@@ -198,6 +198,7 @@ const EMPTY_DATA: DashboardData = {
   strategies: [],
   strategyWeights: {},
   predictions: [],
+  performance: null,
   models: [],
   riskAlerts: [],
   settings: null,
@@ -735,14 +736,16 @@ function App() {
       }
 
       if (activeScreen === 'Learning') {
-        const [predictionsPayload, modelPayload] = await Promise.all([
+        const [predictionsPayload, modelPayload, performancePayload] = await Promise.all([
           requestJson<{ predictions?: WorkspaceData['predictions'] }>('/learning/predictions?limit=1000'),
           requestJson<{ models?: WorkspaceData['models'] }>('/learning/models'),
+          requestJson<WorkspaceData['performance']>('/learning/performance'),
         ])
         if (!active) return
         setData((current) => ({
           ...current,
           predictions: predictionsPayload?.predictions ?? current.predictions,
+          performance: performancePayload ?? current.performance,
           models: modelPayload?.models ?? current.models,
         }))
       }
