@@ -340,3 +340,22 @@ class TestEvaluationResult:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+def test_challenger_promotion_rejects_pass_flag_without_oof_provenance():
+    manager = object.__new__(ModelManager)
+    evaluation = EvaluationResult(
+        model_version="candidate_v1",
+        model_type="random_forest",
+        net_expectancy=0.5,
+        max_drawdown_pct=0.0,
+        calibration_score=1.0,
+        stability_score=1.0,
+        regime_performance={},
+        total_samples=1000,
+        primary_metric="f1",
+        primary_value=1.0,
+        passes_criteria=True,
+        failure_reasons=[],
+        promotion_evidence={"passes": True},
+    )
+    assert manager.promote_challenger("candidate_v1", evaluation) is False
