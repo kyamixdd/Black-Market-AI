@@ -44,8 +44,6 @@ class DatasetBuilder:
             empty = (np.array([]), np.array([]))
             if include_metadata:
                 return (*empty, np.array([], dtype=np.int64), {key: np.array([]) for key in ("actual_return_pct", "regimes", "horizon_minutes", "transaction_costs", "markets")})
-            if include_metadata:
-                return (*empty, np.array([], dtype=np.int64), {key: np.array([]) for key in ("actual_return_pct", "regimes", "horizon_minutes", "transaction_costs", "markets")})
             return (*empty, np.array([], dtype=np.int64)) if include_timestamps else empty
 
         X_list = []
