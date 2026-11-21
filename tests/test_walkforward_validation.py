@@ -67,3 +67,19 @@ def test_insufficient_data_does_not_return_valid_score():
     )
     assert not result["valid"]
     assert result["reason"] == "insufficient_data"
+
+
+
+def test_timestamp_purge_uses_elapsed_horizon_with_numeric_boundaries():
+    X = np.arange(40, dtype=float).reshape(20, 2)
+    y = (np.arange(20) % 2).astype(int)
+    ts = np.arange(20, dtype=np.int64) * 60_000
+    result = WalkForwardValidator(n_splits=2, min_train_size=4, test_size=2).validate(
+        X, y, lambda: DummyClassifier(strategy="most_frequent"),
+        timestamps=ts, purge_gap_ms=60_000,
+    )
+    assert result["valid"]
+    for fold in result["folds"]:
+        assert fold["train_end_time"] < fold["test_start_time"] - 60_000
+        assert isinstance(fold["train_end_time"], (int, np.integer))
+        assert isinstance(fold["test_start_time"], (int, np.integer))

@@ -35,11 +35,11 @@ class ModelTrainer:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.last_river_path: Path | None = None
 
-    def train_and_validate(self, X: np.ndarray | None = None, y: np.ndarray | None = None) -> dict[str, Any]:
+    def train_and_validate(self, X: np.ndarray | None = None, y: np.ndarray | None = None, timestamps: np.ndarray | None = None) -> dict[str, Any]:
         """Full training pipeline: build dataset, validate, train, register."""
         # 1. Build dataset
         if X is None or y is None:
-            X, y = self.dataset_builder.build_dataset()
+            X, y, timestamps = self.dataset_builder.build_dataset(include_timestamps=True)
         if len(X) == 0:
             return {"status": "insufficient_data", "samples": 0}
 
@@ -48,8 +48,15 @@ class ModelTrainer:
         if X.ndim != 2 or y.ndim != 1 or len(X) != len(y) or len(np.unique(y)) < 2:
             return {"status": "insufficient_data", "samples": len(y), "reason": "invalid_or_single_class_dataset"}
 
-        # 2. Walk-forward validation
-        validation = self.validator.validate_ensemble(X, y)
+        # Require timestamps for leakage-safe chronological validation.
+        if timestamps is None:
+            return {"status": "validation_failed", "samples": len(y), "reason": "timestamps_required_for_walk_forward"}
+        timestamps = np.asarray(timestamps)
+        if timestamps.ndim != 1 or len(timestamps) != len(y):
+            return {"status": "validation_failed", "samples": len(y), "reason": "timestamp_alignment_error"}
+
+        # 2. Walk-forward validation; live forecasts use a one-hour target horizon.
+        validation = self.validator.validate_ensemble(X, y, timestamps=timestamps, purge_gap_ms=60 * 60 * 1000)
         promotion_gate = ModelPromotionGate().evaluate(validation, sample_count=len(y))
         validation["promotion_gate"] = promotion_gate
         logger.info("Validation complete: RF passes=%s, XGB passes=%s",

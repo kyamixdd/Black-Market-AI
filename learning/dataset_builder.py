@@ -25,23 +25,28 @@ class DatasetBuilder:
         self.feature_engine = feature_engine or FeatureEngine()
         self.session_maker = get_session_maker()
 
-    def build_dataset(self, min_samples: int = WALK_FORWARD_MIN_SAMPLES) -> tuple[np.ndarray, np.ndarray]:
+    def build_dataset(self, min_samples: int = WALK_FORWARD_MIN_SAMPLES, *, include_timestamps: bool = False):
         """
         Build feature matrix X and target vector y from resolved predictions.
         Returns (X, y) where y is class indices: 0=DOWN, 1=FLAT, 2=UP
         """
         predictions = self.repo.get_predictions_history(limit=10000)
 
-        # Filter to resolved predictions with outcomes
-        resolved = [p for p in predictions if p.is_correct is not None]
+        # Chronology is explicit: repository order is not a training guarantee.
+        resolved = sorted(
+            (p for p in predictions if p.is_correct is not None and p.created_at is not None),
+            key=lambda p: p.created_at,
+        )
         logger.info("Found %d resolved predictions out of %d total", len(resolved), len(predictions))
 
         if len(resolved) < min_samples:
             logger.warning("Insufficient resolved samples: %d < %d required", len(resolved), min_samples)
-            return np.array([]), np.array([])
+            empty = (np.array([]), np.array([]))
+            return (*empty, np.array([], dtype=np.int64)) if include_timestamps else empty
 
         X_list = []
         y_list = []
+        timestamp_list = []
 
         for pred in resolved:
             try:
@@ -58,17 +63,27 @@ class DatasetBuilder:
                 if features is not None:
                     X_list.append(features)
                     y_list.append(self._outcome_to_class(pred.actual_outcome))
+                    timestamp_list.append(
+                        int(pred.eval_time.timestamp() * 1000)
+                        if pred.eval_time is not None
+                        else int(pred.created_at.timestamp() * 1000)
+                        + int(pred.horizon_minutes or 60) * 60 * 1000
+                    )
             except Exception as exc:
                 logger.warning("Failed to build features for %s: %s", pred.prediction_id, exc)
                 continue
 
         if not X_list:
-            return np.array([]), np.array([])
+            empty = (np.array([]), np.array([]))
+            return (*empty, np.array([], dtype=np.int64)) if include_timestamps else empty
 
         X = np.array(X_list, dtype=np.float32)
         y = np.array(y_list, dtype=np.int32)
+        timestamps = np.asarray(timestamp_list, dtype=np.int64)
+        order = np.argsort(timestamps, kind="stable")
+        X, y, timestamps = X[order], y[order], timestamps[order]
         logger.info("Built dataset: X=%s, y=%s", X.shape, y.shape)
-        return X, y
+        return (X, y, timestamps) if include_timestamps else (X, y)
 
     def _build_features_for_prediction(self, pred: PredictionModel) -> np.ndarray | None:
         """Build feature vector for a prediction at its creation time."""
@@ -95,7 +110,7 @@ class DatasetBuilder:
                         CandleModel.symbol == symbol,
                         CandleModel.market == market,
                         CandleModel.timeframe == tf,
-                        CandleModel.open_time <= timestamp_ms,
+                        CandleModel.close_time <= timestamp_ms,
                     )
                     .order_by(CandleModel.open_time.desc())
                     .limit(lookback_candles)
@@ -117,19 +132,28 @@ class DatasetBuilder:
         """Convert outcome string to class index."""
         return {"DOWN": 0, "FLAT": 1, "UP": 2}.get(outcome, 1)
 
-    def save_dataset(self, X: np.ndarray, y: np.ndarray, version: str) -> str:
+    def save_dataset(self, X: np.ndarray, y: np.ndarray, version: str, timestamps: np.ndarray | None = None) -> str:
         """Save dataset to disk for reproducibility."""
         data_dir = Path(__file__).resolve().parents[1] / "data" / "datasets"
         data_dir.mkdir(parents=True, exist_ok=True)
 
         path = data_dir / f"dataset_{version}.npz"
-        np.savez_compressed(path, X=X, y=y)
+        if timestamps is not None and (np.asarray(timestamps).ndim != 1 or len(timestamps) != len(y)):
+            raise ValueError("timestamps must be a 1D array aligned with y")
+        payload = {"X": X, "y": y}
+        if timestamps is not None:
+            payload["timestamps"] = np.asarray(timestamps, dtype=np.int64)
+        np.savez_compressed(path, **payload)
         logger.info("Saved dataset to %s", path)
         return str(path)
 
-    def load_dataset(self, version: str) -> tuple[np.ndarray, np.ndarray]:
+    def load_dataset(self, version: str, *, include_timestamps: bool = False):
         """Load dataset from disk."""
         data_dir = Path(__file__).resolve().parents[1] / "data" / "datasets"
         path = data_dir / f"dataset_{version}.npz"
         data = np.load(path)
+        if include_timestamps:
+            if "timestamps" not in data:
+                raise ValueError("saved dataset does not contain timestamps; rebuild it chronologically")
+            return data["X"], data["y"], data["timestamps"]
         return data["X"], data["y"]

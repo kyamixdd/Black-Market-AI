@@ -131,7 +131,7 @@ class LiveLearningService:
                     candle["low"], candle["close"], candle["volume"], candle["close_time"],
                 )
 
-    def _bootstrap_samples(self, pairs: list[tuple[str, str]], histories: dict[tuple[str, str], list[dict[str, Any]]]) -> tuple[np.ndarray, np.ndarray]:
+    def _bootstrap_samples(self, pairs: list[tuple[str, str]], histories: dict[tuple[str, str], list[dict[str, Any]]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         samples: list[tuple[int, np.ndarray, int]] = []
         for market, symbol in pairs:
             candles = histories.get((market, symbol), [])
@@ -148,9 +148,10 @@ class LiveLearningService:
                 samples.append((int(candles[index]["close_time"]), feature, label))
         samples.sort(key=lambda item: item[0])
         if not samples:
-            return np.empty((0, 36), dtype=np.float32), np.empty((0,), dtype=np.int32)
+            return np.empty((0, 36), dtype=np.float32), np.empty((0,), dtype=np.int32), np.empty((0,), dtype=np.int64)
         return (np.stack([item[1] for item in samples]).astype(np.float32),
-                np.asarray([item[2] for item in samples], dtype=np.int32))
+                np.asarray([item[2] for item in samples], dtype=np.int32),
+                np.asarray([item[0] + 60 * 60 * 1000 for item in samples], dtype=np.int64))
 
     async def _bootstrap(self) -> None:
         self._last_bootstrap_attempt = asyncio.get_running_loop().time()
@@ -170,7 +171,7 @@ class LiveLearningService:
                 histories[(market, symbol)] = await self._fetch_history(market, symbol, 1000)
             except Exception as exc:
                 logger.warning("Historical model bootstrap failed for %s %s: %s", market, symbol, exc)
-        X, y = self._bootstrap_samples(self._pairs, histories)
+        X, y, timestamps = self._bootstrap_samples(self._pairs, histories)
         self.training_samples = int(len(y))
         if len(y) < 300 or len(np.unique(y)) < 2:
             self.state = "waiting_for_history"
@@ -180,14 +181,14 @@ class LiveLearningService:
 
         self.state = "training"
         self.last_cycle_status = f"validating:{len(y)}_historical_samples"
-        result = await asyncio.to_thread(self.trainer.train_and_validate, X, y)
+        result = await asyncio.to_thread(self.trainer.train_and_validate, X, y, timestamps)
         if result.get("status") == "trained":
             self._activate_batch_models(result)
             self.state = "trained"
             self.last_cycle_status = "validated_batch_models_trained"
             logger.info("Historical model bootstrap validated and trained on %d samples", len(y))
         else:
-            river_result = await asyncio.to_thread(self._train_validate_river, X, y)
+            river_result = await asyncio.to_thread(self._train_validate_river, X, y, timestamps)
             if river_result.get("passes", False) and river_result.get("model") is not None:
                 self._river_model = river_result["model"]
                 self.predictor.river_model = self._river_model
@@ -213,11 +214,17 @@ class LiveLearningService:
         )
         await self._predict_latest(histories)
 
-    def _train_validate_river(self, X: np.ndarray, y: np.ndarray) -> dict[str, Any]:
+    def _train_validate_river(self, X: np.ndarray, y: np.ndarray, timestamps: np.ndarray | None = None) -> dict[str, Any]:
         """Chronologically hold out the newest 20% before allowing River promotion."""
         if len(X) < 100 or len(np.unique(y)) < 2:
             return {"passes": False, "reason": "insufficient_validation_history"}
         split = max(1, int(len(X) * 0.8))
+        if timestamps is not None and len(timestamps) == len(X):
+            cutoff = int(timestamps[split]) - 60 * 60 * 1000
+            train_end = int(np.searchsorted(timestamps, cutoff, side="left"))
+            if train_end < 100 or train_end >= split:
+                return {"passes": False, "reason": "insufficient_purged_chronological_training"}
+            split = train_end
         model = compose.Pipeline(
             ("scaler", preprocessing.StandardScaler()),
             ("model", tree.HoeffdingTreeClassifier(grace_period=100, delta=1e-5, tau=0.05)),

@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 from config import MIN_VALIDATION_F1, WALK_FORWARD_MIN_SAMPLES
 
-def select_confidence_threshold(probabilities: Any, forward_returns: Any, *, fee_rate: float = 0.0004, candidates: tuple[float, ...] = tuple(round(x, 2) for x in np.arange(0.50, 0.86, 0.05)), min_trades: int = 10) -> dict[str, Any]:
+def select_confidence_threshold(probabilities: Any, forward_returns: Any, *, fee_rate: float = 0.0004, candidates: tuple[float, ...] = tuple(round(x, 2) for x in np.arange(0.50, 0.86, 0.05)), min_trades: int = 10, test_probabilities: Any = None, test_forward_returns: Any = None) -> dict[str, Any]:
     """Select a confidence cutoff using prior, chronologically held-out calibration outcomes."""
     probs = np.asarray(probabilities, dtype=float).reshape(-1)
     returns = np.asarray(forward_returns, dtype=float).reshape(-1)
@@ -31,6 +31,14 @@ def select_confidence_threshold(probabilities: Any, forward_returns: Any, *, fee
         fees = np.abs(np.diff(np.concatenate(([0.0], signal)))) * fee_rate
         if signal[-1] != 0:
             fees[-1] += fee_rate
+        # Attribute exit fees to the last active observation so threshold
+        # expectancy cannot omit costs merely because the position is flat
+        # on the row where the exit transition is recorded.
+        for index in np.flatnonzero(~active & (fees > 0)):
+            previous_active = np.flatnonzero(active[:index])
+            if previous_active.size:
+                fees[previous_active[-1]] += fees[index]
+                fees[index] = 0.0
         net = signal * returns - fees
         active_net = net[active]
         gains = float(active_net[active_net > 0].sum())
@@ -42,7 +50,19 @@ def select_confidence_threshold(probabilities: Any, forward_returns: Any, *, fee
     if not evaluations:
         return {"threshold": 1.01, "status": "no_threshold_met_minimum_trades", "calibration_samples": len(probs), "candidate_results": []}
     best = max(evaluations, key=lambda row: (row["net_expectancy_per_trade"], -row["max_drawdown_pct"], row["coverage_pct"]))
-    return {"threshold": best["threshold"], "status": "selected_from_historical_calibration", "calibration_samples": len(probs), "selected_metrics": best, "candidate_results": evaluations, "selection_objective": "maximum net expectancy after fees; tie-break lower drawdown then coverage"}
+    result = {"threshold": best["threshold"], "status": "selected_from_historical_calibration", "calibration_samples": len(probs), "selected_metrics": best, "candidate_results": evaluations, "selection_objective": "maximum net expectancy after fees; tie-break lower drawdown then coverage"}
+    if (test_probabilities is None) != (test_forward_returns is None):
+        raise ValueError("test_probabilities and test_forward_returns must be provided together")
+    if test_probabilities is not None:
+        heldout = select_confidence_threshold(
+            test_probabilities, test_forward_returns, fee_rate=fee_rate,
+            candidates=(best["threshold"],), min_trades=min_trades,
+        )
+        result["heldout_test_metrics"] = heldout.get("selected_metrics")
+        result["heldout_test_status"] = heldout.get("status")
+        result["test_samples"] = int(np.asarray(test_probabilities).size)
+        result["calibration_test_boundary"] = "threshold selected using calibration arrays only; test arrays are evaluation-only"
+    return result
 
 @dataclass(frozen=True)
 class PromotionGateCriteria:
