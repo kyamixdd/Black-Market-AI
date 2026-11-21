@@ -18,7 +18,7 @@ STRATEGY_NAMES = (
 )
 
 
-def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004) -> dict[str, Any]:
+def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, timeframe: str = "1h") -> dict[str, Any]:
     """Compare strategies on one chronologically ordered candle series.
 
     Feature row t uses candles through t. Its target is the direction of close
@@ -115,7 +115,7 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004) 
         if name == "Buy-and-hold":
             costs[-1:] += fee_rate  # exit fee at evaluation end
         net = pnl - costs
-        results.append(_metrics(name, net, signal, eval_returns, fee_rate))
+        results.append(_metrics(name, net, signal, eval_returns, timeframe))
     return {
         "status": "ok",
         "symbol": str(frame.iloc[0].get("symbol", "")),
@@ -154,7 +154,7 @@ def _positive_probability(model: Any, X: np.ndarray) -> np.ndarray:
     return probabilities[:, classes.index(1)]
 
 
-def _metrics(name: str, net_returns: np.ndarray, signal: np.ndarray, gross_returns: np.ndarray, fee_rate: float) -> dict[str, Any]:
+def _metrics(name: str, net_returns: np.ndarray, signal: np.ndarray, gross_returns: np.ndarray, timeframe: str) -> dict[str, Any]:
     if len(net_returns) == 0:
         return {"strategy": name, "status": "insufficient_data"}
     equity = np.cumprod(1.0 + net_returns)
@@ -162,10 +162,10 @@ def _metrics(name: str, net_returns: np.ndarray, signal: np.ndarray, gross_retur
     peaks = np.maximum.accumulate(np.concatenate(([1.0], equity)))[1:]
     drawdowns = (peaks - equity) / np.maximum(peaks, 1e-12)
     volatility = float(np.std(net_returns, ddof=1)) if len(net_returns) > 1 else 0.0
-    bars_per_year = 365.0 * 24.0  # 1h default annualization; endpoint reports timeframe
+    seconds_per_bar = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}.get(timeframe, 3600)\n    bars_per_year = 365.0 * 86400.0 / seconds_per_bar
     sharpe = float(np.mean(net_returns) / volatility * np.sqrt(bars_per_year)) if volatility > 0 else None
     active = signal != 0
-    trade_count = int(np.count_nonzero(np.abs(np.diff(np.concatenate(([0.0], signal)))) > 0) / 2)
+    previous = np.concatenate(([0.0], signal[:-1]))\n    trade_count = int(np.count_nonzero((signal != 0) & ((previous == 0) | (np.sign(previous) != np.sign(signal)))))
     winning = net_returns[active & (net_returns > 0)]
     losing = net_returns[active & (net_returns < 0)]
     gross_profit = float(winning.sum())

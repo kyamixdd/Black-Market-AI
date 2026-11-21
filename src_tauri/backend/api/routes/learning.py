@@ -143,7 +143,7 @@ async def get_strategy_comparison(
         {**candle, "symbol": symbol, "market": market, "timeframe": timeframe}
         for candle in candles
     ]
-    return compare_strategies(normalized)
+    return compare_strategies(normalized, timeframe=timeframe)
 
 
 @router.get("/models", response_model=ModelRegistryListResponse)
