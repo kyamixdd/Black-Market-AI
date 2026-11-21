@@ -1313,3 +1313,46 @@ async def test_partial_close_rejects_full_or_excess_quantity_without_mutation():
     with pytest.raises(ValueError):
         await simulator._partial_close_position(position, 110.0, 0.1)
     assert position == before
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("market,leverage", [("SPOT", 1.0), ("FUTURES", 5.0)])
+async def test_opening_position_at_entry_price_does_not_artificially_reduce_equity(market, leverage):
+    from types import SimpleNamespace
+    from src_tauri.backend.bridge.orchestrator_bridge import OrchestratorBridge
+
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *_args: 0.0
+    simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
+    simulator.validate_new_position = lambda *_args: (True, "OK")
+    simulator._calculate_order_quantity = lambda *_args: (1.0, leverage)
+    bridge = object.__new__(OrchestratorBridge)
+    bridge.simulator = simulator
+    bridge._all_closed_trades = lambda: []
+    bridge.get_trade_statistics = lambda: {"max_drawdown_pct": 0.0}
+
+    before = bridge.get_portfolio_summary()
+    signal = {
+        "signal_id": f"EQUITY-{market}",
+        "symbol": "BTCUSDT",
+        "market": market,
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": leverage,
+    }
+    position_id = await simulator.execute_signal(signal, quantity_override=1.0)
+    assert position_id is not None
+    await simulator.update_prices(market, "BTCUSDT", 100.0)
+    after = bridge.get_portfolio_summary()
+
+    assert after["total_balance"] == pytest.approx(before["total_balance"])
+    assert after["total_return_pct"] == pytest.approx(before["total_return_pct"])
+    if market == "SPOT":
+        assert after["spot_available_balance"] == pytest.approx(simulator.initial_spot_balance - 100.0)
+        assert after["spot_used_capital"] == pytest.approx(100.0)
+    else:
+        assert after["futures_available_balance"] == pytest.approx(simulator.initial_futures_balance - 20.0)
+        assert after["futures_used_margin"] == pytest.approx(20.0)

@@ -185,6 +185,13 @@ class PortfolioBalanceResponse(BaseModel):
     monthly_pnl: float = Field(0.0, description="Realized P&L from trades closed during the current UTC month.")
     realized_pnl: float = Field(0.0, description="Realized P&L across completed trades.")
     unrealized_pnl: float = Field(0.0, description="Current unrealized P&L across open positions.")
+    spot_available_balance: float = 0.0
+    futures_available_balance: float = 0.0
+    total_available_balance: float = 0.0
+    spot_used_capital: float = 0.0
+    futures_used_margin: float = 0.0
+    total_used_margin: float = 0.0
+    total_used_capital: float = 0.0
     drawdown_pct: float = 0.0
 
 

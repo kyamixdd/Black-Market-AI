@@ -264,11 +264,12 @@ class OrchestratorBridge:
     def get_portfolio_summary(self) -> dict:
         """Get portfolio summary."""
         sim = self.simulator
-        spot_unrealized = sum(p.get("unrealized_pnl", 0) for p in sim.spot_positions.values())
-        futures_unrealized = sum(p.get("unrealized_pnl", 0) for p in sim.futures_positions.values())
-        spot_equity = sim.get_balance("SPOT") + spot_unrealized
-        futures_equity = sim.get_balance("FUTURES") + futures_unrealized
-        total = spot_equity + futures_equity
+        account = sim.get_account_equity_breakdown()
+        spot_unrealized = account["spot_unrealized_pnl"]
+        futures_unrealized = account["futures_unrealized_pnl"]
+        spot_equity = account["spot_equity"]
+        futures_equity = account["futures_equity"]
+        total = account["total_equity"]
         now = datetime.now(timezone.utc)
         today = now.date()
         month = (now.year, now.month)
@@ -314,6 +315,13 @@ class OrchestratorBridge:
             "monthly_pnl": monthly_realized,
             "realized_pnl": realized,
             "unrealized_pnl": spot_unrealized + futures_unrealized,
+            "spot_available_balance": account["spot_available_balance"],
+            "futures_available_balance": account["futures_available_balance"],
+            "total_available_balance": account["total_available_balance"],
+            "spot_used_capital": account["spot_used_capital"],
+            "futures_used_margin": account["futures_used_margin"],
+            "total_used_margin": account["total_used_margin"],
+            "total_used_capital": account["total_used_capital"],
             "drawdown_pct": stats["max_drawdown_pct"],
         }
 
