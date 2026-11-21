@@ -241,8 +241,8 @@ impl BackendSupervisor {
             Probe::Unavailable => {}
         }
 
-        let python = match find_python(&project_root) {
-            Ok(python) => python,
+        let launcher = match find_backend_launcher(self.resource_dir.as_deref(), &project_root) {
+            Ok(launcher) => launcher,
             Err(error) => {
                 drop(process_lock);
                 self.fail(error, Some(log_path));
@@ -275,11 +275,11 @@ impl BackendSupervisor {
             }
         };
 
-        let mut command = Command::new(&python.executable);
+        let mut command = Command::new(&launcher.executable);
         let shutdown_token = Uuid::new_v4().simple().to_string();
         command
-            .args(&python.prefix_args)
-            .args(["-m", "src_tauri.backend.main"])
+            .args(&launcher.prefix_args)
+            .args(&launcher.entry_args)
             .current_dir(&project_root)
             .env("PYTHONPATH", &project_root)
             .env("PYTHONUNBUFFERED", "1")
@@ -324,8 +324,8 @@ impl BackendSupervisor {
                 drop(process_lock);
                 self.fail(
                     format!(
-                        "Could not launch Python ({}) from {}: {error}",
-                        python.executable.display(),
+                        "Could not launch the bundled backend ({}) from {}: {error}",
+                        launcher.executable.display(),
                         project_root.display()
                     ),
                     Some(log_path),
@@ -667,6 +667,38 @@ fn parse_health_response(response: &str) -> Probe {
         return Probe::Starting;
     }
     Probe::Ready
+}
+
+struct BackendLauncher {
+    executable: PathBuf,
+    prefix_args: Vec<OsString>,
+    entry_args: Vec<OsString>,
+}
+
+fn find_backend_launcher(
+    resource_dir: Option<&Path>,
+    project_root: &Path,
+) -> Result<BackendLauncher, String> {
+    #[cfg(windows)]
+    if let Some(resources) = resource_dir {
+        let packaged = [
+            resources.join("blackmarket_backend").join("backend").join("BlackMarketBackend.exe"),
+            resources.join("backend").join("BlackMarketBackend.exe"),
+        ];
+        if let Some(executable) = packaged.into_iter().find(|path| path.is_file()) {
+            return Ok(BackendLauncher {
+                executable,
+                prefix_args: Vec::new(),
+                entry_args: Vec::new(),
+            });
+        }
+    }
+    let python = find_python(project_root)?;
+    Ok(BackendLauncher {
+        executable: PathBuf::from(python.executable),
+        prefix_args: python.prefix_args,
+        entry_args: vec![OsString::from("-m"), OsString::from("src_tauri.backend.main")],
+    })
 }
 
 struct PythonLauncher {
