@@ -274,10 +274,31 @@ class ModelManager:
 
     def promote_challenger(self, challenger_version: str, evaluation: EvaluationResult) -> bool:
         """Promote challenger to champion if all criteria pass."""
+        evidence = evaluation.promotion_evidence or {}
+        provenance = evidence.get("validation_provenance") or {}
+        models = evidence.get("models") or {}
+        economics = evidence.get("economic_evidence") or {}
+        champions = evidence.get("champion_evidence") or {}
+        evidence_complete = (
+            evidence.get("passes") is True
+            and provenance.get("method") == "purged_timestamp_walk_forward"
+            and provenance.get("out_of_sample") is True
+            and provenance.get("timestamps_required") is True
+            and int(provenance.get("purge_gap_ms", 0)) >= int(provenance.get("target_horizon_ms", 1))
+            and int(provenance.get("target_horizon_ms", 0)) > 0
+            and int(provenance.get("rf_oof_count", 0)) > 0
+            and int(provenance.get("xgb_oof_count", 0)) > 0
+            and models.get("rf", {}).get("passes") is True
+            and models.get("xgb", {}).get("passes") is True
+            and economics.get("rf", {}).get("status") == "ok"
+            and economics.get("xgb", {}).get("status") == "ok"
+            and champions.get("rf", {}).get("status") == "ok"
+            and champions.get("xgb", {}).get("status") == "ok"
+        )
         if (not evaluation.passes_criteria
                 or evaluation.model_version != challenger_version
-                or evaluation.promotion_evidence.get("passes") is not True):
-            logger.warning(f"Cannot promote {challenger_version}: comprehensive gate evidence missing or failed - {evaluation.failure_reasons}")
+                or not evidence_complete):
+            logger.warning(f"Cannot promote {challenger_version}: complete out-of-sample evidence missing or failed - {evaluation.failure_reasons}")
             return False
 
         # Get champion for comparison
