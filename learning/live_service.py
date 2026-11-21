@@ -190,19 +190,18 @@ class LiveLearningService:
         else:
             river_result = await asyncio.to_thread(self._train_validate_river, X, y, timestamps)
             if river_result.get("passes", False) and river_result.get("model") is not None:
-                self._river_model = river_result["model"]
-                self.predictor.river_model = self._river_model
-                self.predictor.is_trained = True
-                self.predictor.version = river_result["version"]
+                # River's simple holdout accuracy/F1 is not the comprehensive
+                # promotion evidence required for automated activation. Keep it
+                # registered as an inactive candidate; never bypass the shared
+                # cost-aware champion gate.
                 self.repo.save_model_registry({
                     "version": river_result["version"], "model_type": "river",
                     "metrics": river_result["metrics"],
                     "file_path": str(river_result["path"]),
-                    "status": "VALIDATED", "is_active": True,
+                    "status": "CANDIDATE", "is_active": False, "is_champion": False,
                 })
-                self.repo.promote_model(river_result["version"])
-                self.state = "online_only"
-                self.last_cycle_status = "batch_rejected_river_walk_forward_holdout_passed"
+                self.state = "validation_failed"
+                self.last_cycle_status = "river_candidate_held_unpromoted_comprehensive_gate_required"
             else:
                 self.state = "validation_failed"
                 self.last_cycle_status = f"all_models_rejected:{river_result.get('reason', result.get('status', 'training_failed'))}"
