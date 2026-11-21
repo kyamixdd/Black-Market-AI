@@ -219,14 +219,19 @@ class ModelTrainer:
         if not isinstance(evidence, dict) or evidence.get("passes") is not True:
             return False
         provenance = evidence.get("validation_provenance") or {}
+        def safe_int(value: Any) -> int:
+            try:
+                return int(value)
+            except (TypeError, ValueError, OverflowError):
+                return -1
         return (
             provenance.get("method") == "purged_timestamp_walk_forward"
             and provenance.get("out_of_sample") is True
             and provenance.get("timestamps_required") is True
-            and int(provenance.get("purge_gap_ms", 0)) >= int(provenance.get("target_horizon_ms", 1))
-            and int(provenance.get("target_horizon_ms", 0)) > 0
-            and int(provenance.get("rf_oof_count", 0)) > 0
-            and int(provenance.get("xgb_oof_count", 0)) > 0
+            and safe_int(provenance.get("purge_gap_ms", 0)) >= safe_int(provenance.get("target_horizon_ms", 1))
+            and safe_int(provenance.get("target_horizon_ms", 0)) > 0
+            and safe_int(provenance.get("rf_oof_count", 0)) > 0
+            and safe_int(provenance.get("xgb_oof_count", 0)) > 0
             and (evidence.get("models") or {}).get("rf", {}).get("passes") is True
             and (evidence.get("models") or {}).get("xgb", {}).get("passes") is True
             and (evidence.get("economic_evidence") or {}).get("rf", {}).get("status") == "ok"
