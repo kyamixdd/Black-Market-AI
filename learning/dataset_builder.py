@@ -132,19 +132,28 @@ class DatasetBuilder:
         """Convert outcome string to class index."""
         return {"DOWN": 0, "FLAT": 1, "UP": 2}.get(outcome, 1)
 
-    def save_dataset(self, X: np.ndarray, y: np.ndarray, version: str) -> str:
+    def save_dataset(self, X: np.ndarray, y: np.ndarray, version: str, timestamps: np.ndarray | None = None) -> str:
         """Save dataset to disk for reproducibility."""
         data_dir = Path(__file__).resolve().parents[1] / "data" / "datasets"
         data_dir.mkdir(parents=True, exist_ok=True)
 
         path = data_dir / f"dataset_{version}.npz"
-        np.savez_compressed(path, X=X, y=y)
+        if timestamps is not None and (np.asarray(timestamps).ndim != 1 or len(timestamps) != len(y)):
+            raise ValueError("timestamps must be a 1D array aligned with y")
+        payload = {"X": X, "y": y}
+        if timestamps is not None:
+            payload["timestamps"] = np.asarray(timestamps, dtype=np.int64)
+        np.savez_compressed(path, **payload)
         logger.info("Saved dataset to %s", path)
         return str(path)
 
-    def load_dataset(self, version: str) -> tuple[np.ndarray, np.ndarray]:
+    def load_dataset(self, version: str, *, include_timestamps: bool = False):
         """Load dataset from disk."""
         data_dir = Path(__file__).resolve().parents[1] / "data" / "datasets"
         path = data_dir / f"dataset_{version}.npz"
         data = np.load(path)
+        if include_timestamps:
+            if "timestamps" not in data:
+                raise ValueError("saved dataset does not contain timestamps; rebuild it chronologically")
+            return data["X"], data["y"], data["timestamps"]
         return data["X"], data["y"]
