@@ -57,7 +57,7 @@ class ModelTrainer:
 
         if metadata is None:
             return {"status": "validation_failed", "samples": len(y), "reason": "cost_and_regime_metadata_required_for_promotion"}
-        required_metadata = ("actual_return_pct", "transaction_costs", "regimes", "markets", "horizon_minutes")
+        required_metadata = ("timestamps", "actual_return_pct", "transaction_costs", "regimes", "markets", "horizon_minutes")
         if any(key not in metadata or len(np.asarray(metadata[key]).reshape(-1)) != len(y) for key in required_metadata):
             return {"status": "validation_failed", "samples": len(y), "reason": "promotion_metadata_alignment_error"}
 
