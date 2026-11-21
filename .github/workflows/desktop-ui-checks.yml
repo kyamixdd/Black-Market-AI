@@ -156,7 +156,19 @@ jobs:
               if ($app.HasExited) { throw "Desktop app exited before backend became ready (exit $($app.ExitCode))." }
               Start-Sleep -Seconds 2
             }
-            if (-not $ready) { throw "Backend did not become healthy on 127.0.0.1:8765." }
+            if (-not $ready) {
+              Write-Host "Last health response: $($health | ConvertTo-Json -Compress -Depth 5)"
+              $backendLog = Join-Path $appRoot "logs\backend.log"
+              if (Test-Path $backendLog) {
+                Write-Host "---- Bundled backend log (last 100 lines) ----"
+                Get-Content $backendLog -Tail 100 | Write-Host
+              } else {
+                Write-Host "Backend log not found at $backendLog"
+              }
+              Write-Host "---- Backend processes ----"
+              Get-CimInstance Win32_Process | Where-Object { $_.Name -match "BlackMarketBackend|app.exe" } | Select-Object Name,ProcessId,ExecutablePath,CommandLine | Format-List | Out-String | Write-Host
+              throw "Backend did not become healthy on 127.0.0.1:8765."
+            }
             $null = $app.CloseMainWindow()
             if (-not $app.WaitForExit(45000)) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue; $app.WaitForExit() }
             $deadline = (Get-Date).AddSeconds(30)

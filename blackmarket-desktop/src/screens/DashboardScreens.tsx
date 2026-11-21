@@ -229,6 +229,31 @@ export type DashboardPreferences = {
   showRiskAlerts: boolean
 }
 
+export type StrategyComparisonResult = {
+  strategy: string
+  status: string
+  total_return_pct?: number
+  max_drawdown_pct?: number
+  sharpe_ratio?: number | null
+  win_rate_pct?: number
+  profit_factor?: number | 'infinite' | null
+  trades_evaluated?: number
+  evaluation_bars?: number
+}
+export type StrategyComparison = {
+  status: string
+  symbol?: string
+  market?: string
+  timeframe?: string
+  candles?: number
+  evaluation_start_time?: string
+  evaluation_end_time?: string
+  walk_forward_folds?: number
+  training_policy?: string
+  cost_policy?: string
+  strategies: StrategyComparisonResult[]
+}
+
 export type ModelPerformance = {
   prediction_count: number
   accuracy_pct: number | null
@@ -264,6 +289,7 @@ export type WorkspaceData = {
   strategyWeights: Record<string, unknown>
   predictions: WorkspacePrediction[]
   performance: ModelPerformance | null
+  strategyComparison: StrategyComparison | null
   models: WorkspaceModel[]
   learning: WorkspaceLearning | null
   risk: WorkspaceRisk | null
@@ -806,6 +832,27 @@ function LearningScreen({ data }: { data: WorkspaceData }) {
         <SummaryCard label="TRADES EVALUATED" value={String(data.performance?.trade_count ?? 0)} detail="Closed paper trades only" />
       </div>
       <div className="workspace-note">Classification metrics use resolved predictions; trading metrics use closed paper trades. Sharpe uses daily realized P&L divided by initial paper equity, annualized with √365, and is unavailable with fewer than two daily observations. Missing metrics are shown as unavailable, not zero.</div>
+      <h2 className="workspace-section-title">Strategy comparison · walk-forward out-of-sample</h2>
+      {data.strategyComparison?.status === 'ok' ? <>
+        <div className="workspace-summary">
+          <SummaryCard label="ASSET / MARKET" value={`${data.strategyComparison.symbol ?? '—'} · ${data.strategyComparison.market ?? '—'}`} detail={`${data.strategyComparison.timeframe ?? '—'} · ${data.strategyComparison.candles ?? 0} candles`} />
+          <SummaryCard label="WALK-FORWARD FOLDS" value={String(data.strategyComparison.walk_forward_folds ?? 0)} detail="Expanding historical windows" />
+          <SummaryCard label="TEST WINDOW" value={`${timestamp(data.strategyComparison.evaluation_start_time)} → ${timestamp(data.strategyComparison.evaluation_end_time)}`} detail="Same unseen period for all strategies" />
+        </div>
+        <Table minWidth={950}>
+          <TableHead labels={['STRATEGY', 'RETURN', 'MAX DRAWDOWN', 'SHARPE', 'WIN RATE', 'PROFIT FACTOR', 'TRADES', 'BARS']} />
+          {data.strategyComparison.strategies.map((item) => <tr key={item.strategy}>
+            <td className="table-primary">{item.strategy}</td>
+            <td className={(item.total_return_pct ?? 0) >= 0 ? 'positive' : 'negative'}>{item.total_return_pct == null ? '—' : pct(item.total_return_pct)}</td>
+            <td>{item.max_drawdown_pct == null ? '—' : pct(item.max_drawdown_pct)}</td>
+            <td>{item.sharpe_ratio == null ? '—' : item.sharpe_ratio.toFixed(2)}</td>
+            <td>{item.win_rate_pct == null ? '—' : pct(item.win_rate_pct)}</td>
+            <td>{item.profit_factor === 'infinite' ? '∞' : item.profit_factor == null ? '—' : item.profit_factor.toFixed(2)}</td>
+            <td>{item.trades_evaluated ?? '—'}</td><td>{item.evaluation_bars ?? '—'}</td>
+          </tr>)}
+        </Table>
+        <div className="workspace-note">{data.strategyComparison.training_policy}. Costs: {data.strategyComparison.cost_policy}. No slippage or futures funding is included. Model rows remain flat until a valid out-of-sample fold prediction is available.</div>
+      </> : <EmptyState text={data.strategyComparison?.status === 'insufficient_data' ? 'Not enough closed historical candles to compare strategies.' : 'Strategy comparison will appear when historical candle data is available.'} />}
       <h2 className="workspace-section-title">Model registry · candidate / champion state</h2>
       {data.models.length ? <Table minWidth={900}>
         <TableHead labels={['VERSION', 'MODEL', 'STATUS', 'ACTIVE', 'CHAMPION', 'PARENT', 'TRAINED']} />
