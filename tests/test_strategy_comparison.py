@@ -29,7 +29,7 @@ def test_strategy_comparison_returns_all_five_methods_on_same_oos_window():
     assert result["status"] == "ok"
     assert [item["strategy"] for item in result["strategies"]] == list(STRATEGY_NAMES)
     assert result["walk_forward_folds"] >= 1
-    assert result["evaluation_start_time"] < result["evaluation_end_time"]
+    assert int(result["evaluation_start_time"]) < int(result["evaluation_end_time"])
     assert all(item["status"] == "evaluated" for item in result["strategies"])
     assert all(item["evaluation_bars"] == result["strategies"][0]["evaluation_bars"] for item in result["strategies"])
 
