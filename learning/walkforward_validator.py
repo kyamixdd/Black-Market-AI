@@ -23,12 +23,27 @@ logger = logging.getLogger(__name__)
 class WalkForwardValidator:
     """Walk-forward validation for time-ordered data."""
 
-    def __init__(self, n_splits: int = 5, min_train_size: int = WALK_FORWARD_MIN_SAMPLES):
+    def __init__(
+        self, n_splits: int = 5,
+        min_train_size: int = WALK_FORWARD_MIN_SAMPLES,
+        test_size: int | None = None,
+        gap: int = 0,
+        max_train_size: int | None = None,
+    ):
+        if n_splits < 1 or min_train_size < 1 or gap < 0:
+            raise ValueError("n_splits/min_train_size must be positive and gap non-negative")
         self.n_splits = n_splits
         self.min_train_size = min_train_size
+        self.test_size = test_size
+        self.gap = gap
+        self.max_train_size = max_train_size
 
-    def validate(self, X: np.ndarray, y: np.ndarray,
-                 model_factory: Any, metric: str | None = None) -> dict[str, Any]:
+    def validate(
+        self, X: np.ndarray, y: np.ndarray, model_factory: Any,
+        metric: str | None = None, timestamps: Any = None,
+        gap: int | None = None, label_horizon: int = 0,
+        test_size: int | None = None,
+    ) -> dict[str, Any]:
         """
         Perform walk-forward validation.
 
@@ -41,19 +56,55 @@ class WalkForwardValidator:
         Returns:
             Dict with validation results and metrics
         """
-        metric = metric or VALIDATION_METRIC
+        metric = (metric or VALIDATION_METRIC).lower()
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if X.ndim != 2 or y.ndim != 1 or len(X) != len(y):
+            raise ValueError("X must be 2D and y must be a 1D aligned target")
+        if label_horizon < 0:
+            raise ValueError("label_horizon cannot be negative")
+        effective_gap = max(self.gap if gap is None else gap, label_horizon)
+        if effective_gap < 0:
+            raise ValueError("gap cannot be negative")
+        time_values = None
+        if timestamps is not None:
+            time_values = np.asarray(timestamps)
+            if time_values.ndim != 1 or len(time_values) != len(X):
+                raise ValueError("timestamps must be a 1D array aligned with X and y")
+            normalized = []
+            for value in time_values:
+                if isinstance(value, np.datetime64):
+                    if np.isnat(value):
+                        raise ValueError("timestamps cannot contain NaT")
+                    value = value.astype("datetime64[ns]").astype(np.int64)
+                elif hasattr(value, "timestamp") and callable(value.timestamp):
+                    value = value.timestamp()
+                normalized.append(value)
+            try:
+                if any(normalized[i] >= normalized[i + 1] for i in range(len(normalized)-1)):
+                    raise ValueError("timestamps must be strictly increasing")
+            except TypeError as exc:
+                raise ValueError("timestamps must have a comparable type") from exc
 
         if len(X) < self.min_train_size * 2:
             logger.warning("Insufficient data for walk-forward: %d samples", len(X))
             return {"valid": False, "reason": "insufficient_data"}
 
-        tscv = TimeSeriesSplit(n_splits=self.n_splits)
+        fold_test_size = test_size if test_size is not None else self.test_size
+        tscv = TimeSeriesSplit(
+            n_splits=self.n_splits,
+            test_size=fold_test_size,
+            max_train_size=self.max_train_size,
+            gap=effective_gap,
+        )
         fold_metrics = []
 
         for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
             if len(train_idx) < self.min_train_size:
                 continue
 
+            if train_idx[-1] >= test_idx[0]:
+                raise RuntimeError("walk-forward training overlaps the future test window")
             X_train, X_test = X[train_idx], X[test_idx]
             y_train, y_test = y[train_idx], y[test_idx]
 
@@ -69,11 +120,23 @@ class WalkForwardValidator:
                 "fold": fold,
                 "train_size": len(train_idx),
                 "test_size": len(test_idx),
+                "train_start_index": int(train_idx[0]),
+                "train_end_index": int(train_idx[-1]),
+                "test_start_index": int(test_idx[0]),
+                "test_end_index": int(test_idx[-1]),
+                "purged_samples": int(test_idx[0] - train_idx[-1] - 1),
                 "accuracy": float(accuracy_score(y_test, y_pred)),
                 "precision_macro": float(precision_score(y_test, y_pred, average="macro", zero_division=0)),
                 "recall_macro": float(recall_score(y_test, y_pred, average="macro", zero_division=0)),
                 "f1_macro": float(f1_score(y_test, y_pred, average="macro", zero_division=0)),
             }
+            if time_values is not None:
+                fold_result.update({
+                    "train_start_time": str(time_values[train_idx[0]]),
+                    "train_end_time": str(time_values[train_idx[-1]]),
+                    "test_start_time": str(time_values[test_idx[0]]),
+                    "test_end_time": str(time_values[test_idx[-1]]),
+                })
             fold_metrics.append(fold_result)
             logger.debug("Fold %d: acc=%.4f, f1=%.4f", fold, fold_result["accuracy"], fold_result["f1_macro"])
 
