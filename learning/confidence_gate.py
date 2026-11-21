@@ -68,30 +68,55 @@ def select_confidence_threshold(probabilities: Any, forward_returns: Any, *, fee
 class PromotionGateCriteria:
     min_samples: int = WALK_FORWARD_MIN_SAMPLES
     min_folds: int = 3
+    min_mean_accuracy: float = MIN_VALIDATION_ACCURACY
     min_mean_f1: float = MIN_VALIDATION_F1
     max_fold_degradation: float = 0.12
+    min_net_expectancy: float = 0.0001
+    max_drawdown_pct: float = 10.0
+    min_calibration_score: float = 0.68
+    min_stability_score: float = 0.60
+    min_regime_coverage: int = 2
+    min_regime_samples: int = 30
+    min_improvement_over_champion: float = 0.02
+    min_net_expectancy_improvement: float = 0.0001
+    futures_funding_rate_per_8h: float = 0.0001
+
 
 class ModelPromotionGate:
-    """Fail-closed model promotion gate; challenger cannot activate unless all checks pass."""
+    """Fail-closed promotion gate using OOF classification and net trading evidence."""
     def __init__(self, criteria: PromotionGateCriteria | None = None):
         self.criteria = criteria or PromotionGateCriteria()
-    def evaluate(self, validation: dict[str, Any], sample_count: int) -> dict[str, Any]:
+
+    def evaluate(
+        self,
+        validation: dict[str, Any],
+        sample_count: int,
+        *,
+        economic_metadata: dict[str, Any] | None = None,
+        champion_validation: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         c = self.criteria
         reasons: list[str] = []
         if sample_count < c.min_samples:
             reasons.append(f"sample_count {sample_count} below required {c.min_samples}")
-        model_results = {}
+        model_results: dict[str, Any] = {}
+        economic_by_model: dict[str, Any] = {}
+        champion_by_model: dict[str, Any] = {}
         for name in ("rf", "xgb"):
             result = validation.get(name) or {}
             folds = result.get("folds") or []
-            mean_f1 = _finite((result.get("aggregated") or {}).get("mean_f1"))
-            failures = []
+            aggregated = result.get("aggregated") or {}
+            mean_f1 = _finite(aggregated.get("mean_f1"))
+            mean_accuracy = _finite(aggregated.get("mean_accuracy"))
+            failures: list[str] = []
             if not result.get("valid") or not result.get("passes_threshold"):
                 failures.append("walk-forward validation did not pass configured threshold")
             if len(folds) < c.min_folds:
                 failures.append(f"only {len(folds)} folds; require {c.min_folds}")
             if mean_f1 is None or mean_f1 < c.min_mean_f1:
-                failures.append(f"mean F1 below configured threshold {c.min_mean_f1:.3f}")
+                failures.append(f"mean F1 below required {c.min_mean_f1:.3f}")
+            if mean_accuracy is None or mean_accuracy < c.min_mean_accuracy:
+                failures.append(f"mean accuracy below required {c.min_mean_accuracy:.3f}")
             scores = []
             for fold in folds:
                 score = _finite(fold.get("f1_macro"))
@@ -103,12 +128,187 @@ class ModelPromotionGate:
                 if train_end is None or test_start is None or int(train_end) >= int(test_start):
                     failures.append("training window overlaps or follows test window")
             if mean_f1 is not None and scores and min(scores) < mean_f1 - c.max_fold_degradation:
-                failures.append(f"weakest fold exceeds allowed degradation {c.max_fold_degradation:.3f}")
-            model_results[name] = {"passes": not failures, "mean_f1": mean_f1, "fold_count": len(folds), "failure_reasons": failures}
+                failures.append(f"weakest fold exceeds allowed F1 degradation {c.max_fold_degradation:.3f}")
+
+            oof = result.get("out_of_fold") or []
+            if not oof:
+                failures.append("out-of-fold predictions/probabilities missing")
+            calibration_score = self._calibration_score(oof)
+            if calibration_score is None or calibration_score < c.min_calibration_score:
+                failures.append(f"calibration score below required {c.min_calibration_score:.3f}")
+
+            economic = self._economic_evidence(oof, economic_metadata, folds)
+            economic_by_model[name] = economic
+            if economic.get("status") != "ok":
+                failures.append("net expectancy/drawdown evidence unavailable: " + str(economic.get("reason")))
+            else:
+                if economic["net_expectancy"] < c.min_net_expectancy:
+                    failures.append(f"net expectancy {economic['net_expectancy']:.6f} below required {c.min_net_expectancy:.6f}")
+                if economic["max_drawdown_pct"] > c.max_drawdown_pct:
+                    failures.append(f"drawdown {economic['max_drawdown_pct']:.2f}% exceeds {c.max_drawdown_pct:.2f}%")
+                if economic["stability_score"] < c.min_stability_score:
+                    failures.append(f"net-return stability below required {c.min_stability_score:.2f}")
+                if economic["regime_coverage"] < c.min_regime_coverage:
+                    failures.append(f"positive-net regime coverage {economic['regime_coverage']} below required {c.min_regime_coverage}")
+
+            champion_result = (champion_validation or {}).get(name) or {}
+            champion_oof = champion_result.get("out_of_fold") or []
+            champion_f1 = _finite((champion_result.get("aggregated") or {}).get("mean_f1"))
+            champion_economic = self._economic_evidence(champion_oof, economic_metadata, champion_result.get("folds") or [])
+            champion_by_model[name] = champion_economic
+            if not champion_result.get("valid") or not champion_oof or champion_f1 is None:
+                failures.append("active champion comparison evidence missing")
+            elif economic.get("status") == "ok" and champion_economic.get("status") == "ok":
+                relative_f1 = (mean_f1 - champion_f1) / max(abs(champion_f1), 1e-6) if mean_f1 is not None else -1.0
+                net_delta = economic["net_expectancy"] - champion_economic["net_expectancy"]
+                economic["champion_f1"] = champion_f1
+                economic["relative_f1_improvement"] = relative_f1
+                economic["net_expectancy_improvement"] = net_delta
+                if relative_f1 < c.min_improvement_over_champion:
+                    failures.append(f"F1 improvement over active champion {relative_f1:.2%} below required {c.min_improvement_over_champion:.2%}")
+                if net_delta < c.min_net_expectancy_improvement:
+                    failures.append(f"net expectancy improvement over champion {net_delta:.6f} below required {c.min_net_expectancy_improvement:.6f}")
+            else:
+                failures.append("cannot compare challenger economics with active champion")
+
+            model_results[name] = {
+                "passes": not failures,
+                "mean_f1": mean_f1,
+                "mean_accuracy": mean_accuracy,
+                "calibration_score": calibration_score,
+                "fold_count": len(folds),
+                "failure_reasons": failures,
+            }
             reasons.extend(f"{name}: {failure}" for failure in failures)
+
         if not validation.get("ensemble_passes", False):
-            reasons.append("both RF and XGBoost must pass existing validation")
-        return {"passes": not reasons, "criteria": {"min_samples": c.min_samples, "min_folds": c.min_folds, "min_mean_f1": c.min_mean_f1, "max_fold_degradation": c.max_fold_degradation}, "models": model_results, "failure_reasons": reasons, "policy": "fail closed; activation requires every check"}
+            reasons.append("both RF and XGBoost must pass existing walk-forward validation")
+        return {
+            "passes": not reasons,
+            "criteria": {
+                "min_samples": c.min_samples, "min_folds": c.min_folds,
+                "min_mean_accuracy": c.min_mean_accuracy, "min_mean_f1": c.min_mean_f1,
+                "min_net_expectancy": c.min_net_expectancy,
+                "max_drawdown_pct": c.max_drawdown_pct,
+                "min_calibration_score": c.min_calibration_score,
+                "min_stability_score": c.min_stability_score,
+                "min_regime_coverage": c.min_regime_coverage,
+                "min_improvement_over_champion": c.min_improvement_over_champion,
+                "min_net_expectancy_improvement": c.min_net_expectancy_improvement,
+            },
+            "models": model_results,
+            "economic_evidence": economic_by_model,
+            "champion_evidence": champion_by_model,
+            "failure_reasons": reasons,
+            "policy": "fail closed; activation requires every classification, cost-adjusted, calibration, stability, regime and champion comparison check",
+        }
+
+    def _calibration_score(self, oof: list[dict[str, Any]]) -> float | None:
+        if not oof:
+            return None
+        errors = []
+        for row in oof:
+            truth = int(row.get("y_true", -1))
+            probabilities = row.get("probabilities")
+            if truth not in (0, 1, 2) or not isinstance(probabilities, (list, tuple)) or len(probabilities) != 3:
+                return None
+            values = [_finite(value) for value in probabilities]
+            if any(value is None or value < 0 or value > 1 for value in values):
+                return None
+            if abs(sum(values) - 1.0) > 1e-3:
+                return None
+            target = [1.0 if index == truth else 0.0 for index in range(3)]
+            errors.append(sum((values[index] - target[index]) ** 2 for index in range(3)))
+        brier = sum(errors) / len(errors)
+        return 1.0 - brier / 2.0
+
+    def _economic_evidence(
+        self, oof: list[dict[str, Any]], metadata: dict[str, Any] | None,
+        folds: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if not oof or not metadata:
+            return {"status": "missing", "reason": "OOF predictions or aligned realized-return/cost metadata missing"}
+        required = ("actual_return_pct", "transaction_costs", "regimes", "markets", "horizon_minutes")
+        if any(key not in metadata for key in required):
+            return {"status": "missing", "reason": "required return, costs, market, regime or horizon arrays missing"}
+        arrays = {}
+        for key in required:
+            try:
+                arrays[key] = np.asarray(metadata[key]).reshape(-1)
+            except Exception:
+                return {"status": "missing", "reason": f"invalid metadata {key}"}
+        n = len(arrays["actual_return_pct"])
+        if any(len(values) != n for values in arrays.values()):
+            return {"status": "missing", "reason": "metadata arrays are not aligned"}
+        if any(int(row.get("index", -1)) < 0 or int(row["index"]) >= n for row in oof):
+            return {"status": "missing", "reason": "OOF index outside aligned metadata"}
+        returns = []
+        indices = []
+        regimes: dict[str, list[float]] = {}
+        for row in oof:
+            index = int(row["index"])
+            raw_return = _finite(arrays["actual_return_pct"][index])
+            transaction_cost = _finite(arrays["transaction_costs"][index])
+            market = str(arrays["markets"][index]).upper()
+            regime = str(arrays["regimes"][index]).upper()
+            horizon = _finite(arrays["horizon_minutes"][index])
+            predicted = int(row.get("y_pred", -1))
+            if raw_return is None or transaction_cost is None or transaction_cost < 0 or horizon is None or horizon < 0:
+                return {"status": "missing", "reason": "non-finite realized return/cost or invalid horizon"}
+            if predicted not in (0, 1, 2) or market not in {"SPOT", "FUTURES"} or regime in {"", "UNKNOWN", "NONE"}:
+                return {"status": "missing", "reason": "invalid predicted class, market or unknown regime"}
+            direction = 1.0 if predicted == 2 else (-1.0 if predicted == 0 else 0.0)
+            gross = (raw_return / 100.0) * direction
+            funding = c_funding = 0.0
+            if market == "FUTURES" and direction:
+                funding = self.criteria.futures_funding_rate_per_8h * int(np.ceil(horizon / 480.0))
+            net = gross - transaction_cost - funding
+            returns.append(net)
+            indices.append(index)
+            regimes.setdefault(regime, []).append(net)
+        if not returns:
+            return {"status": "missing", "reason": "no OOF economic samples"}
+        equity = peak = 1.0
+        max_drawdown = 0.0
+        for net in returns:
+            equity *= max(0.0, 1.0 + net)
+            peak = max(peak, equity)
+            if peak > 0:
+                max_drawdown = max(max_drawdown, (peak - equity) / peak * 100.0)
+        fold_returns = []
+        for fold in folds:
+            start, end = fold.get("test_start_index"), fold.get("test_end_index")
+            if start is None or end is None:
+                continue
+            fold_values = [value for value, index in zip(returns, indices) if int(start) <= index <= int(end)]
+            if fold_values:
+                fold_returns.append(sum(fold_values) / len(fold_values))
+        if len(fold_returns) < 2:
+            return {"status": "missing", "reason": "insufficient fold net-return evidence for stability"}
+        mean_fold = sum(fold_returns) / len(fold_returns)
+        std_fold = (sum((value - mean_fold) ** 2 for value in fold_returns) / len(fold_returns)) ** 0.5
+        stability = max(0.0, min(1.0, 1.0 - std_fold / max(abs(mean_fold), 1e-6)))
+        regime_perf = {
+            regime: {"samples": len(values), "net_expectancy": sum(values) / len(values)}
+            for regime, values in regimes.items() if len(values) >= self.criteria.min_regime_samples
+        }
+        coverage = sum(1 for value in regime_perf.values() if value["net_expectancy"] > 0)
+        fee_slippage_cost = sum(_finite(arrays["transaction_costs"][index]) or 0.0 for index in indices) / len(indices)
+        funding_cost = sum(
+            self.criteria.futures_funding_rate_per_8h * int(np.ceil(float(arrays["horizon_minutes"][index]) / 480.0))
+            for index in indices if str(arrays["markets"][index]).upper() == "FUTURES"
+        ) / len(indices)
+        return {
+            "status": "ok", "net_expectancy": sum(returns) / len(returns),
+            "max_drawdown_pct": max_drawdown, "stability_score": stability,
+            "regime_performance": regime_perf, "regime_coverage": coverage,
+            "sample_count": len(returns), "mean_fees_and_slippage": fee_slippage_cost,
+            "mean_funding_cost": funding_cost,
+            "cost_policy": "prediction transaction_costs include round-trip fees and slippage; futures funding estimated at configured rate per 8h interval",
+            "fold_net_expectancy": fold_returns,
+        }
+
+
 
 def _finite(value: Any) -> float | None:
     try: number = float(value)
