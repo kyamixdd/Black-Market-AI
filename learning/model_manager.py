@@ -182,14 +182,14 @@ class ModelManager:
             import joblib
             return joblib.load(challenger.file_path)
 
-        wf_result = self.validator.validate(X, y, model_factory, metric="f1", timestamps=timestamps)
+        wf_result = self.validator.validate(X, y, model_factory, metric="f1", timestamps=timestamps, purge_gap_ms=60 * 60 * 1000)
         champion = self.get_champion(challenger.model_type)
         champion_result: dict[str, Any] = {}
         if champion and champion.file_path:
             def champion_factory():
                 import joblib
                 return joblib.load(champion.file_path)
-            champion_result = self.validator.validate(X, y, champion_factory, metric="f1", timestamps=timestamps)
+            champion_result = self.validator.validate(X, y, champion_factory, metric="f1", timestamps=timestamps, purge_gap_ms=60 * 60 * 1000)
 
         # The shared gate's RF/XGB slots represent this single model family
         # here; both entries use the identical folds and evidence.
@@ -310,6 +310,7 @@ class ModelManager:
                 "regime_performance": evaluation.regime_performance,
                 "primary_metric": evaluation.primary_metric,
                 "primary_value": evaluation.primary_value,
+                "promotion_evidence": evaluation.promotion_evidence,
                 "evaluated_at": evaluation.evaluated_at.isoformat()
             })
             challenger.promotion_criteria = json.dumps(self.criteria.to_dict())
