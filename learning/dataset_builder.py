@@ -95,6 +95,7 @@ class DatasetBuilder:
         order = np.argsort(timestamps, kind="stable")
         X, y, timestamps = X[order], y[order], timestamps[order]
         metadata = {
+            "timestamps": timestamps[order],
             "actual_return_pct": np.asarray(return_list, dtype=np.float64)[order],
             "regimes": np.asarray(regime_list, dtype=object)[order],
             "horizon_minutes": np.asarray(horizon_list, dtype=np.int32)[order],
