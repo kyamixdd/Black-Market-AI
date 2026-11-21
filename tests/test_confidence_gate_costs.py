@@ -4,13 +4,13 @@ import pytest
 from learning.confidence_gate import select_confidence_threshold
 
 
-def _evaluate(returns, probabilities=None, *, fee_rate=0.0004):
+def _evaluate(returns, probabilities=None, *, fee_rate=0.0004, candidates=(0.5,)):
     probabilities = probabilities or [0.9] * len(returns)
     return select_confidence_threshold(
         probabilities,
         returns,
         fee_rate=fee_rate,
-        candidates=(0.5,),
+        candidates=candidates,
         min_trades=1,
     )["selected_metrics"]
 
@@ -27,6 +27,7 @@ def test_exit_fee_is_attributed_to_last_active_period():
     metrics = _evaluate(
         [0.0] * 10,
         probabilities=[0.9, 0.9, 0.9, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4],
+        candidates=(0.7,),
     )
 
     # The position closes at the first inactive row. That exit cost must not
