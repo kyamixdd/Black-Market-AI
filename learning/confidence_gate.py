@@ -75,6 +75,7 @@ class PromotionGateCriteria:
     max_drawdown_pct: float = 10.0
     min_calibration_score: float = 0.68
     min_stability_score: float = 0.60
+    min_positive_net_folds: int = 2
     min_regime_coverage: int = 2
     min_regime_samples: int = 30
     min_improvement_over_champion: float = 0.02
@@ -148,6 +149,8 @@ class ModelPromotionGate:
                     failures.append(f"drawdown {economic['max_drawdown_pct']:.2f}% exceeds {c.max_drawdown_pct:.2f}%")
                 if economic["stability_score"] < c.min_stability_score:
                     failures.append(f"net-return stability below required {c.min_stability_score:.2f}")
+                if economic["positive_net_folds"] < c.min_positive_net_folds:
+                    failures.append("positive net fold count below required " + str(c.min_positive_net_folds))
                 if economic["regime_coverage"] < c.min_regime_coverage:
                     failures.append(f"positive-net regime coverage {economic['regime_coverage']} below required {c.min_regime_coverage}")
 
@@ -192,6 +195,7 @@ class ModelPromotionGate:
                 "max_drawdown_pct": c.max_drawdown_pct,
                 "min_calibration_score": c.min_calibration_score,
                 "min_stability_score": c.min_stability_score,
+                "min_positive_net_folds": c.min_positive_net_folds,
                 "min_regime_coverage": c.min_regime_coverage,
                 "min_improvement_over_champion": c.min_improvement_over_champion,
                 "min_net_expectancy_improvement": c.min_net_expectancy_improvement,
@@ -314,6 +318,7 @@ class ModelPromotionGate:
             "mean_funding_cost": funding_cost,
             "cost_policy": "prediction transaction_costs include round-trip fees and slippage; futures funding estimated at configured rate per 8h interval",
             "fold_net_expectancy": fold_returns,
+            "positive_net_folds": sum(1 for value in fold_returns if value > 0),
         }
 
 
