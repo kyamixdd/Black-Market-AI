@@ -471,6 +471,17 @@ function PositionInspector({
           } catch (error) { setMessage(error instanceof Error ? error.message : 'Update failed.') }
           finally { setBusy(false) }
         }}>Update risk levels</button>
+        <label>Partial close quantity <input className="workspace-search" type="number" min="0" step="any" value={closeQuantity} onChange={(event) => setCloseQuantity(event.target.value)} placeholder="Less than open amount" /></label>
+        <button className="table-action" disabled={busy || !Number.isFinite(Number(closeQuantity)) || Number(closeQuantity) <= 0 || Number(closeQuantity) >= (position.amount ?? 0)} onClick={async () => {
+          if (!window.confirm(`Partially close ${closeQuantity} of this paper position?`)) return
+          setBusy(true); setMessage('')
+          try {
+            await onPositionAction(position.position_id ?? '', 'partial-close', { quantity: Number(closeQuantity) })
+            setCloseQuantity('')
+            setMessage('Partial close completed.')
+          } catch (error) { setMessage(error instanceof Error ? error.message : 'Partial close failed.') }
+          finally { setBusy(false) }
+        }}>Partial close</button>
         <button className="table-action" disabled={busy} onClick={async () => {
           if (!window.confirm('Close this paper position at the latest available market price?')) return
           setBusy(true); setMessage('')
