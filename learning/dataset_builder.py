@@ -63,7 +63,12 @@ class DatasetBuilder:
                 if features is not None:
                     X_list.append(features)
                     y_list.append(self._outcome_to_class(pred.actual_outcome))
-                    timestamp_list.append(int(pred.created_at.timestamp() * 1000))
+                    timestamp_list.append(
+                        int(pred.eval_time.timestamp() * 1000)
+                        if pred.eval_time is not None
+                        else int(pred.created_at.timestamp() * 1000)
+                        + int(pred.horizon_minutes or 60) * 60 * 1000
+                    )
             except Exception as exc:
                 logger.warning("Failed to build features for %s: %s", pred.prediction_id, exc)
                 continue
@@ -105,7 +110,7 @@ class DatasetBuilder:
                         CandleModel.symbol == symbol,
                         CandleModel.market == market,
                         CandleModel.timeframe == tf,
-                        CandleModel.open_time <= timestamp_ms,
+                        CandleModel.close_time <= timestamp_ms,
                     )
                     .order_by(CandleModel.open_time.desc())
                     .limit(lookback_candles)
