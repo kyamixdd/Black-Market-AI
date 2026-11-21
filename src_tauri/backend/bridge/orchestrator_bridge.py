@@ -264,7 +264,37 @@ class OrchestratorBridge:
     def get_portfolio_summary(self) -> dict:
         """Get portfolio summary."""
         sim = self.simulator
-        account = sim.get_account_equity_breakdown()
+        account_builder = getattr(sim, "get_account_equity_breakdown", None)
+        if callable(account_builder):
+            account = account_builder()
+        else:
+            # Backward-compatible path for lightweight simulator adapters and
+            # test doubles that expose balances/positions but not the new helper.
+            spot_unrealized = sum(
+                float(p.get("unrealized_pnl", 0.0) or 0.0)
+                for p in getattr(sim, "spot_positions", {}).values()
+            )
+            futures_unrealized = sum(
+                float(p.get("unrealized_pnl", 0.0) or 0.0)
+                for p in getattr(sim, "futures_positions", {}).values()
+            )
+            spot_available = float(sim.get_balance("SPOT"))
+            futures_available = float(sim.get_balance("FUTURES"))
+            account = {
+                "spot_available_balance": spot_available,
+                "futures_available_balance": futures_available,
+                "total_available_balance": spot_available + futures_available,
+                "spot_used_capital": 0.0,
+                "futures_used_margin": 0.0,
+                "total_used_margin": 0.0,
+                "total_used_capital": 0.0,
+                "spot_unrealized_pnl": spot_unrealized,
+                "futures_unrealized_pnl": futures_unrealized,
+                "spot_equity": spot_available + spot_unrealized,
+                "futures_equity": futures_available + futures_unrealized,
+                "total_equity": spot_available + futures_available
+                + spot_unrealized + futures_unrealized,
+            }
         spot_unrealized = account["spot_unrealized_pnl"]
         futures_unrealized = account["futures_unrealized_pnl"]
         spot_equity = account["spot_equity"]
