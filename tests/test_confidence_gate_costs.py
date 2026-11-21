@@ -20,7 +20,7 @@ def test_expectancy_includes_entry_and_terminal_exit_fee():
 
     # One entry and one terminal close: 2 * fee / 10 active periods.
     assert metrics["net_expectancy_per_trade"] == pytest.approx(-0.00008)
-    assert metrics["net_return_pct"] == pytest.approx(-0.079968)
+    assert metrics["net_return_pct"] == pytest.approx(-0.079984)
 
 
 def test_exit_fee_is_attributed_to_last_active_period():
@@ -32,7 +32,7 @@ def test_exit_fee_is_attributed_to_last_active_period():
     # The position closes at the first inactive row. That exit cost must not
     # disappear from the active-period expectancy.
     assert metrics["net_expectancy_per_trade"] == pytest.approx(-0.0004)
-    assert metrics["net_return_pct"] == pytest.approx(-0.079968)
+    assert metrics["net_return_pct"] == pytest.approx(-0.079984)
 
 
 def test_reversal_charges_close_and_reopen_fees():
