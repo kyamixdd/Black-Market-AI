@@ -131,8 +131,9 @@ class LiveLearningService:
                     candle["low"], candle["close"], candle["volume"], candle["close_time"],
                 )
 
-    def _bootstrap_samples(self, pairs: list[tuple[str, str]], histories: dict[tuple[str, str], list[dict[str, Any]]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        samples: list[tuple[int, np.ndarray, int]] = []
+    def _bootstrap_samples(self, pairs: list[tuple[str, str]], histories: dict[tuple[str, str], list[dict[str, Any]]], *, include_metadata: bool = False):
+        samples: list[tuple[int, np.ndarray, int, float, float, str, str, int]] = []
+        cost_labeler = OutcomeLabeler(self.repo)
         for market, symbol in pairs:
             candles = histories.get((market, symbol), [])
             for index in range(50, len(candles) - 1):
@@ -145,13 +146,33 @@ class LiveLearningService:
                 forward_return = next_price / price - 1.0
                 # A small dead band reduces label noise from near-zero hourly moves.
                 label = 2 if forward_return > 0.001 else 0 if forward_return < -0.001 else 1
-                samples.append((int(candles[index]["close_time"]), feature, label))
+                close_time = int(candles[index]["close_time"])
+                recent_close = np.asarray([float(item["close"]) for item in candles[max(0, index - 20):index + 1]], dtype=float)
+                recent_returns = np.diff(np.log(recent_close)) if len(recent_close) > 1 else np.asarray([], dtype=float)
+                trend_return = recent_close[-1] / recent_close[0] - 1.0 if len(recent_close) > 1 and recent_close[0] > 0 else 0.0
+                volatility = float(np.std(recent_returns)) if len(recent_returns) else 0.0
+                regime = "VOLATILE" if volatility >= 0.015 else "TREND_UP" if trend_return >= 0.02 else "TREND_DOWN" if trend_return <= -0.02 else "RANGE"
+                # Fees and slippage are the same round-trip cost calculation used by outcome labeling.
+                costs = cost_labeler._calculate_costs(market, "UP", price, next_price) / price
+                samples.append((close_time, feature, label, forward_return * 100.0, costs, regime, market, 60))
         samples.sort(key=lambda item: item[0])
         if not samples:
-            return np.empty((0, 36), dtype=np.float32), np.empty((0,), dtype=np.int32), np.empty((0,), dtype=np.int64)
-        return (np.stack([item[1] for item in samples]).astype(np.float32),
-                np.asarray([item[2] for item in samples], dtype=np.int32),
-                np.asarray([item[0] + 60 * 60 * 1000 for item in samples], dtype=np.int64))
+            empty = (np.empty((0, 36), dtype=np.float32), np.empty((0,), dtype=np.int32), np.empty((0,), dtype=np.int64))
+            if include_metadata:
+                return (*empty, {key: np.array([]) for key in ("timestamps", "actual_return_pct", "transaction_costs", "regimes", "markets", "horizon_minutes")})
+            return empty
+        X = np.stack([item[1] for item in samples]).astype(np.float32)
+        y = np.asarray([item[2] for item in samples], dtype=np.int32)
+        timestamps = np.asarray([item[0] + 60 * 60 * 1000 for item in samples], dtype=np.int64)
+        metadata = {
+            "timestamps": timestamps.copy(),
+            "actual_return_pct": np.asarray([item[3] for item in samples], dtype=np.float64),
+            "transaction_costs": np.asarray([item[4] for item in samples], dtype=np.float64),
+            "regimes": np.asarray([item[5] for item in samples], dtype=object),
+            "markets": np.asarray([item[6] for item in samples], dtype=object),
+            "horizon_minutes": np.asarray([item[7] for item in samples], dtype=np.int32),
+        }
+        return (X, y, timestamps, metadata) if include_metadata else (X, y, timestamps)
 
     async def _bootstrap(self) -> None:
         self._last_bootstrap_attempt = asyncio.get_running_loop().time()
@@ -171,7 +192,7 @@ class LiveLearningService:
                 histories[(market, symbol)] = await self._fetch_history(market, symbol, 1000)
             except Exception as exc:
                 logger.warning("Historical model bootstrap failed for %s %s: %s", market, symbol, exc)
-        X, y, timestamps = self._bootstrap_samples(self._pairs, histories)
+        X, y, timestamps, metadata = self._bootstrap_samples(self._pairs, histories, include_metadata=True)
         self.training_samples = int(len(y))
         if len(y) < 300 or len(np.unique(y)) < 2:
             self.state = "waiting_for_history"
@@ -181,7 +202,7 @@ class LiveLearningService:
 
         self.state = "training"
         self.last_cycle_status = f"validating:{len(y)}_historical_samples"
-        result = await asyncio.to_thread(self.trainer.train_and_validate, X, y, timestamps)
+        result = await asyncio.to_thread(self.trainer.train_and_validate, X, y, timestamps, metadata)
         if result.get("status") == "trained":
             self._activate_batch_models(result)
             self.state = "trained"
