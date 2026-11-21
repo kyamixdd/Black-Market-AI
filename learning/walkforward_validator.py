@@ -80,11 +80,13 @@ class WalkForwardValidator:
                     value = value.astype("datetime64[ns]").astype(np.int64)
                 elif hasattr(value, "timestamp") and callable(value.timestamp):
                     value = int(value.timestamp() * 1000)
+                elif isinstance(value, (int, float, np.integer, np.floating)):
+                    value = value.item() if hasattr(value, "item") else value
                 normalized.append(value)
             time_values = np.asarray(normalized)
             try:
-                if any(normalized[i] > normalized[i + 1] for i in range(len(normalized)-1)):
-                    raise ValueError("timestamps must be sorted oldest-first")
+                if any(normalized[i] >= normalized[i + 1] for i in range(len(normalized)-1)):
+                    raise ValueError("timestamps must be strictly increasing")
             except TypeError as exc:
                 raise ValueError("timestamps must have a comparable type") from exc
 
@@ -108,6 +110,11 @@ class WalkForwardValidator:
                 test_start_time, test_end_time = test_times[0], test_times[-1]
                 test_idx = np.flatnonzero((time_values >= test_start_time) & (time_values <= test_end_time))
                 train_idx = np.flatnonzero(time_values < test_start_time)
+                # Preserve the row-based label horizon in addition to the
+                # elapsed-time purge. Target windows of the final training
+                # rows must not overlap the test fold.
+                if effective_gap > 0:
+                    train_idx = train_idx[:-effective_gap] if len(train_idx) > effective_gap else np.array([], dtype=int)
                 if purge_gap_ms > 0:
                     cutoff = test_start_time - purge_gap_ms
                     train_idx = train_idx[time_values[train_idx] < cutoff]
@@ -146,10 +153,10 @@ class WalkForwardValidator:
             }
             if time_values is not None:
                 fold_result.update({
-                    "train_start_time": str(time_values[train_idx[0]]),
-                    "train_end_time": str(time_values[train_idx[-1]]),
-                    "test_start_time": str(time_values[test_idx[0]]),
-                    "test_end_time": str(time_values[test_idx[-1]]),
+                    "train_start_time": time_values[train_idx[0]].item() if hasattr(time_values[train_idx[0]], "item") else time_values[train_idx[0]],
+                    "train_end_time": time_values[train_idx[-1]].item() if hasattr(time_values[train_idx[-1]], "item") else time_values[train_idx[-1]],
+                    "test_start_time": time_values[test_idx[0]].item() if hasattr(time_values[test_idx[0]], "item") else time_values[test_idx[0]],
+                    "test_end_time": time_values[test_idx[-1]].item() if hasattr(time_values[test_idx[-1]], "item") else time_values[test_idx[-1]],
                 })
             fold_metrics.append(fold_result)
             logger.debug("Fold %d: acc=%.4f, f1=%.4f", fold, fold_result["accuracy"], fold_result["f1_macro"])
