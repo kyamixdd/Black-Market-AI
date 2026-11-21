@@ -536,9 +536,8 @@ def test_tauri_webview_preflight_allows_authenticated_patch_and_delete(monkeypat
 
 
 def test_tauri_origin_can_update_position_risk_over_authenticated_patch(monkeypatch):
-    from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from fastapi.middleware.cors import CORSMiddleware
+    from src_tauri.backend import main
     from src_tauri.backend.api.routes import positions
 
     position = {
@@ -553,26 +552,32 @@ def test_tauri_origin_can_update_position_risk_over_authenticated_patch(monkeypa
         persist_position_callback=lambda value: persisted.append(dict(value)),
     )
     monkeypatch.setattr(positions, "get_bridge", lambda: SimpleNamespace(simulator=simulator))
-    app = FastAPI()
-    app.include_router(positions.router, prefix="/api")
-    app.add_middleware(
-        CORSMiddleware, allow_origins=["http://tauri.localhost"],
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
-    )
-    with TestClient(app) as client:
+    monkeypatch.setattr(main, "_api_token", "desktop-test-token")
+    client = TestClient(LoopbackTestClient(main.app))
+    origin = "http://tauri.localhost"
+    try:
+        preflight = client.options(
+            "/api/positions/paper-1",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "PATCH",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert preflight.status_code == 200
         response = client.patch(
             "/api/positions/paper-1",
             json={"stop_loss": 97.0, "take_profit": 108.0},
-            headers={"Origin": "http://tauri.localhost", "Authorization": "Bearer desktop-test-token"},
+            headers={"Origin": origin, "Authorization": "Bearer desktop-test-token"},
         )
+    finally:
+        client.close()
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert position["stop_loss"] == 97.0
     assert position["take_profit"] == 108.0
     assert persisted[-1]["stop_loss"] == 97.0
-    assert response.headers["access-control-allow-origin"] == "http://tauri.localhost"
-
+    assert response.headers["access-control-allow-origin"] == origin
 
 def test_partial_close_route_validates_and_dispatches_to_simulator(monkeypatch):
     from fastapi import FastAPI
