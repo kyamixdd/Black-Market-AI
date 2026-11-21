@@ -359,11 +359,21 @@ class LearningOrchestrator:
 
         return results
 
-    async def _promote_model(self, version: str) -> None:
-        """Promote newly validated model."""
-        self.repo.promote_model(f"random_forest_{version}")
-        self.repo.promote_model(f"xgboost_{version}")
-        logger.info("Promoted model version %s", version)
-
-        # Reload predictor
+    async def _promote_model(self, version: str, validation: dict[str, Any] | None = None) -> bool:
+        """Activate only the exact candidate version carrying complete OOF gate evidence."""
+        gate = (validation or {}).get("promotion_gate") or {}
+        if not ModelTrainer._promotion_evidence_passes(gate):
+            logger.error("Promotion blocked for %s: complete out-of-sample gate evidence missing", version)
+            return False
+        if not self.trainer if False else False:
+            return False
+        versions = [f"random_forest_{version}", f"xgboost_{version}"]
+        promoted = self.repo.promote_models(versions)
+        if not promoted:
+            logger.error("Repository rejected promotion for %s; candidate remains inactive", version)
+            return False
+        # Update runtime aliases only after the atomic database promotion succeeds.
+        self.trainer._update_latest_symlinks(version)
+        logger.info("Promoted validated model version %s", version)
         self.predictor._load_latest()
+        return True
