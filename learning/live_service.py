@@ -378,7 +378,6 @@ class LiveLearningService:
                 ("scale", preprocessing.StandardScaler()),
                 ("model", tree.HoeffdingTreeClassifier(grace_period=50, delta=1e-4)),
             )
-            self.predictor.river_model = self._river_model
         updates = 0
         for prediction in self.repo.get_predictions_history(10000):
             if prediction.is_correct is None or prediction.prediction_id in self._river_seen or not prediction.feature_values:
@@ -395,8 +394,6 @@ class LiveLearningService:
                 logger.exception("Unable to apply online update for prediction %s", prediction.prediction_id)
         if updates:
             self.river_updates += updates
-            self.predictor.river_model = self._river_model
-            self.predictor.is_trained = True
         return updates
 
     def _persist_river(self) -> None:
