@@ -57,3 +57,31 @@ def test_heldout_test_set_does_not_choose_calibration_threshold():
     assert calibration["threshold"] == 0.6
     assert calibration["heldout_test_metrics"]["net_expectancy_per_trade"] == pytest.approx(-0.01)
     assert "evaluation-only" in calibration["calibration_test_boundary"]
+
+
+
+def test_live_confidence_gate_blocks_low_confidence_prediction():
+    from learning.confidence_gate import evaluate_live_confidence
+
+    allowed, reason = evaluate_live_confidence(0.61, 0.72, "model-v1", "model-v1")
+    assert not allowed
+    assert reason == "below_historical_confidence_threshold"
+
+
+@pytest.mark.parametrize(
+    "confidence,threshold,model_version,calibrated_version",
+    [
+        (0.95, None, "model-v1", "model-v1"),
+        (0.95, 0.70, "model-v1", "model-v0"),
+        (0.95, 0.70, "untrained", "untrained"),
+    ],
+)
+def test_live_confidence_gate_fails_closed_without_matching_calibration(
+    confidence, threshold, model_version, calibrated_version
+):
+    from learning.confidence_gate import evaluate_live_confidence
+
+    allowed, _ = evaluate_live_confidence(
+        confidence, threshold, model_version, calibrated_version
+    )
+    assert not allowed
