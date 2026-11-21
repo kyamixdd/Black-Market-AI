@@ -41,7 +41,9 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
     returns = np.zeros(len(close), dtype=float)
     returns[1:] = close[1:] / close[:-1] - 1.0
     features = _make_features(close, volume)
-    # Align label with the *next* candle return: feature row t predicts t+1.\n    target = np.zeros(len(close), dtype=int)\n    target[:-1] = (returns[1:] > 0).astype(int)
+    # Align label with the *next* candle return: feature row t predicts t+1.
+    target = np.zeros(len(close), dtype=int)
+    target[:-1] = (returns[1:] > 0).astype(int)
     valid_start = 60
     feature_rows = np.arange(valid_start, len(close) - 1)
     # The next candle's return is the outcome for a signal formed at row t.
@@ -162,10 +164,12 @@ def _metrics(name: str, net_returns: np.ndarray, signal: np.ndarray, gross_retur
     peaks = np.maximum.accumulate(np.concatenate(([1.0], equity)))[1:]
     drawdowns = (peaks - equity) / np.maximum(peaks, 1e-12)
     volatility = float(np.std(net_returns, ddof=1)) if len(net_returns) > 1 else 0.0
-    seconds_per_bar = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}.get(timeframe, 3600)\n    bars_per_year = 365.0 * 86400.0 / seconds_per_bar
+    seconds_per_bar = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}.get(timeframe, 3600)
+    bars_per_year = 365.0 * 86400.0 / seconds_per_bar
     sharpe = float(np.mean(net_returns) / volatility * np.sqrt(bars_per_year)) if volatility > 0 else None
     active = signal != 0
-    previous = np.concatenate(([0.0], signal[:-1]))\n    trade_count = int(np.count_nonzero((signal != 0) & ((previous == 0) | (np.sign(previous) != np.sign(signal)))))
+    previous = np.concatenate(([0.0], signal[:-1]))
+    trade_count = int(np.count_nonzero((signal != 0) & ((previous == 0) | (np.sign(previous) != np.sign(signal)))))
     winning = net_returns[active & (net_returns > 0)]
     losing = net_returns[active & (net_returns < 0)]
     gross_profit = float(winning.sum())

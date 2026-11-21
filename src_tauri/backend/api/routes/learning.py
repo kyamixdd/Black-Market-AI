@@ -12,7 +12,9 @@ from .schemas import (
     ModelRegistryResponse,
 )
 
-router = APIRouter(prefix="/learning", tags=["learning"])\n\n_STRATEGY_COMPARISON_CACHE: dict[tuple[str, str, str, int], tuple[float, dict]] = {}
+router = APIRouter(prefix="/learning", tags=["learning"])
+
+_STRATEGY_COMPARISON_CACHE: dict[tuple[str, str, str, int], tuple[float, dict]] = {}
 
 
 @router.get("", response_model=LearningStatusResponse)
@@ -143,7 +145,12 @@ async def get_strategy_comparison(
         {**candle, "symbol": symbol, "market": market, "timeframe": timeframe}
         for candle in candles
     ]
-    result = compare_strategies(normalized, timeframe=timeframe)\n    _STRATEGY_COMPARISON_CACHE[cache_key] = (time.monotonic(), result)\n    if len(_STRATEGY_COMPARISON_CACHE) > 100:\n        oldest = min(_STRATEGY_COMPARISON_CACHE, key=lambda key: _STRATEGY_COMPARISON_CACHE[key][0])\n        _STRATEGY_COMPARISON_CACHE.pop(oldest, None)\n    return result
+    result = compare_strategies(normalized, timeframe=timeframe)
+    _STRATEGY_COMPARISON_CACHE[cache_key] = (time.monotonic(), result)
+    if len(_STRATEGY_COMPARISON_CACHE) > 100:
+        oldest = min(_STRATEGY_COMPARISON_CACHE, key=lambda key: _STRATEGY_COMPARISON_CACHE[key][0])
+        _STRATEGY_COMPARISON_CACHE.pop(oldest, None)
+    return result
 
 
 @router.get("/models", response_model=ModelRegistryListResponse)
