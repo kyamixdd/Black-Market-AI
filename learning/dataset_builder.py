@@ -25,7 +25,7 @@ class DatasetBuilder:
         self.feature_engine = feature_engine or FeatureEngine()
         self.session_maker = get_session_maker()
 
-    def build_dataset(self, min_samples: int = WALK_FORWARD_MIN_SAMPLES, *, include_timestamps: bool = False):
+    def build_dataset(self, min_samples: int = WALK_FORWARD_MIN_SAMPLES, *, include_timestamps: bool = False, include_metadata: bool = False):
         """
         Build feature matrix X and target vector y from resolved predictions.
         Returns (X, y) where y is class indices: 0=DOWN, 1=FLAT, 2=UP
@@ -47,6 +47,9 @@ class DatasetBuilder:
         X_list = []
         y_list = []
         timestamp_list = []
+        return_list = []
+        regime_list = []
+        horizon_list = []
 
         for pred in resolved:
             try:
@@ -69,6 +72,9 @@ class DatasetBuilder:
                         else int(pred.created_at.timestamp() * 1000)
                         + int(pred.horizon_minutes or 60) * 60 * 1000
                     )
+                    return_list.append(float(pred.actual_return_pct) if pred.actual_return_pct is not None else np.nan)
+                    regime_list.append(str(pred.regime or "UNKNOWN").upper())
+                    horizon_list.append(int(pred.horizon_minutes or 60))
             except Exception as exc:
                 logger.warning("Failed to build features for %s: %s", pred.prediction_id, exc)
                 continue
@@ -82,7 +88,16 @@ class DatasetBuilder:
         timestamps = np.asarray(timestamp_list, dtype=np.int64)
         order = np.argsort(timestamps, kind="stable")
         X, y, timestamps = X[order], y[order], timestamps[order]
+        metadata = {
+            "actual_return_pct": np.asarray(return_list, dtype=np.float64)[order],
+            "regimes": np.asarray(regime_list, dtype=object)[order],
+            "horizon_minutes": np.asarray(horizon_list, dtype=np.int32)[order],
+        }
         logger.info("Built dataset: X=%s, y=%s", X.shape, y.shape)
+        if include_metadata:
+            if not include_timestamps:
+                raise ValueError("include_metadata requires include_timestamps=True")
+            return X, y, timestamps, metadata
         return (X, y, timestamps) if include_timestamps else (X, y)
 
     def _build_features_for_prediction(self, pred: PredictionModel) -> np.ndarray | None:
