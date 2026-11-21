@@ -105,7 +105,7 @@ class ModelTrainer:
                 item for item in registry
                 if getattr(item, "model_type", None) == model_type
                 and bool(getattr(item, "is_active", False))
-                and bool(getattr(item, "is_champion", False))
+                and (bool(getattr(item, "is_champion", False)) or str(getattr(item, "status", "")).upper() in {"PROMOTED", "CHAMPION"})
             ]
             if not active:
                 logger.warning("Promotion blocked: no active champion for %s", model_type)
