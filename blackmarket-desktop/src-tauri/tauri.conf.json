@@ -47,7 +47,8 @@
       "../../src_tauri/backend/api/*.py": "blackmarket_backend/src_tauri/backend/api/",
       "../../src_tauri/backend/api/routes/*.py": "blackmarket_backend/src_tauri/backend/api/routes/",
       "../../src_tauri/backend/api/websocket/*.py": "blackmarket_backend/src_tauri/backend/api/websocket/",
-      "../../src_tauri/backend/bridge/*.py": "blackmarket_backend/src_tauri/backend/bridge/"
+      "../../src_tauri/backend/bridge/*.py": "blackmarket_backend/src_tauri/backend/bridge/",
+      "resources/backend/": "blackmarket_backend/backend/"
     },
     "icon": [
       "icons/32x32.png",

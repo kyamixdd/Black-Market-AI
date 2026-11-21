@@ -10,7 +10,8 @@
     "test": "node --experimental-strip-types --test src/services/marketData.test.ts",
     "preview": "vite preview",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build --bundles nsis"
+    "tauri:build": "tauri build --bundles nsis",
+    "tauri:build:windows": "powershell -ExecutionPolicy Bypass -File ../scripts/build_windows_installer.ps1"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.107.1",
