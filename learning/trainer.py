@@ -35,11 +35,11 @@ class ModelTrainer:
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.last_river_path: Path | None = None
 
-    def train_and_validate(self, X: np.ndarray | None = None, y: np.ndarray | None = None, timestamps: np.ndarray | None = None) -> dict[str, Any]:
+    def train_and_validate(self, X: np.ndarray | None = None, y: np.ndarray | None = None, timestamps: np.ndarray | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         """Full training pipeline: build dataset, validate, train, register."""
         # 1. Build dataset
         if X is None or y is None:
-            X, y, timestamps = self.dataset_builder.build_dataset(include_timestamps=True)
+            X, y, timestamps, metadata = self.dataset_builder.build_dataset(include_timestamps=True, include_metadata=True)
         if len(X) == 0:
             return {"status": "insufficient_data", "samples": 0}
 
@@ -55,9 +55,19 @@ class ModelTrainer:
         if timestamps.ndim != 1 or len(timestamps) != len(y):
             return {"status": "validation_failed", "samples": len(y), "reason": "timestamp_alignment_error"}
 
+        if metadata is None:
+            return {"status": "validation_failed", "samples": len(y), "reason": "cost_and_regime_metadata_required_for_promotion"}
+        required_metadata = ("actual_return_pct", "transaction_costs", "regimes", "markets", "horizon_minutes")
+        if any(key not in metadata or len(np.asarray(metadata[key]).reshape(-1)) != len(y) for key in required_metadata):
+            return {"status": "validation_failed", "samples": len(y), "reason": "promotion_metadata_alignment_error"}
+
         # 2. Walk-forward validation; live forecasts use a one-hour target horizon.
         validation = self.validator.validate_ensemble(X, y, timestamps=timestamps, purge_gap_ms=60 * 60 * 1000)
-        promotion_gate = ModelPromotionGate().evaluate(validation, sample_count=len(y))
+        champion_validation = self._validate_active_champions(X, y, timestamps)
+        promotion_gate = ModelPromotionGate().evaluate(
+            validation, sample_count=len(y), economic_metadata=metadata,
+            champion_validation=champion_validation,
+        )
         validation["promotion_gate"] = promotion_gate
         logger.info("Validation complete: RF passes=%s, XGB passes=%s",
                     validation["rf"].get("passes_threshold", False),
@@ -81,6 +91,44 @@ class ModelTrainer:
                 "validation": validation,
                 "samples": len(X),
             }
+
+    def _validate_active_champions(self, X: np.ndarray, y: np.ndarray, timestamps: np.ndarray) -> dict[str, Any]:
+        """Evaluate active RF/XGB champions on identical chronological folds."""
+        try:
+            registry = self.repo.get_model_registry()
+        except Exception:
+            logger.exception("Unable to load active champion registry")
+            return {}
+        results: dict[str, Any] = {}
+        for model_type, gate_name in (("random_forest", "rf"), ("xgboost", "xgb")):
+            active = [
+                item for item in registry
+                if getattr(item, "model_type", None) == model_type
+                and bool(getattr(item, "is_active", False))
+                and bool(getattr(item, "is_champion", False))
+            ]
+            if not active:
+                logger.warning("Promotion blocked: no active champion for %s", model_type)
+                continue
+            champion = max(active, key=lambda item: getattr(item, "trained_at", datetime.min.replace(tzinfo=timezone.utc)))
+            file_path = getattr(champion, "file_path", None)
+            if not file_path or not Path(file_path).is_file():
+                logger.warning("Promotion blocked: champion model file unavailable for %s", model_type)
+                continue
+            def champion_factory(path=file_path, kind=model_type):
+                if kind == "xgboost":
+                    model = xgb.XGBClassifier()
+                    model.load_model(str(path))
+                    return model
+                return joblib.load(path)
+            try:
+                results[gate_name] = self.validator.validate(
+                    X, y, champion_factory, metric="f1", timestamps=timestamps,
+                    purge_gap_ms=60 * 60 * 1000,
+                )
+            except Exception:
+                logger.exception("Champion comparison validation failed for %s", model_type)
+        return results
 
     def _train_final_models(self, X: np.ndarray, y: np.ndarray, version: str) -> dict[str, Any]:
         """Train final models on full dataset and save."""
