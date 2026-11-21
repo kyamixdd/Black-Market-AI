@@ -41,7 +41,7 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
     returns = np.zeros(len(close), dtype=float)
     returns[1:] = close[1:] / close[:-1] - 1.0
     features = _make_features(close, volume)
-    target = (returns > 0).astype(int)
+    # Align label with the *next* candle return: feature row t predicts t+1.\n    target = np.zeros(len(close), dtype=int)\n    target[:-1] = (returns[1:] > 0).astype(int)
     valid_start = 60
     feature_rows = np.arange(valid_start, len(close) - 1)
     # The next candle's return is the outcome for a signal formed at row t.
