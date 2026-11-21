@@ -228,7 +228,7 @@ class ModelPromotionGate:
     ) -> dict[str, Any]:
         if not oof or not metadata:
             return {"status": "missing", "reason": "OOF predictions or aligned realized-return/cost metadata missing"}
-        required = ("actual_return_pct", "transaction_costs", "regimes", "markets", "horizon_minutes")
+        required = ("timestamps", "actual_return_pct", "transaction_costs", "regimes", "markets", "horizon_minutes")
         if any(key not in metadata for key in required):
             return {"status": "missing", "reason": "required return, costs, market, regime or horizon arrays missing"}
         arrays = {}
@@ -244,6 +244,7 @@ class ModelPromotionGate:
             return {"status": "missing", "reason": "OOF index outside aligned metadata"}
         returns = []
         indices = []
+        timestamp_returns: dict[int, list[float]] = {}
         regimes: dict[str, list[float]] = {}
         for row in oof:
             index = int(row["index"])
@@ -265,12 +266,18 @@ class ModelPromotionGate:
             net = gross - transaction_cost - funding
             returns.append(net)
             indices.append(index)
+            timestamp = _finite(arrays["timestamps"][index])
+            if timestamp is None:
+                return {"status": "missing", "reason": "invalid chronological timestamp metadata"}
+            timestamp_returns.setdefault(int(timestamp), []).append(net)
             regimes.setdefault(regime, []).append(net)
         if not returns:
             return {"status": "missing", "reason": "no OOF economic samples"}
         equity = peak = 1.0
         max_drawdown = 0.0
-        for net in returns:
+        # Aggregate simultaneous symbols into one equal-weight period return.
+        period_returns = [sum(values) / len(values) for _, values in sorted(timestamp_returns.items())]
+        for net in period_returns:
             equity *= max(0.0, 1.0 + net)
             peak = max(peak, equity)
             if peak > 0:
@@ -300,6 +307,7 @@ class ModelPromotionGate:
         ) / len(indices)
         return {
             "status": "ok", "net_expectancy": sum(returns) / len(returns),
+            "evaluation_periods": len(period_returns),
             "max_drawdown_pct": max_drawdown, "stability_score": stability,
             "regime_performance": regime_perf, "regime_coverage": coverage,
             "sample_count": len(returns), "mean_fees_and_slippage": fee_slippage_cost,
