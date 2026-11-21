@@ -193,6 +193,7 @@ const EMPTY_DATA: DashboardData = {
   events: [],
   markets: [],
   positions: [],
+  openOrders: [],
   trades: [],
   tradeStats: null,
   strategies: [],
@@ -710,7 +711,7 @@ function App() {
       }
 
       if (activeScreen === 'Portfolio' || activeScreen === 'Positions' || activeScreen === 'Trade History') {
-        const [positionsPayload, tradesPayload] = await Promise.all([
+        const [positionsPayload, tradesPayload, ordersPayload] = await Promise.all([
           requestJson<{ positions?: WorkspaceData['positions'] }>('/positions'),
           requestJson<{
             trades?: WorkspaceData['trades']
@@ -720,11 +721,13 @@ function App() {
             profit_factor?: number
             max_drawdown_pct?: number
           }>('/trades?limit=1000'),
+          activeScreen === 'Positions' ? requestJson<{ orders?: WorkspaceData['openOrders'] }>('/trades/orders') : Promise.resolve(null),
         ])
         if (!active) return
         setData((current) => ({
           ...current,
           positions: positionsPayload?.positions ?? current.positions,
+          openOrders: ordersPayload?.orders ?? current.openOrders,
           trades: tradesPayload?.trades ?? current.trades,
           tradeStats: tradesPayload ? {
             total: tradesPayload.total,
@@ -1411,9 +1414,15 @@ function App() {
             if (!positionId) throw new Error('Missing position identifier.')
             if (action === 'close') {
               await mutateJson(`/positions/${encodeURIComponent(positionId)}/close`, 'POST')
+            } else if (action === 'partial-close') {
+              await mutateJson(`/positions/${encodeURIComponent(positionId)}/partial-close`, 'POST', { quantity: values?.quantity })
             } else {
               await mutateJson(`/positions/${encodeURIComponent(positionId)}`, 'PATCH', values ?? {})
             }
+            refreshScreenDataRef.current?.()
+          }}
+          onCancelOrder={async (orderId) => {
+            await mutateJson(`/trades/orders/${encodeURIComponent(orderId)}`, 'DELETE')
             refreshScreenDataRef.current?.()
           }}
           onSelectMarket={(selectedSymbol, selectedMarket) => {
