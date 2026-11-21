@@ -106,7 +106,7 @@ def _promotion_fixture(challenger_pred=2, champion_pred=0):
         "ensemble_passes": True,
     }
     champion = {name: {"valid": True, "passes_threshold": True, "aggregated": {"mean_f1": 0.4, "mean_accuracy": 0.4}, "folds": folds, "out_of_fold": champion_oof} for name in ("rf", "xgb")}
-    metadata = {"actual_return_pct": [1.0] * 6, "transaction_costs": [0.0001] * 6,
+    metadata = {"timestamps": [1000, 2000, 3000, 4000, 5000, 6000], "actual_return_pct": [1.0] * 6, "transaction_costs": [0.0001] * 6,
         "regimes": ["TREND", "TREND", "RANGE", "RANGE", "VOLATILE", "VOLATILE"],
         "markets": ["SPOT"] * 6, "horizon_minutes": [60] * 6}
     return ModelPromotionGate(criteria), validation, champion, metadata
