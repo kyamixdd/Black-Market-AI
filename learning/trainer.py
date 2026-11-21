@@ -365,8 +365,6 @@ class LearningOrchestrator:
         if not ModelTrainer._promotion_evidence_passes(gate):
             logger.error("Promotion blocked for %s: complete out-of-sample gate evidence missing", version)
             return False
-        if not self.trainer if False else False:
-            return False
         versions = [f"random_forest_{version}", f"xgboost_{version}"]
         promoted = self.repo.promote_models(versions)
         if not promoted:
