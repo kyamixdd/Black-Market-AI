@@ -81,6 +81,7 @@ class WalkForwardValidator:
                 elif hasattr(value, "timestamp") and callable(value.timestamp):
                     value = int(value.timestamp() * 1000)
                 normalized.append(value)
+            time_values = np.asarray(normalized)
             try:
                 if any(normalized[i] > normalized[i + 1] for i in range(len(normalized)-1)):
                     raise ValueError("timestamps must be sorted oldest-first")
