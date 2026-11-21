@@ -102,6 +102,7 @@ class WalkForwardValidator:
             gap=effective_gap,
         )
         fold_metrics = []
+        out_of_fold = []
 
         split_source = np.unique(time_values) if time_values is not None else X
         for fold, (candidate_train_idx, candidate_test_idx) in enumerate(tscv.split(split_source)):
@@ -134,6 +135,26 @@ class WalkForwardValidator:
 
             # Predict
             y_pred = model.predict(X_test)
+            if hasattr(model, "predict_proba"):
+                try:
+                    raw_probabilities = np.asarray(model.predict_proba(X_test), dtype=float)
+                    model_classes = np.asarray(getattr(model, "classes_", np.unique(y_train)))
+                    probabilities = np.zeros((len(X_test), 3), dtype=float)
+                    for class_index, class_value in enumerate(model_classes):
+                        class_id = int(class_value)
+                        if class_id in (0, 1, 2) and class_index < raw_probabilities.shape[1]:
+                            probabilities[:, class_id] = raw_probabilities[:, class_index]
+                    row_sums = probabilities.sum(axis=1, keepdims=True)
+                    probabilities = np.divide(probabilities, row_sums, out=np.zeros_like(probabilities), where=row_sums > 0)
+                except Exception:
+                    probabilities = np.eye(3, dtype=float)[np.clip(np.asarray(y_pred, dtype=int), 0, 2)]
+            else:
+                probabilities = np.eye(3, dtype=float)[np.clip(np.asarray(y_pred, dtype=int), 0, 2)]
+            for row_index, truth, prediction, probability in zip(test_idx, y_test, y_pred, probabilities):
+                out_of_fold.append({
+                    "index": int(row_index), "y_true": int(truth), "y_pred": int(prediction),
+                    "probabilities": probability.tolist(),
+                })
 
             # Calculate metrics
             fold_result = {
@@ -182,6 +203,7 @@ class WalkForwardValidator:
             "valid": True,
             "folds": fold_metrics,
             "aggregated": avg_metrics,
+            "out_of_fold": sorted(out_of_fold, key=lambda item: item["index"]),
             "primary_metric": metric,
             "primary_value": primary_value,
             "passes_threshold": primary_value >= self._get_threshold(metric),
