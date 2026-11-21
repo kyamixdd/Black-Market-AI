@@ -1315,11 +1315,14 @@ async def test_partial_close_rejects_full_or_excess_quantity_without_mutation():
     assert position == before
 
 
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("market,leverage", [("SPOT", 1.0), ("FUTURES", 5.0)])
-async def test_opening_position_at_entry_price_does_not_artificially_reduce_equity(market, leverage):
-    from types import SimpleNamespace
+@pytest.mark.parametrize("market,leverage,collateral_key,available_key,collateral", [
+    ("SPOT", 1.0, "reserved_notional", "spot_available_balance", 100.0),
+    ("FUTURES", 5.0, "reserved_margin", "futures_available_balance", 20.0),
+])
+async def test_opening_position_at_entry_price_preserves_portfolio_equity(
+    market, leverage, collateral_key, available_key, collateral
+):
     from src_tauri.backend.bridge.orchestrator_bridge import OrchestratorBridge
 
     simulator = Simulator(EventBus())
@@ -1327,6 +1330,7 @@ async def test_opening_position_at_entry_price_does_not_artificially_reduce_equi
     simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
     simulator.validate_new_position = lambda *_args: (True, "OK")
     simulator._calculate_order_quantity = lambda *_args: (1.0, leverage)
+
     bridge = object.__new__(OrchestratorBridge)
     bridge.simulator = simulator
     bridge._all_closed_trades = lambda: []
@@ -1334,7 +1338,7 @@ async def test_opening_position_at_entry_price_does_not_artificially_reduce_equi
 
     before = bridge.get_portfolio_summary()
     signal = {
-        "signal_id": f"EQUITY-{market}",
+        "signal_id": f"PORTFOLIO-EQUITY-{market}",
         "symbol": "BTCUSDT",
         "market": market,
         "direction": "LONG",
@@ -1347,12 +1351,13 @@ async def test_opening_position_at_entry_price_does_not_artificially_reduce_equi
     assert position_id is not None
     await simulator.update_prices(market, "BTCUSDT", 100.0)
     after = bridge.get_portfolio_summary()
+    account = simulator.get_account_equity_breakdown()
 
     assert after["total_balance"] == pytest.approx(before["total_balance"])
     assert after["total_return_pct"] == pytest.approx(before["total_return_pct"])
-    if market == "SPOT":
-        assert after["spot_available_balance"] == pytest.approx(simulator.initial_spot_balance - 100.0)
-        assert after["spot_used_capital"] == pytest.approx(100.0)
-    else:
-        assert after["futures_available_balance"] == pytest.approx(simulator.initial_futures_balance - 20.0)
-        assert after["futures_used_margin"] == pytest.approx(20.0)
+    assert account[available_key] == pytest.approx(
+        (simulator.initial_spot_balance if market == "SPOT" else simulator.initial_futures_balance) - collateral
+    )
+    assert account["total_used_capital"] >= collateral
+    assert account["total_equity"] == pytest.approx(before["total_balance"])
+    assert simulator._get_positions(market)[position_id][collateral_key] == pytest.approx(collateral)

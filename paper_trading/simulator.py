@@ -65,13 +65,13 @@ class Simulator:
         return self.spot_balance if market == "SPOT" else self.futures_balance
 
     def get_account_equity_breakdown(self) -> dict[str, float]:
-        """Reconcile available cash, collateral held in positions, and account equity.
+        """Return available cash, allocated collateral, and mark-to-market equity.
 
-        Spot principal and Futures initial margin are transfers from available
-        balance into position collateral, not losses. Unrealized P&L is added
-        to equity; entry/exit fees are already reflected in available balance.
+        Opening a position moves cash into reserved Spot principal or Futures
+        initial margin. Those amounts remain account assets; only fees and
+        realized/unrealized losses reduce equity.
         """
-        def finite_sum(values) -> float:
+        def sum_finite(values) -> float:
             total = 0.0
             for value in values:
                 try:
@@ -82,18 +82,24 @@ class Simulator:
                     total += number
             return total
 
-        spot_positions = [p for p in self.spot_positions.values() if p.get("status") in ("OPEN", "CLOSING")]
-        futures_positions = [p for p in self.futures_positions.values() if p.get("status") in ("OPEN", "CLOSING")]
-        spot_reserved = finite_sum(
+        spot_positions = [
+            p for p in self.spot_positions.values()
+            if p.get("status", "OPEN") in ("OPEN", "CLOSING")
+        ]
+        futures_positions = [
+            p for p in self.futures_positions.values()
+            if p.get("status", "OPEN") in ("OPEN", "CLOSING")
+        ]
+        spot_reserved = sum_finite(
             p.get("reserved_notional", float(p.get("entry_price", 0.0)) * float(p.get("amount", 0.0)))
             for p in spot_positions
         )
-        futures_margin = finite_sum(
+        futures_margin = sum_finite(
             p.get("reserved_margin", float(p.get("entry_price", 0.0)) * float(p.get("amount", 0.0)) / max(float(p.get("leverage", 1.0)), 1.0)))
             for p in futures_positions
         )
-        spot_unrealized = finite_sum(p.get("unrealized_pnl", 0.0) for p in spot_positions)
-        futures_unrealized = finite_sum(p.get("unrealized_pnl", 0.0) for p in futures_positions)
+        spot_unrealized = sum_finite(p.get("unrealized_pnl", 0.0) for p in spot_positions)
+        futures_unrealized = sum_finite(p.get("unrealized_pnl", 0.0) for p in futures_positions)
         spot_available = float(self.spot_balance)
         futures_available = float(self.futures_balance)
         spot_equity = spot_available + spot_reserved + spot_unrealized
@@ -101,9 +107,9 @@ class Simulator:
         return {
             "spot_available_balance": spot_available,
             "futures_available_balance": futures_available,
+            "total_available_balance": spot_available + futures_available,
             "spot_used_capital": spot_reserved,
             "futures_used_margin": futures_margin,
-            "total_available_balance": spot_available + futures_available,
             "total_used_margin": futures_margin,
             "total_used_capital": spot_reserved + futures_margin,
             "spot_unrealized_pnl": spot_unrealized,
