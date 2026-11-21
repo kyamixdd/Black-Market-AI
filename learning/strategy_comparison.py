@@ -59,6 +59,7 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
     xgb_prob = np.full(len(close), 0.5)
     hybrid_threshold = np.full(len(close), 1.01)
     fold_count = 0
+    selected_thresholds = {"Random Forest": [], "XGBoost": [], "Hybrid ML": []}
     # Use sequential expanding folds. Training targets end strictly before
     # the test block; no row from a test block is included in its fit.
     blocks = np.array_split(test_indices, min(4, max(1, len(test_indices) // 30)))
@@ -123,6 +124,9 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
             xgb_conf >= xgb_threshold, np.where(xgb_prob[block] >= 0.5, 1.0, -1.0), 0.0,
         )
         hybrid_threshold[block] = hybrid_threshold_for_fold
+        selected_thresholds["Random Forest"].append(float(rf_threshold))
+        selected_thresholds["XGBoost"].append(float(xgb_threshold))
+        selected_thresholds["Hybrid ML"].append(float(hybrid_threshold_for_fold))
         fold_count += 1
 
     # A crossover strategy uses only rolling means available at close t.
@@ -170,6 +174,7 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
         "evaluation_end_time": str(frame.iloc[-1]["open_time"]),
         "walk_forward_folds": fold_count,
         "confidence_filter": "RF, XGBoost, and Hybrid thresholds selected per fold from prior chronological calibration outcomes using net expectancy after fees; insufficient calibration disables trades",
+        "selected_confidence_thresholds_by_fold": selected_thresholds,
         "training_policy": "expanding chronological folds; fit labels strictly before each test fold",
         "cost_policy": f"fixed fee {fee_rate * 100:.4f}% per position change; no slippage/funding modeled",
         "strategies": results,
