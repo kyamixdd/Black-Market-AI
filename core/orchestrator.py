@@ -66,6 +66,7 @@ class Orchestrator:
         self.simulator.persist_order_callback = self._persist_paper_order
         self.simulator.persist_position_callback = self.repo.save_position
         self.simulator.persist_trade_callback = self.repo.save_trade_history
+        self.simulator.persist_partial_trade_callback = self.repo.save_partial_trade
         self.scanner: Scanner = Scanner(
             self.event_bus, self.registry, self.cache,
             self.spot_client, self.futures_client,

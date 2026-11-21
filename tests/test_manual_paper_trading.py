@@ -255,3 +255,29 @@ def test_open_orders_endpoint_returns_typed_order_contract(monkeypatch):
         assert payload["total"] == 1
         assert payload["orders"][0]["order_id"] == "ORD-TYPED"
         assert payload["orders"][0]["status"] == "RECOVERY_REVIEW"
+
+
+@pytest.mark.parametrize("payload", [
+    {"quantity": 0},
+    {"quantity": -1},
+    {"quantity": float("nan")},
+    {"quantity": float("inf")},
+])
+def test_partial_close_request_rejects_invalid_quantity(payload):
+    from src_tauri.backend.api.routes.schemas import PartialCloseRequest
+    with pytest.raises(ValidationError):
+        PartialCloseRequest(**payload)
+
+
+def test_position_update_rejects_unknown_fields():
+    with pytest.raises(ValidationError):
+        PositionUpdateRequest(stop_loss=90.0, trailing_mode=True)
+
+
+def test_manual_order_request_rejects_unknown_fields():
+    payload = {
+        "symbol": "BTCUSDT", "market": "SPOT", "side": "BUY",
+        "quantity": 0.001, "stop_loss": 90.0, "unexpected_override": True,
+    }
+    with pytest.raises(ValidationError):
+        ManualOrderRequest(**payload)

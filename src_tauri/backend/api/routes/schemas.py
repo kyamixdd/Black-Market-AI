@@ -609,6 +609,7 @@ class SuccessResponse(BaseModel):
 
 
 class ManualOrderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     symbol: str = Field(min_length=3, max_length=30, pattern=r"^[A-Z0-9]{3,30}$")
     market: MarketType
     side: Literal["BUY", "SELL", "LONG", "SHORT"]
@@ -621,8 +622,13 @@ class ManualOrderRequest(BaseModel):
 
 
 class PositionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     stop_loss: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     take_profit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
+class PartialCloseRequest(BaseModel):
+    quantity: float = Field(gt=0, allow_inf_nan=False)
 
 
 class ManualActionResponse(BaseModel):

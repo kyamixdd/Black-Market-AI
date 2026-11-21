@@ -1,6 +1,7 @@
 """Paper trading simulator: virtual accounts, orders, positions, P&L."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import uuid
@@ -35,6 +36,8 @@ class Simulator:
         self.persist_order_callback = None
         self.persist_position_callback = None
         self.persist_trade_callback = None
+        self.persist_partial_trade_callback = None
+        self._account_lock = asyncio.Lock()
         self.initial_spot_balance = SPOT_INITIAL_BALANCE
         self.initial_futures_balance = FUTURES_INITIAL_BALANCE
         self.spot_balance = self.initial_spot_balance
@@ -193,7 +196,12 @@ class Simulator:
         return True, "OK"
 
     async def execute_signal(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
-        """Execute a validated signal into a paper position."""
+        """Serialize balance validation and collateral reservation."""
+        async with self._account_lock:
+            return await self._execute_signal_locked(signal, quantity_override)
+
+    async def _execute_signal_locked(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
+        """Execute a signal while holding the account allocation lock."""
         ok, reason = self.validate_new_position(signal, quantity_override)
         if not ok:
             logger.warning("Signal %s risk check failed: %s", signal["signal_id"], reason)
@@ -402,6 +410,94 @@ class Simulator:
             self.futures_balance = previous_balance
             raise
         logger.debug("Funding payment for %s: %.4f (rate: %.6f)", position["symbol"], payment, funding_rate)
+
+    async def _partial_close_position(self, position: dict, exit_price: float, quantity: float, reason: str = "PARTIAL") -> bool:
+        """Partially close a position, realizing proportional P&L and releasing collateral."""
+        if position.get("status") != "OPEN":
+            return False
+        quantity = float(quantity)
+        exit_price = float(exit_price)
+        amount_before = float(position["amount"])
+        if not math.isfinite(quantity) or quantity <= 0 or quantity >= amount_before:
+            raise ValueError("Partial-close quantity must be positive and smaller than the open quantity.")
+        if not math.isfinite(exit_price) or exit_price <= 0:
+            raise ValueError("Exit price must be finite and positive.")
+
+        position["status"] = "CLOSING"
+        market = position["market"]
+        ratio = quantity / amount_before
+        try:
+            fill_price = float(self.fee_calc.get_fill_price(
+                market, position["side"], position.get("order_type", "MARKET"),
+                exit_price, quantity, position["leverage"],
+                self._get_volume_24h(market, position["symbol"])
+            ))
+            fee = float(self.fee_calc.calculate(market, position["side"], quantity, fill_price, position["leverage"]))
+            gross_pnl = float(self.pnl_calc.realized({**position, "amount": quantity}, fill_price))
+            allocated_entry_fees = float(position.get("fees_paid", 0.0)) * ratio
+            net_pnl = gross_pnl - allocated_entry_fees - fee
+            if not all(math.isfinite(v) for v in (fill_price, fee, gross_pnl, allocated_entry_fees, net_pnl)) or fill_price <= 0 or fee < 0:
+                raise ValueError("Partial-close accounting produced invalid values.")
+        except Exception:
+            position["status"] = "OPEN"
+            raise
+
+        old = dict(position)
+        balance_before = self.get_balance(market)
+        daily_before = self.daily_pnl
+        collateral_key = "reserved_notional" if market == "SPOT" else "reserved_margin"
+        collateral = float(position.get(collateral_key, 0.0))
+        released = collateral * ratio
+        if market == "SPOT":
+            self.spot_balance += released + gross_pnl - fee
+        else:
+            self.futures_balance += released + gross_pnl - fee
+
+        position["amount"] = amount_before - quantity
+        position[collateral_key] = collateral - released
+        position["fees_paid"] = float(position.get("fees_paid", 0.0)) - allocated_entry_fees
+        position["realized_pnl"] = float(position.get("realized_pnl", 0.0)) + net_pnl
+        position["unrealized_pnl"] = self.pnl_calc.unrealized(position, position.get("current_price", position["entry_price"]))
+        position["status"] = "OPEN"
+        trade = {
+            "position_id": f"{position['position_id']}-PARTIAL-{uuid.uuid4().hex[:8].upper()}",
+            "source_position_id": position["position_id"],
+            "symbol": position["symbol"], "market": market, "side": position["side"],
+            "entry_price": position["entry_price"], "exit_price": fill_price,
+            "amount": quantity, "leverage": position["leverage"], "pnl": net_pnl,
+            "pnl_pct": net_pnl / (position["entry_price"] * quantity) * 100,
+            "fee": allocated_entry_fees + fee, "strategy": position.get("strategy", "UNKNOWN"),
+            "signal_id": position.get("signal_id"), "order_id": position.get("order_id"),
+            "opened_at": position["opened_at"], "closed_at": datetime.now(timezone.utc),
+            "close_reason": reason,
+        }
+        self.closed_trades.append(trade)
+        self.get_daily_pnl()
+        self.daily_pnl += net_pnl
+        try:
+            if callable(self.persist_partial_trade_callback):
+                self.persist_partial_trade_callback(trade, position)
+            elif callable(self.persist_position_callback):
+                self.persist_position_callback(position)
+        except Exception:
+            self.closed_trades.pop()
+            self.daily_pnl = daily_before
+            if market == "SPOT":
+                self.spot_balance = balance_before
+            else:
+                self.futures_balance = balance_before
+            position.clear()
+            position.update(old)
+            raise
+        try:
+            await self.event_bus.publish(make_event(
+                EventType.POSITION_CLOSED, "simulator",
+                symbol=position["symbol"], market=market, trade=trade,
+                payload={"partial": True, "remaining_amount": position["amount"]}
+            ))
+        except Exception:
+            logger.exception("Partial close committed but event publication failed")
+        return True
 
     async def _close_position(self, position: dict, exit_price: float, reason: str) -> bool:
         """Close an open position once; concurrent close attempts become no-ops."""

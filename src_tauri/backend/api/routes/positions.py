@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from ...bridge.orchestrator_bridge import get_bridge
 from .schemas import (
     PositionListResponse, PositionResponse, PositionUpdateRequest,
-    ManualActionResponse,
+    PartialCloseRequest, ManualActionResponse,
 )
 from .trades import _validated_snapshot_price
 
@@ -49,6 +49,22 @@ async def close_position(position_id: str):
     if not closed:
         raise HTTPException(409, "Position is already closing or has been closed.")
     return ManualActionResponse(success=True, id=position_id, message="Paper position closed.")
+
+
+@router.post("/{position_id}/partial-close", response_model=ManualActionResponse)
+async def partial_close_position(position_id: str, request: PartialCloseRequest):
+    bridge = get_bridge()
+    simulator = bridge.simulator
+    position = simulator.spot_positions.get(position_id) or simulator.futures_positions.get(position_id)
+    if position is None or position.get("status") != "OPEN":
+        raise HTTPException(404, "Open position not found.")
+    if request.quantity >= float(position["amount"]):
+        raise HTTPException(422, "Partial-close quantity must be smaller than the open quantity.")
+    price = _validated_snapshot_price(bridge.get_market_snapshot(position["symbol"], position["market"]))
+    closed = await simulator._partial_close_position(position, price, request.quantity)
+    if not closed:
+        raise HTTPException(409, "Position is already closing or has been closed.")
+    return ManualActionResponse(success=True, id=position_id, message="Position partially closed.")
 
 
 @router.patch("/{position_id}", response_model=ManualActionResponse)
