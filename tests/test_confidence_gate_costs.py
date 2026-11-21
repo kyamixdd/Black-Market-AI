@@ -85,3 +85,52 @@ def test_live_confidence_gate_fails_closed_without_matching_calibration(
         confidence, threshold, model_version, calibrated_version
     )
     assert not allowed
+
+
+def _promotion_fixture(challenger_pred=2, champion_pred=0):
+    from learning.confidence_gate import ModelPromotionGate, PromotionGateCriteria
+    criteria = PromotionGateCriteria(min_samples=6, min_folds=3, min_mean_accuracy=0.5, min_mean_f1=0.5,
+        max_fold_degradation=0.2, min_net_expectancy=0.0001, max_drawdown_pct=50.0,
+        min_calibration_score=0.5, min_stability_score=0.0, min_regime_coverage=1,
+        min_regime_samples=2, min_improvement_over_champion=0.02, min_net_expectancy_improvement=0.0001)
+    folds = [
+        {"f1_macro": 0.8, "train_end_index": 0, "test_start_index": 1, "test_end_index": 1},
+        {"f1_macro": 0.8, "train_end_index": 1, "test_start_index": 2, "test_end_index": 3},
+        {"f1_macro": 0.8, "train_end_index": 3, "test_start_index": 4, "test_end_index": 5},
+    ]
+    candidate_oof = [{"index": i, "y_true": 2, "y_pred": challenger_pred, "probabilities": [0.05, 0.05, 0.90]} for i in range(6)]
+    champion_oof = [{"index": i, "y_true": 2, "y_pred": champion_pred, "probabilities": [0.80, 0.10, 0.10]} for i in range(6)]
+    validation = {
+        "rf": {"valid": True, "passes_threshold": True, "aggregated": {"mean_f1": 0.8, "mean_accuracy": 0.8}, "folds": folds, "out_of_fold": candidate_oof},
+        "xgb": {"valid": True, "passes_threshold": True, "aggregated": {"mean_f1": 0.8, "mean_accuracy": 0.8}, "folds": folds, "out_of_fold": candidate_oof},
+        "ensemble_passes": True,
+    }
+    champion = {name: {"valid": True, "passes_threshold": True, "aggregated": {"mean_f1": 0.4, "mean_accuracy": 0.4}, "folds": folds, "out_of_fold": champion_oof} for name in ("rf", "xgb")}
+    metadata = {"actual_return_pct": [1.0] * 6, "transaction_costs": [0.0001] * 6,
+        "regimes": ["TREND", "TREND", "RANGE", "RANGE", "VOLATILE", "VOLATILE"],
+        "markets": ["SPOT"] * 6, "horizon_minutes": [60] * 6}
+    return ModelPromotionGate(criteria), validation, champion, metadata
+
+
+def test_comprehensive_promotion_gate_requires_cost_adjusted_champion_improvement():
+    gate, validation, champion, metadata = _promotion_fixture()
+    result = gate.evaluate(validation, 6, economic_metadata=metadata, champion_validation=champion)
+    assert result["passes"] is True
+    assert result["economic_evidence"]["rf"]["mean_fees_and_slippage"] == pytest.approx(0.0001)
+    assert result["economic_evidence"]["rf"]["mean_funding_cost"] == 0.0
+    assert result["economic_evidence"]["rf"]["relative_f1_improvement"] >= 0.02
+
+
+def test_comprehensive_promotion_gate_fails_closed_without_cost_or_champion_data():
+    gate, validation, _champion, _metadata = _promotion_fixture()
+    result = gate.evaluate(validation, 6)
+    assert result["passes"] is False
+    assert any("evidence unavailable" in reason for reason in result["failure_reasons"])
+    assert any("active champion comparison evidence missing" in reason for reason in result["failure_reasons"])
+
+
+def test_comprehensive_promotion_gate_rejects_negative_net_expectancy():
+    gate, validation, champion, metadata = _promotion_fixture(challenger_pred=0, champion_pred=2)
+    result = gate.evaluate(validation, 6, economic_metadata=metadata, champion_validation=champion)
+    assert result["passes"] is False
+    assert any("net expectancy" in reason for reason in result["failure_reasons"])
