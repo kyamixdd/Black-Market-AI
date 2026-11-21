@@ -114,3 +114,56 @@ def _finite(value: Any) -> float | None:
     try: number = float(value)
     except (TypeError, ValueError, OverflowError): return None
     return number if isfinite(number) else None
+
+
+
+def calibrate_model_confidence_threshold(predictions: Any, model_version: str, *, min_samples: int = 20) -> dict[str, Any]:
+    """Calibrate a model-version-specific live cutoff from resolved historical predictions only.
+
+    Prediction confidence is converted to a directional probability for the
+    selector: UP uses confidence, DOWN uses 1-confidence. Actual market return
+    remains signed and is never derived from the predicted direction.
+    """
+    if not model_version:
+        return {"status": "model_version_unavailable", "threshold": None, "model_version": None}
+    rows = []
+    for prediction in predictions:
+        if str(getattr(prediction, "model_version", "")) != str(model_version):
+            continue
+        actual_return = getattr(prediction, "actual_return_pct", None)
+        predicted_class = str(getattr(prediction, "predicted_class", "")).upper()
+        confidence = _finite(getattr(prediction, "confidence", None))
+        if actual_return is None or predicted_class not in {"UP", "DOWN"} or confidence is None:
+            continue
+        actual_return = _finite(actual_return)
+        if actual_return is None or not 0.5 <= confidence <= 1.0:
+            continue
+        probability_up = confidence if predicted_class == "UP" else 1.0 - confidence
+        # DB outcome returns are stored in percentage points (e.g. 1.2 = 1.2%).
+        rows.append((probability_up, actual_return / 100.0))
+    if len(rows) < min_samples:
+        return {
+            "status": "insufficient_model_calibration",
+            "threshold": None,
+            "model_version": model_version,
+            "calibration_samples": len(rows),
+        }
+    result = select_confidence_threshold(
+        [row[0] for row in rows],
+        [row[1] for row in rows],
+        min_trades=min_samples,
+    )
+    if result.get("status") != "selected_from_historical_calibration":
+        return {
+            "status": result.get("status", "threshold_unavailable"),
+            "threshold": None,
+            "model_version": model_version,
+            "calibration_samples": len(rows),
+        }
+    return {
+        "status": result["status"],
+        "threshold": float(result["threshold"]),
+        "model_version": model_version,
+        "calibration_samples": len(rows),
+        "selected_metrics": result.get("selected_metrics"),
+    }
