@@ -279,12 +279,20 @@ class LiveLearningService:
         temporary.replace(path)
         return {"passes": True, "model": model, "version": version, "path": path, "metrics": metrics}
 
-    def _activate_batch_models(self, result: dict[str, Any]) -> None:
+    def _activate_batch_models(self, result: dict[str, Any]) -> bool:
         version = result.get("version")
-        if version:
-            self.repo.promote_model(f"random_forest_{version}")
-            self.repo.promote_model(f"xgboost_{version}")
-            self.predictor._load_latest()
+        validation = result.get("validation") or {}
+        gate = validation.get("promotion_gate") or {}
+        if not version or not ModelTrainer._promotion_evidence_passes(gate):
+            logger.error("Batch activation blocked: no complete out-of-sample promotion evidence")
+            return False
+        versions = [f"random_forest_{version}", f"xgboost_{version}"]
+        if not self.repo.promote_models(versions):
+            logger.error("Batch activation rejected by repository; models remain inactive")
+            return False
+        self.trainer._update_latest_symlinks(version)
+        self.predictor._load_latest()
+        return True
 
     async def _predict_latest(self, histories: dict[tuple[str, str], list[dict[str, Any]]]) -> None:
         for market, symbol in self._pairs:
@@ -401,10 +409,12 @@ class LiveLearningService:
             "model_type": "river",
             "metrics": {"online_updates": self.river_updates, "samples": self.training_samples},
             "file_path": str(path),
-            "status": "TRAINED",
-            "is_active": True,
+            "status": "CANDIDATE",
+            "is_active": False,
+            "is_champion": False,
         })
-        self.repo.promote_model("river_live")
+        # Online River updates are experimental candidates. They cannot activate
+        # or replace a champion without the same purged OOF promotion gate.
 
     async def _retrain_from_live_outcomes(self, resolved_count: int) -> None:
         self.last_cycle_status = f"retraining_from_{resolved_count}_resolved_predictions"
