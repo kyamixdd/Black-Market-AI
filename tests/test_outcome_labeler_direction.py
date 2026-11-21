@@ -3,9 +3,6 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
-
-import learning.outcome_labeler as outcome_labeler_module
 from database.connection import Database
 from database.models import CandleModel
 from learning.outcome_labeler import OutcomeLabeler
@@ -77,12 +74,7 @@ def test_price_lookup_uses_only_candles_closed_at_target(monkeypatch, tmp_path):
         )
         session.commit()
 
-    monkeypatch.setattr(
-        outcome_labeler_module, "get_session_maker", lambda: session_maker,
-        raising=False,
-    )
-    # _get_price_at_time imports get_session_maker locally, so patch the source
-    # module's database connection accessor instead.
+    # _get_price_at_time imports the session factory inside the method.
     import database.connection as connection_module
     monkeypatch.setattr(connection_module, "get_session_maker", lambda: session_maker)
 
