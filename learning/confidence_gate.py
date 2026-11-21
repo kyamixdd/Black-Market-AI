@@ -31,6 +31,14 @@ def select_confidence_threshold(probabilities: Any, forward_returns: Any, *, fee
         fees = np.abs(np.diff(np.concatenate(([0.0], signal)))) * fee_rate
         if signal[-1] != 0:
             fees[-1] += fee_rate
+        # Attribute exit fees to the last active observation so threshold
+        # expectancy cannot omit costs merely because the position is flat
+        # on the row where the exit transition is recorded.
+        for index in np.flatnonzero(~active & (fees > 0)):
+            previous_active = np.flatnonzero(active[:index])
+            if previous_active.size:
+                fees[previous_active[-1]] += fees[index]
+                fees[index] = 0.0
         net = signal * returns - fees
         active_net = net[active]
         gains = float(active_net[active_net > 0].sum())
