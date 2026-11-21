@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 from config import (
@@ -63,6 +65,7 @@ class Orchestrator:
         self.feature_engine: FeatureEngine = self.intelligence.feature_engine
         self.predictor: Predictor = self.intelligence.predictor
         self.simulator: Simulator = Simulator(self.event_bus, self.cache)
+        self._confidence_threshold_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self.simulator.persist_order_callback = self._persist_paper_order
         self.simulator.persist_position_callback = self.repo.save_position
         self.simulator.persist_trade_callback = self.repo.save_trade_history
@@ -263,8 +266,98 @@ class Orchestrator:
     async def _on_signal_proposed(self, event) -> None:
         await self.decision_engine.evaluate_signal(event.payload)
 
+    def _live_paper_confidence_gate(self, signal: dict[str, Any]) -> tuple[bool, str]:
+        """Require a matching active model and historically calibrated threshold."""
+        from learning.confidence_gate import (
+            calibrate_model_confidence_threshold,
+            evaluate_live_confidence,
+        )
+
+        predictor = self.intelligence.predictor
+        model_version = str(getattr(predictor, "version", "") or "")
+        if not getattr(predictor, "is_trained", False) or not model_version or model_version == "0001":
+            return False, "active_trained_model_unavailable"
+
+        try:
+            registry = self.repo.get_model_registry()
+            active = [item for item in registry if bool(getattr(item, "is_active", False))]
+            if model_version.startswith("river_"):
+                active_match = any(
+                    getattr(item, "model_type", "") == "river"
+                    and getattr(item, "version", "") == model_version
+                    for item in active
+                )
+            else:
+                active_match = all(
+                    any(
+                        getattr(item, "model_type", "") == model_type
+                        and getattr(item, "version", "") == f"{model_type}_{model_version}"
+                        for item in active
+                    )
+                    for model_type in ("random_forest", "xgboost")
+                )
+            if not active_match:
+                return False, "predictor_does_not_match_active_model_registry"
+
+            cached = self._confidence_threshold_cache.get(model_version)
+            if cached and time.monotonic() - cached[0] < 300:
+                calibration = cached[1]
+            else:
+                historical = self.repo.get_predictions_history(10000)
+                calibration = calibrate_model_confidence_threshold(
+                    historical, model_version, min_samples=20
+                )
+                self._confidence_threshold_cache[model_version] = (time.monotonic(), calibration)
+            if calibration.get("status") != "selected_from_historical_calibration":
+                return False, str(calibration.get("status", "model_not_calibrated"))
+
+            market, symbol = signal.get("market"), signal.get("symbol")
+            if market not in {"SPOT", "FUTURES"} or not symbol:
+                return False, "signal_market_or_symbol_unavailable"
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            ohlc_data = {}
+            for timeframe in ("15m", "1h", "4h", "1d"):
+                candles = [
+                    candle for candle in self.candle_manager.get_series(
+                        market, symbol, timeframe, limit=200
+                    )
+                    if int(candle.get("close_time", 0)) < now_ms
+                ]
+                if len(candles) < 50:
+                    return False, f"insufficient_closed_{timeframe}_candles"
+                ohlc_data[timeframe] = {
+                    name: np.asarray([item[name] for item in candles], dtype=np.float32)
+                    for name in ("open", "high", "low", "close", "volume")
+                }
+            features = self.feature_engine.build_features(symbol, market, ohlc_data)
+            if features.shape != (36,) or not np.isfinite(features).all():
+                return False, "live_model_features_unavailable"
+            prediction = predictor.predict(features)
+            predicted_class = str(prediction.get("predicted_class", "")).upper()
+            if predicted_class not in {"UP", "DOWN"}:
+                return False, "model_prediction_not_directional"
+            allowed, reason = evaluate_live_confidence(
+                prediction.get("confidence"),
+                calibration.get("threshold"),
+                model_version,
+                calibration.get("model_version"),
+            )
+            if not allowed:
+                return False, reason
+            return True, reason
+        except Exception:
+            logger.exception("Live paper confidence gate failed closed for %s", signal.get("signal_id"))
+            return False, "confidence_gate_error"
+
     async def _on_signal_validated(self, event) -> None:
         if not PAPER_TRADING_ENABLED:
+            return
+        allowed, reason = self._live_paper_confidence_gate(event.payload)
+        if not allowed:
+            logger.info(
+                "Paper signal %s skipped by historical confidence gate: %s",
+                event.payload.get("signal_id"), reason,
+            )
             return
         # Add strategy weight
         strategy = event.payload.get("strategy")
