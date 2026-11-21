@@ -82,8 +82,8 @@ class WalkForwardValidator:
                     value = int(value.timestamp() * 1000)
                 normalized.append(value)
             try:
-                if any(normalized[i] >= normalized[i + 1] for i in range(len(normalized)-1)):
-                    raise ValueError("timestamps must be strictly increasing")
+                if any(normalized[i] > normalized[i + 1] for i in range(len(normalized)-1)):
+                    raise ValueError("timestamps must be sorted oldest-first")
             except TypeError as exc:
                 raise ValueError("timestamps must have a comparable type") from exc
 
@@ -100,11 +100,18 @@ class WalkForwardValidator:
         )
         fold_metrics = []
 
-        for fold, (candidate_train_idx, test_idx) in enumerate(tscv.split(X)):
-            train_idx = candidate_train_idx
-            if time_values is not None and purge_gap_ms > 0 and len(test_idx):
-                cutoff = time_values[test_idx[0]] - purge_gap_ms
-                train_idx = candidate_train_idx[time_values[candidate_train_idx] < cutoff]
+        split_source = np.unique(time_values) if time_values is not None else X
+        for fold, (candidate_train_idx, candidate_test_idx) in enumerate(tscv.split(split_source)):
+            if time_values is not None:
+                test_times = split_source[candidate_test_idx]
+                test_start_time, test_end_time = test_times[0], test_times[-1]
+                test_idx = np.flatnonzero((time_values >= test_start_time) & (time_values <= test_end_time))
+                train_idx = np.flatnonzero(time_values < test_start_time)
+                if purge_gap_ms > 0:
+                    cutoff = test_start_time - purge_gap_ms
+                    train_idx = train_idx[time_values[train_idx] < cutoff]
+            else:
+                train_idx, test_idx = candidate_train_idx, candidate_test_idx
             if len(train_idx) < self.min_train_size:
                 continue
 
