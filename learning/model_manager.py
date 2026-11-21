@@ -158,6 +158,7 @@ class ModelManager:
         regime_labels: Any | None = None,
         cost_per_trade: float = 0.001,
         economic_metadata: dict[str, Any] | None = None,
+        timestamps: Any = None,
     ) -> EvaluationResult:
         """Evaluate challenger with the same fail-closed promotion gate used by training.
 
@@ -165,18 +166,30 @@ class ModelManager:
         slippage, market, timestamp, horizon and regime. Missing evidence blocks
         automated promotion instead of substituting F1-based return estimates.
         """
+        if timestamps is None or len(timestamps) != len(y):
+            result = EvaluationResult(
+                model_version=challenger.version, model_type=challenger.model_type,
+                net_expectancy=0.0, max_drawdown_pct=0.0, calibration_score=0.0,
+                stability_score=0.0, regime_performance={}, total_samples=len(y),
+                primary_metric="f1", primary_value=0.0, passes_criteria=False,
+                failure_reasons=["chronological timestamps required for promotion evaluation"],
+                promotion_evidence={"passes": False, "failure_reasons": ["timestamps missing"]},
+            )
+            self._store_evaluation(challenger, result)
+            return result
+
         def model_factory():
             import joblib
             return joblib.load(challenger.file_path)
 
-        wf_result = self.validator.validate(X, y, model_factory, metric="f1")
+        wf_result = self.validator.validate(X, y, model_factory, metric="f1", timestamps=timestamps)
         champion = self.get_champion(challenger.model_type)
         champion_result: dict[str, Any] = {}
         if champion and champion.file_path:
             def champion_factory():
                 import joblib
                 return joblib.load(champion.file_path)
-            champion_result = self.validator.validate(X, y, champion_factory, metric="f1")
+            champion_result = self.validator.validate(X, y, champion_factory, metric="f1", timestamps=timestamps)
 
         # The shared gate's RF/XGB slots represent this single model family
         # here; both entries use the identical folds and evidence.
