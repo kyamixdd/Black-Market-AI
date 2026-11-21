@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 import numpy as np
-from config import MIN_VALIDATION_F1, WALK_FORWARD_MIN_SAMPLES
+from config import MIN_VALIDATION_ACCURACY, MIN_VALIDATION_F1, WALK_FORWARD_MIN_SAMPLES
 
 def select_confidence_threshold(probabilities: Any, forward_returns: Any, *, fee_rate: float = 0.0004, candidates: tuple[float, ...] = tuple(round(x, 2) for x in np.arange(0.50, 0.86, 0.05)), min_trades: int = 10, test_probabilities: Any = None, test_forward_returns: Any = None) -> dict[str, Any]:
     """Select a confidence cutoff using prior, chronologically held-out calibration outcomes."""
