@@ -44,3 +44,16 @@ def test_reversal_charges_close_and_reopen_fees():
 
     # Entry (1x), reversal (2x), terminal close (1x) = 4 fees.
     assert metrics["net_expectancy_per_trade"] == pytest.approx(-0.00016)
+
+
+
+def test_heldout_test_set_does_not_choose_calibration_threshold():
+    calibration = select_confidence_threshold(
+        [0.9] * 20, [0.01] * 20, fee_rate=0.0,
+        candidates=(0.6, 0.9), min_trades=1,
+        test_probabilities=[0.9] * 20,
+        test_forward_returns=[-0.01] * 20,
+    )
+    assert calibration["threshold"] == 0.6
+    assert calibration["heldout_test_metrics"]["net_expectancy_per_trade"] == pytest.approx(-0.01)
+    assert "evaluation-only" in calibration["calibration_test_boundary"]
