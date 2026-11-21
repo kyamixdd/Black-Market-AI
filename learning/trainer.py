@@ -68,6 +68,16 @@ class ModelTrainer:
             validation, sample_count=len(y), economic_metadata=metadata,
             champion_validation=champion_validation,
         )
+        promotion_gate["validation_provenance"] = {
+            "method": "purged_timestamp_walk_forward",
+            "out_of_sample": True,
+            "timestamps_required": True,
+            "purge_gap_ms": 60 * 60 * 1000,
+            "target_horizon_ms": 60 * 60 * 1000,
+            "sample_count": int(len(y)),
+            "rf_oof_count": int(len(validation.get("rf", {}).get("out_of_fold") or [])),
+            "xgb_oof_count": int(len(validation.get("xgb", {}).get("out_of_fold") or [])),
+        }
         validation["promotion_gate"] = promotion_gate
         logger.info("Validation complete: RF passes=%s, XGB passes=%s",
                     validation["rf"].get("passes_threshold", False),
@@ -76,7 +86,7 @@ class ModelTrainer:
         # 3. If validation passes, train final models on full dataset
         if promotion_gate["passes"]:
             version = self._generate_version()
-            train_result = self._train_final_models(X, y, version)
+            train_result = self._train_final_models(X, y, version, promotion_gate)
             train_result["validation"] = validation
             train_result["version"] = version
             train_result["status"] = "trained"
@@ -130,8 +140,14 @@ class ModelTrainer:
                 logger.exception("Champion comparison validation failed for %s", model_type)
         return results
 
-    def _train_final_models(self, X: np.ndarray, y: np.ndarray, version: str) -> dict[str, Any]:
-        """Train final models on full dataset and save."""
+    def _train_final_models(self, X: np.ndarray, y: np.ndarray, version: str, promotion_gate: dict[str, Any]) -> dict[str, Any]:
+        """Fit final deployable models only after strict OOF gate approval.
+
+        Full-data fit metrics are diagnostics only; promotion evidence is the
+        separately persisted purged walk-forward gate result.
+        """
+        if not self._promotion_evidence_passes(promotion_gate):
+            raise ValueError("cannot fit/register a deployable model without complete out-of-sample promotion evidence")
         # Train RF
         scaler = StandardScaler()
         Xs = scaler.fit_transform(X)
@@ -198,16 +214,44 @@ class ModelTrainer:
             shutil.copy2(source, temporary)
             temporary.replace(target)
 
-    def _register_model(self, version: str, model_type: str, metrics: dict, file_path: str) -> None:
-        """Register model in database."""
+    @staticmethod
+    def _promotion_evidence_passes(evidence: dict[str, Any] | None) -> bool:
+        if not isinstance(evidence, dict) or evidence.get("passes") is not True:
+            return False
+        provenance = evidence.get("validation_provenance") or {}
+        return (
+            provenance.get("method") == "purged_timestamp_walk_forward"
+            and provenance.get("out_of_sample") is True
+            and provenance.get("timestamps_required") is True
+            and int(provenance.get("purge_gap_ms", 0)) >= int(provenance.get("target_horizon_ms", 1))
+            and int(provenance.get("target_horizon_ms", 0)) > 0
+            and int(provenance.get("rf_oof_count", 0)) > 0
+            and int(provenance.get("xgb_oof_count", 0)) > 0
+            and (evidence.get("models") or {}).get("rf", {}).get("passes") is True
+            and (evidence.get("models") or {}).get("xgb", {}).get("passes") is True
+            and (evidence.get("economic_evidence") or {}).get("rf", {}).get("status") == "ok"
+            and (evidence.get("economic_evidence") or {}).get("xgb", {}).get("status") == "ok"
+            and (evidence.get("champion_evidence") or {}).get("rf", {}).get("status") == "ok"
+            and (evidence.get("champion_evidence") or {}).get("xgb", {}).get("status") == "ok"
+        )
+
+    def _register_model(self, version: str, model_type: str, metrics: dict, file_path: str, promotion_gate: dict[str, Any]) -> None:
+        """Register candidate with persisted out-of-sample evidence; never activate here."""
         import json as json_lib
+        if not self._promotion_evidence_passes(promotion_gate):
+            raise ValueError("refusing to register model without complete promotion evidence")
         self.repo.save_model_registry({
             "version": f"{model_type}_{version}",
             "model_type": model_type,
             "metrics": json_lib.dumps(metrics),
             "file_path": file_path,
-            "status": "VALIDATED",
+            "status": "CANDIDATE",
             "is_active": False,
+            "is_champion": False,
+            "evaluation_data": json_lib.dumps({
+                "promotion_gate": promotion_gate,
+                "training_metrics_in_sample_only": metrics,
+            }),
         })
 
     def _save_validation_record(self, version: str, validation: dict) -> None:
