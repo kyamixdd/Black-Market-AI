@@ -86,3 +86,29 @@ def test_river_model_requires_chronological_holdout_thresholds():
     assert "metrics" in result
     assert result["metrics"]["holdout_samples"] > 0
     assert result["metrics"]["validation_method"] == "chronological_80_20_prequential_holdout"
+
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_live_signal_cannot_open_paper_position(monkeypatch):
+    from core.orchestrator import Orchestrator
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("core.orchestrator.PAPER_TRADING_ENABLED", True)
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.simulator = SimpleNamespace(execute_signal=AsyncMock())
+    orchestrator.strategy_selector = SimpleNamespace(get_weight=lambda *_: 1.0)
+    orchestrator.telegram = None
+    orchestrator._live_paper_confidence_gate = lambda _signal: (False, "below_historical_confidence_threshold")
+    event = SimpleNamespace(payload={
+        "signal_id": "low-confidence-signal",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "strategy": "momentum",
+        "regime": "TRENDING",
+        "confidence": 0.62,
+    })
+
+    await orchestrator._on_signal_validated(event)
+
+    orchestrator.simulator.execute_signal.assert_not_awaited()
