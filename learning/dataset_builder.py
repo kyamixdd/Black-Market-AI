@@ -25,23 +25,28 @@ class DatasetBuilder:
         self.feature_engine = feature_engine or FeatureEngine()
         self.session_maker = get_session_maker()
 
-    def build_dataset(self, min_samples: int = WALK_FORWARD_MIN_SAMPLES) -> tuple[np.ndarray, np.ndarray]:
+    def build_dataset(self, min_samples: int = WALK_FORWARD_MIN_SAMPLES, *, include_timestamps: bool = False):
         """
         Build feature matrix X and target vector y from resolved predictions.
         Returns (X, y) where y is class indices: 0=DOWN, 1=FLAT, 2=UP
         """
         predictions = self.repo.get_predictions_history(limit=10000)
 
-        # Filter to resolved predictions with outcomes
-        resolved = [p for p in predictions if p.is_correct is not None]
+        # Chronology is explicit: repository order is not a training guarantee.
+        resolved = sorted(
+            (p for p in predictions if p.is_correct is not None and p.created_at is not None),
+            key=lambda p: p.created_at,
+        )
         logger.info("Found %d resolved predictions out of %d total", len(resolved), len(predictions))
 
         if len(resolved) < min_samples:
             logger.warning("Insufficient resolved samples: %d < %d required", len(resolved), min_samples)
-            return np.array([]), np.array([])
+            empty = (np.array([]), np.array([]))
+            return (*empty, np.array([], dtype=np.int64)) if include_timestamps else empty
 
         X_list = []
         y_list = []
+        timestamp_list = []
 
         for pred in resolved:
             try:
@@ -58,17 +63,22 @@ class DatasetBuilder:
                 if features is not None:
                     X_list.append(features)
                     y_list.append(self._outcome_to_class(pred.actual_outcome))
+                    timestamp_list.append(int(pred.created_at.timestamp() * 1000))
             except Exception as exc:
                 logger.warning("Failed to build features for %s: %s", pred.prediction_id, exc)
                 continue
 
         if not X_list:
-            return np.array([]), np.array([])
+            empty = (np.array([]), np.array([]))
+            return (*empty, np.array([], dtype=np.int64)) if include_timestamps else empty
 
         X = np.array(X_list, dtype=np.float32)
         y = np.array(y_list, dtype=np.int32)
+        timestamps = np.asarray(timestamp_list, dtype=np.int64)
+        order = np.argsort(timestamps, kind="stable")
+        X, y, timestamps = X[order], y[order], timestamps[order]
         logger.info("Built dataset: X=%s, y=%s", X.shape, y.shape)
-        return X, y
+        return (X, y, timestamps) if include_timestamps else (X, y)
 
     def _build_features_for_prediction(self, pred: PredictionModel) -> np.ndarray | None:
         """Build feature vector for a prediction at its creation time."""
