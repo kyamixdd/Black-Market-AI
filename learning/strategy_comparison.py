@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
+from learning.confidence_gate import select_confidence_threshold
 
 
 STRATEGY_NAMES = (
@@ -56,6 +57,7 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
     xgb_signal = np.zeros(len(close), dtype=float)
     rf_prob = np.full(len(close), 0.5)
     xgb_prob = np.full(len(close), 0.5)
+    hybrid_threshold = np.full(len(close), 1.01)
     fold_count = 0
     # Use sequential expanding folds. Training targets end strictly before
     # the test block; no row from a test block is included in its fit.
@@ -76,12 +78,51 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
             subsample=0.9, colsample_bytree=0.9, reg_lambda=2.0,
             random_state=42, n_jobs=1, eval_metric="logloss",
         )
+        # Tune thresholds on an earlier calibration slice, never on this test block.
+        calibration_size = max(30, int(len(train_idx) * 0.2))
+        calibration_idx = train_idx[-calibration_size:]
+        fit_idx = train_idx[: max(0, len(train_idx) - calibration_size - 1)]
+        if len(fit_idx) < 100 or len(calibration_idx) < 20:
+            continue
+        rf_cal = RandomForestClassifier(
+            n_estimators=100, max_depth=8, min_samples_leaf=4,
+            random_state=42, n_jobs=1, class_weight="balanced",
+        )
+        xgb_cal = XGBClassifier(
+            n_estimators=90, max_depth=4, learning_rate=0.04,
+            subsample=0.9, colsample_bytree=0.9, reg_lambda=2.0,
+            random_state=42, n_jobs=1, eval_metric="logloss",
+        )
+        rf_cal.fit(features[fit_idx], target[fit_idx])
+        xgb_cal.fit(features[fit_idx], target[fit_idx])
+        rf_cal_prob = _positive_probability(rf_cal, features[calibration_idx])
+        xgb_cal_prob = _positive_probability(xgb_cal, features[calibration_idx])
+        calibration_returns = returns[calibration_idx + 1]
+        rf_threshold = select_confidence_threshold(
+            rf_cal_prob, calibration_returns, fee_rate=fee_rate, min_trades=10,
+        )["threshold"]
+        xgb_threshold = select_confidence_threshold(
+            xgb_cal_prob, calibration_returns, fee_rate=fee_rate, min_trades=10,
+        )["threshold"]
+        hybrid_cal_prob = (rf_cal_prob + xgb_cal_prob) / 2.0
+        hybrid_threshold_for_fold = select_confidence_threshold(
+            hybrid_cal_prob, calibration_returns, fee_rate=fee_rate, min_trades=10,
+        )["threshold"]
+
+        # Refit with all prior rows, then score only the unseen fold.
         rf.fit(features[train_idx], target[train_idx])
         xgb.fit(features[train_idx], target[train_idx])
         rf_prob[block] = _positive_probability(rf, features[block])
         xgb_prob[block] = _positive_probability(xgb, features[block])
-        rf_signal[block] = np.where(rf_prob[block] >= 0.55, 1.0, np.where(rf_prob[block] <= 0.45, -1.0, 0.0))
-        xgb_signal[block] = np.where(xgb_prob[block] >= 0.55, 1.0, np.where(xgb_prob[block] <= 0.45, -1.0, 0.0))
+        rf_conf = np.maximum(rf_prob[block], 1.0 - rf_prob[block])
+        xgb_conf = np.maximum(xgb_prob[block], 1.0 - xgb_prob[block])
+        rf_signal[block] = np.where(
+            rf_conf >= rf_threshold, np.where(rf_prob[block] >= 0.5, 1.0, -1.0), 0.0,
+        )
+        xgb_signal[block] = np.where(
+            xgb_conf >= xgb_threshold, np.where(xgb_prob[block] >= 0.5, 1.0, -1.0), 0.0,
+        )
+        hybrid_threshold[block] = hybrid_threshold_for_fold
         fold_count += 1
 
     # A crossover strategy uses only rolling means available at close t.
@@ -92,9 +133,10 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
 
     # Hybrid combines model probabilities with a conservative rule filter.
     hybrid_prob = (rf_prob + xgb_prob) / 2.0
+    hybrid_conf = np.maximum(hybrid_prob, 1.0 - hybrid_prob)
     hybrid_signal = np.where(
-        (hybrid_prob >= 0.55) & (rule_signal > 0), 1.0,
-        np.where((hybrid_prob <= 0.45) & (rule_signal < 0), -1.0, 0.0),
+        (hybrid_conf >= hybrid_threshold) & (hybrid_prob >= 0.5) & (rule_signal > 0), 1.0,
+        np.where((hybrid_conf >= hybrid_threshold) & (hybrid_prob < 0.5) & (rule_signal < 0), -1.0, 0.0),
     )
 
     evaluation_start = int(test_indices[0])
@@ -127,6 +169,7 @@ def compare_strategies(candles: list[dict[str, Any]], fee_rate: float = 0.0004, 
         "evaluation_start_time": str(frame.iloc[evaluation_start]["open_time"]),
         "evaluation_end_time": str(frame.iloc[-1]["open_time"]),
         "walk_forward_folds": fold_count,
+        "confidence_filter": "RF, XGBoost, and Hybrid thresholds selected per fold from prior chronological calibration outcomes using net expectancy after fees; insufficient calibration disables trades",
         "training_policy": "expanding chronological folds; fit labels strictly before each test fold",
         "cost_policy": f"fixed fee {fee_rate * 100:.4f}% per position change; no slippage/funding modeled",
         "strategies": results,

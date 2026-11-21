@@ -19,6 +19,7 @@ from database.repositories import Repository
 from learning.dataset_builder import DatasetBuilder
 from learning.predictor import Predictor
 from learning.walkforward_validator import WalkForwardValidator
+from learning.confidence_gate import ModelPromotionGate
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,14 @@ class ModelTrainer:
 
         # 2. Walk-forward validation
         validation = self.validator.validate_ensemble(X, y)
+        promotion_gate = ModelPromotionGate().evaluate(validation, sample_count=len(y))
+        validation["promotion_gate"] = promotion_gate
         logger.info("Validation complete: RF passes=%s, XGB passes=%s",
                     validation["rf"].get("passes_threshold", False),
                     validation["xgb"].get("passes_threshold", False))
 
         # 3. If validation passes, train final models on full dataset
-        if validation["ensemble_passes"]:
+        if promotion_gate["passes"]:
             version = self._generate_version()
             train_result = self._train_final_models(X, y, version)
             train_result["validation"] = validation
@@ -251,7 +254,7 @@ class LearningOrchestrator:
         if retrain_result.get("status") == "trained":
             version = retrain_result.get("version")
             validation = retrain_result.get("validation", {})
-            if validation.get("ensemble_passes", False):
+            if validation.get("promotion_gate", {}).get("passes", False):
                 await self._promote_model(version)
                 results["promoted"] = version
 

@@ -54,3 +54,36 @@ def test_metrics_are_finite_or_explicitly_unavailable():
         assert np.isfinite(item["max_drawdown_pct"])
         assert item["profit_factor"] is None or item["profit_factor"] == "infinite" or np.isfinite(item["profit_factor"])
         assert item["trades_evaluated"] >= 0
+
+
+from learning.confidence_gate import ModelPromotionGate, PromotionGateCriteria, select_confidence_threshold
+
+
+def test_confidence_threshold_is_selected_from_prior_calibration_results():
+    probabilities = np.array([0.91, 0.88, 0.82, 0.78, 0.73, 0.69] * 8)
+    forward_returns = np.array([0.02, 0.01, 0.015, -0.01, -0.02, -0.015] * 8)
+    result = select_confidence_threshold(probabilities, forward_returns, min_trades=5)
+    assert result["status"] == "selected_from_historical_calibration"
+    assert result["threshold"] in [row["threshold"] for row in result["candidate_results"]]
+    assert result["calibration_samples"] == len(probabilities)
+
+
+def test_confidence_filter_disables_trading_when_calibration_is_insufficient():
+    result = select_confidence_threshold([0.51, 0.52, 0.49], [0.01, -0.01, 0.02], min_trades=10)
+    assert result["threshold"] > 1.0
+    assert result["status"] != "selected_from_historical_calibration"
+
+
+def test_promotion_gate_fails_closed_for_insufficient_samples_or_folds():
+    gate = ModelPromotionGate(PromotionGateCriteria(min_samples=100, min_folds=3, min_mean_f1=0.5))
+    model = {"valid": True, "passes_threshold": True, "folds": [], "aggregated": {"mean_f1": 0.9}}
+    result = gate.evaluate({"ensemble_passes": True, "rf": model, "xgb": model}, sample_count=50)
+    assert result["passes"] is False
+    assert result["failure_reasons"]
+
+
+def test_promotion_gate_accepts_only_nonoverlapping_stable_folds():
+    folds = [{"f1_macro": 0.7, "train_end_index": 99, "test_start_index": 100} for _ in range(3)]
+    model = {"valid": True, "passes_threshold": True, "folds": folds, "aggregated": {"mean_f1": 0.7}}
+    result = ModelPromotionGate(PromotionGateCriteria(min_samples=100, min_folds=3, min_mean_f1=0.5)).evaluate({"ensemble_passes": True, "rf": model, "xgb": model}, sample_count=200)
+    assert result["passes"] is True
