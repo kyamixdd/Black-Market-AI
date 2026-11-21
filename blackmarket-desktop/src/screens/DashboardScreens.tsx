@@ -87,6 +87,18 @@ export type WorkspacePosition = {
   strategy?: string | null
 }
 
+export type WorkspaceOrder = {
+  order_id?: string
+  symbol?: string
+  market?: string
+  side?: string
+  entry_price?: number
+  amount?: number
+  status?: string
+  order_type?: string
+  created_at?: string
+}
+
 export type WorkspaceTrade = {
   position_id?: string
   symbol?: string
@@ -283,6 +295,7 @@ export type WorkspaceData = {
   signals: WorkspaceSignal[]
   portfolio: WorkspacePortfolio | null
   positions: WorkspacePosition[]
+  openOrders: WorkspaceOrder[]
   trades: WorkspaceTrade[]
   tradeStats: WorkspaceTradeStats | null
   strategies: WorkspaceStrategy[]
@@ -307,7 +320,8 @@ type Props = {
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
   onSelectMarket: (symbol: string, market: 'SPOT' | 'FUTURES') => void
-  onPositionAction: (positionId: string, action: 'close' | 'update', values?: { stop_loss?: number; take_profit?: number }) => Promise<void>
+  onPositionAction: (positionId: string, action: 'close' | 'update' | 'partial-close', values?: { stop_loss?: number; take_profit?: number; quantity?: number }) => Promise<void>
+  onCancelOrder: (orderId: string) => Promise<void>
   onManualTrade: (payload: { symbol: string; market: 'SPOT' | 'FUTURES'; side: 'BUY' | 'SELL' | 'LONG' | 'SHORT'; order_type: 'MARKET' | 'LIMIT'; quantity: number; price?: number; stop_loss: number; take_profit?: number; leverage: number }) => Promise<void>
   onSettingsSave: (settings: Record<string, unknown>) => Promise<void>
 }
@@ -426,6 +440,7 @@ function PositionInspector({
   const [takeProfit, setTakeProfit] = useState(position.take_profit?.toString() ?? '')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [closeQuantity, setCloseQuantity] = useState('')
   return (
     <section className="workspace-inspector" aria-label="Position details">
       <div className="workspace-inspector-heading">
@@ -637,7 +652,7 @@ function PortfolioScreen({ portfolio, positions, trades, stats, onPositionAction
   )
 }
 
-function PositionsScreen({ positions, onPositionAction, onManualTrade }: { positions: WorkspacePosition[]; onPositionAction: Props['onPositionAction']; onManualTrade: Props['onManualTrade'] }) {
+function PositionsScreen({ positions, openOrders, onPositionAction, onManualTrade, onCancelOrder }: { positions: WorkspacePosition[]; openOrders: WorkspaceOrder[]; onPositionAction: Props['onPositionAction']; onManualTrade: Props['onManualTrade']; onCancelOrder: Props['onCancelOrder'] }) {
   const [selectedPosition, setSelectedPosition] = useState<WorkspacePosition | null>(null)
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
@@ -680,6 +695,19 @@ function PositionsScreen({ positions, onPositionAction, onManualTrade }: { posit
           <button className="table-action" type="submit" disabled={tradeBusy || !quantity || !stopLoss || (orderType === 'LIMIT' && !entryPrice)}>{tradeBusy ? 'Submitting…' : 'Place paper order'}</button>
           {tradeMessage && <span role="status">{tradeMessage}</span>}
         </form>
+      </section>
+      <section className="workspace-inspector" aria-label="Open limit orders">
+        <div className="workspace-inspector-heading"><strong>OPEN LIMIT ORDERS</strong><span>{openOrders.length} pending</span></div>
+        {openOrders.length ? <Table minWidth={720}>
+          <TableHead labels={['ORDER ID', 'ASSET', 'MARKET', 'SIDE', 'LIMIT PRICE', 'QUANTITY', 'STATUS', 'ACTION']} />
+          {openOrders.map((order) => <tr key={order.order_id}>
+            <td>{order.order_id ?? '—'}</td><td className="table-primary">{order.symbol ?? '—'}</td><td>{order.market ?? '—'}</td><td>{order.side ?? '—'}</td><td>{price(num(order.entry_price))}</td><td>{num(order.amount)?.toPrecision(6) ?? '—'}</td><td>{order.status ?? '—'}</td>
+            <td><button className="table-action" disabled={!order.order_id || order.status !== 'OPEN'} onClick={async () => {
+              if (!order.order_id || !window.confirm(`Cancel paper limit order ${order.order_id}?`)) return
+              try { await onCancelOrder(order.order_id) } catch (error) { window.alert(error instanceof Error ? error.message : 'Cancellation failed.') }
+            }}>Cancel order</button></td>
+          </tr>)}
+        </Table> : <EmptyState text="No open paper limit orders." />}
       </section>
       <div className="workspace-summary"><SummaryCard label="OPEN POSITIONS" value={String(positions.length)} /><SummaryCard label="SPOT" value={String(positions.filter((position) => position.market === 'SPOT').length)} /><SummaryCard label="FUTURES" value={String(positions.filter((position) => position.market === 'FUTURES').length)} /><SummaryCard label="UNREALIZED P&L" value={money(positions.reduce((total, position) => total + (position.unrealized_pnl ?? 0), 0))} /></div>
       {positions.length ? <Table minWidth={1200}>
@@ -993,7 +1021,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'AI Signals' && <SignalsScreen signals={data.signals} onSelectMarket={props.onSelectMarket} />}
       {screen === 'Market Analysis' && <AnalysisScreen symbol={props.symbol} marketType={props.marketType} candles={data.analysisCandles} volumeAnalytics={data.volumeAnalytics} />}
       {screen === 'Portfolio' && <PortfolioScreen portfolio={data.portfolio} positions={data.positions} trades={data.trades} stats={data.tradeStats} onPositionAction={props.onPositionAction} />}
-      {screen === 'Positions' && <PositionsScreen positions={data.positions} onPositionAction={props.onPositionAction} onManualTrade={props.onManualTrade} />}
+      {screen === 'Positions' && <PositionsScreen positions={data.positions} openOrders={data.openOrders} onPositionAction={props.onPositionAction} onManualTrade={props.onManualTrade} onCancelOrder={props.onCancelOrder} />}
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
