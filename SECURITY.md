@@ -21,11 +21,12 @@ This document outlines the security measures, constraints, and best practices fo
 - ❌ **No Exposure of Telegram Credentials**: Tokens stored in .env file (never committed)
 - ✅ **Automatic Database Backups**: Daily backups with 30-day retention
 - ✅ **Model Checkpoints**: All model versions saved for rollback
-- ✅ **SQLite Encryption**: Database files are encrypted at rest
+- ⚠️ **SQLite Storage**: SQLite is not encrypted by this application; protect database and backup files with OS-level disk encryption and file permissions
 
 ### 4. Network Security
 - ✅ **Public APIs Only**: Only Binance public REST and WebSocket endpoints
-- ✅ **Rate Limiting**: Token bucket algorithm respects Binance limits (1200 weight/min)
+- ✅ **Exchange Rate Limiting**: Exchange client rate limiter respects Binance request weights
+- ✅ **Inbound API Rate Limiting**: Per-client sliding-window limits on API and WebSocket connections; web login and backend proxy have additional process-local limits
 - ✅ **No Outbound Connections**: Except Binance API and Telegram Bot API
 - ✅ **No Inbound Connections**: Application doesn't listen on any ports
 
@@ -112,7 +113,8 @@ MIN_VALIDATION_ACCURACY = 0.52    # Minimum accuracy for promotion
 - [ ] Verify no hardcoded secrets
 - [ ] Verify .env is in .gitignore
 - [ ] Verify Telegram token not in logs
-- [ ] Verify database encryption enabled
+- [ ] Verify OS-level disk encryption and restrictive permissions on database and backup directories
+- [ ] Verify API and login rate limits are configured for the deployment
 - [ ] Verify rate limiting active
 
 ### Runtime
@@ -202,6 +204,15 @@ For security issues:
 2. Contact maintainers directly
 3. Include reproduction steps
 4. Allow time for fix before disclosure
+
+## Application-Level Web Security
+
+- Web login rejects cross-origin requests and applies per-IP password-attempt throttling.
+- Web backend proxy requires a valid signed, HttpOnly session and checks the Origin header on state-changing requests.
+- Session cookies use Secure in production and SameSite=Strict; signed claims include issued-at, expiry and a random nonce.
+- The local API requires a bearer token, applies per-client request limits, and rejects remote clients unless remote API mode is explicitly enabled.
+- WebSocket handshakes are authenticated and rate-limited. Browser-facing state changes are additionally constrained by same-origin validation at the web proxy.
+- In-memory rate limits are per application process and reset on restart; use an upstream gateway for distributed deployments.
 
 ## Version History
 

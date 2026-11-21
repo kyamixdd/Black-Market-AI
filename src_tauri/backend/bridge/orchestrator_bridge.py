@@ -31,6 +31,7 @@ class OrchestratorBridge:
         self.intelligence = orchestrator.intelligence
         self.risk_manager = orchestrator.simulator.risk_manager
         self._candle_refresh_at: dict[tuple[str, str, str], float] = {}
+        self._analytics_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 
     # ===== Market Data =====
 
@@ -38,11 +39,15 @@ class OrchestratorBridge:
         """Get latest market snapshot for a symbol."""
         cached = self.orch.cache.get_snapshot(market, symbol)
         if cached and cached.get("price") is not None:
-            return cached
+            enriched = self._with_freshness(cached)
+            volatility, atr = self._volatility_metrics(market, symbol)
+            enriched["volatility_24h_pct"] = volatility
+            enriched["atr_24h_pct"] = atr
+            return enriched
         snap = self.repo.get_latest_snapshot(symbol, market)
         if not snap:
             return None
-        return {
+        return self._with_freshness({
             "symbol": snap.symbol,
             "market": snap.market,
             "timestamp": snap.timestamp.isoformat() if snap.timestamp else None,
@@ -55,10 +60,27 @@ class OrchestratorBridge:
             "bid_ask_spread": snap.bid_ask_spread,
             "orderbook_imbalance": snap.orderbook_imbalance,
             "regime": snap.regime,
-        }
+        })
+
+    @staticmethod
+    def _with_freshness(snapshot: dict) -> dict:
+        timestamp = snapshot.get("timestamp")
+        if isinstance(timestamp, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                timestamp = None
+        if isinstance(timestamp, datetime):
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            age = max(0.0, (datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)).total_seconds())
+            freshness = "LIVE" if age <= 90 else "DELAYED" if age <= 300 else "STALE"
+        else:
+            age, freshness = None, "UNKNOWN"
+        return {**snapshot, "data_age_seconds": age, "data_freshness": freshness}
 
     def get_all_market_snapshots(self) -> list[dict]:
-        """Get all recent market snapshots."""
+        """Get all recent market snapshots with computed 1h-candle risk analytics."""
         snapshots: dict[tuple[str, str], dict] = {}
         for market in ("SPOT", "FUTURES"):
             for snapshot in self.orch.cache.get_market_tickers(market):
@@ -80,7 +102,15 @@ class OrchestratorBridge:
                     "orderbook_imbalance": stored.orderbook_imbalance,
                     "regime": stored.regime,
                 }
-        return list(snapshots.values())
+        result = []
+        for item in snapshots.values():
+            enriched = self._with_freshness(item)
+            volatility = item.get("volatility_24h_pct")
+            atr = item.get("atr_24h_pct")
+            enriched["volatility_24h_pct"] = volatility
+            enriched["atr_24h_pct"] = atr
+            result.append(enriched)
+        return result
 
     async def get_candles(
         self,
@@ -234,11 +264,42 @@ class OrchestratorBridge:
     def get_portfolio_summary(self) -> dict:
         """Get portfolio summary."""
         sim = self.simulator
-        spot_unrealized = sum(p.get("unrealized_pnl", 0) for p in sim.spot_positions.values())
-        futures_unrealized = sum(p.get("unrealized_pnl", 0) for p in sim.futures_positions.values())
-        spot_equity = sim.get_balance("SPOT") + spot_unrealized
-        futures_equity = sim.get_balance("FUTURES") + futures_unrealized
-        total = spot_equity + futures_equity
+        account_builder = getattr(sim, "get_account_equity_breakdown", None)
+        if callable(account_builder):
+            account = account_builder()
+        else:
+            # Backward-compatible path for lightweight simulator adapters and
+            # test doubles that expose balances/positions but not the new helper.
+            spot_unrealized = sum(
+                float(p.get("unrealized_pnl", 0.0) or 0.0)
+                for p in getattr(sim, "spot_positions", {}).values()
+            )
+            futures_unrealized = sum(
+                float(p.get("unrealized_pnl", 0.0) or 0.0)
+                for p in getattr(sim, "futures_positions", {}).values()
+            )
+            spot_available = float(sim.get_balance("SPOT"))
+            futures_available = float(sim.get_balance("FUTURES"))
+            account = {
+                "spot_available_balance": spot_available,
+                "futures_available_balance": futures_available,
+                "total_available_balance": spot_available + futures_available,
+                "spot_used_capital": 0.0,
+                "futures_used_margin": 0.0,
+                "total_used_margin": 0.0,
+                "total_used_capital": 0.0,
+                "spot_unrealized_pnl": spot_unrealized,
+                "futures_unrealized_pnl": futures_unrealized,
+                "spot_equity": spot_available + spot_unrealized,
+                "futures_equity": futures_available + futures_unrealized,
+                "total_equity": spot_available + futures_available
+                + spot_unrealized + futures_unrealized,
+            }
+        spot_unrealized = account["spot_unrealized_pnl"]
+        futures_unrealized = account["futures_unrealized_pnl"]
+        spot_equity = account["spot_equity"]
+        futures_equity = account["futures_equity"]
+        total = account["total_equity"]
         now = datetime.now(timezone.utc)
         today = now.date()
         month = (now.year, now.month)
@@ -284,6 +345,13 @@ class OrchestratorBridge:
             "monthly_pnl": monthly_realized,
             "realized_pnl": realized,
             "unrealized_pnl": spot_unrealized + futures_unrealized,
+            "spot_available_balance": account["spot_available_balance"],
+            "futures_available_balance": account["futures_available_balance"],
+            "total_available_balance": account["total_available_balance"],
+            "spot_used_capital": account["spot_used_capital"],
+            "futures_used_margin": account["futures_used_margin"],
+            "total_used_margin": account["total_used_margin"],
+            "total_used_capital": account["total_used_capital"],
             "drawdown_pct": stats["max_drawdown_pct"],
         }
 
@@ -635,17 +703,18 @@ class OrchestratorBridge:
     # ===== Settings =====
 
     def get_settings(self) -> dict:
-        """Get current settings."""
+        """Return effective runtime settings without exposing secret values."""
         from config import (
             SPOT_ENABLED, USDM_FUTURES_ENABLED, SCAN_ALL_ELIGIBLE_SYMBOLS,
-            TIMEFRAMES,
-            TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+            TIMEFRAMES, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
         )
+        orchestrator = getattr(self, "orch", None)
+        saved = getattr(orchestrator, "_runtime_settings", {})
         return {
-            "spot_enabled": SPOT_ENABLED,
-            "futures_enabled": USDM_FUTURES_ENABLED,
-            "scan_all_eligible_symbols": SCAN_ALL_ELIGIBLE_SYMBOLS,
-            "timeframes": TIMEFRAMES,
+            "spot_enabled": saved.get("spot_enabled", getattr(getattr(orchestrator, "_discovery", None), "spot_enabled", SPOT_ENABLED)),
+            "futures_enabled": saved.get("futures_enabled", USDM_FUTURES_ENABLED),
+            "scan_all_eligible_symbols": saved.get("scan_all_eligible_symbols", SCAN_ALL_ELIGIBLE_SYMBOLS),
+            "timeframes": saved.get("timeframes", TIMEFRAMES),
             "spot_initial_balance": self.simulator.initial_spot_balance,
             "futures_initial_balance": self.simulator.initial_futures_balance,
             "risk_per_trade_pct": self.risk_manager.max_risk_pct,
@@ -654,14 +723,15 @@ class OrchestratorBridge:
             "risk_max_leverage": self.risk_manager.max_leverage,
             "max_spot_positions": self.risk_manager.max_spot_positions,
             "max_futures_positions": self.risk_manager.max_futures_positions,
-            "telegram_enabled": TELEGRAM_ENABLED,
+            "telegram_enabled": saved.get("telegram_enabled", getattr(orchestrator, "telegram", None) is not None),
             "telegram_bot_token_configured": bool(TELEGRAM_BOT_TOKEN),
             "telegram_chat_id_configured": bool(TELEGRAM_CHAT_ID),
         }
 
     def update_settings(self, updates: dict) -> dict:
-        """Report that runtime settings updates are not implemented."""
-        raise NotImplementedError("Settings updates are not supported.")
+        """Persist and apply settings to the live orchestrator."""
+        self.orch.apply_runtime_settings(updates, persist=True)
+        return self.get_settings()
 
     # ===== Health =====
 
@@ -677,14 +747,36 @@ class OrchestratorBridge:
 
     # ===== Market Heatmap =====
 
+    def _volatility_metrics(self, market: str, symbol: str) -> tuple[float | None, float | None]:
+        """Calculate 24h realized volatility and ATR as percentages from 1h candles."""
+        candle_manager = getattr(self, "candles", None)
+        get_series = getattr(candle_manager, "get_series", None)
+        if not callable(get_series):
+            return None, None
+        candles = get_series(market, symbol, "1h", limit=25)
+        if len(candles) < 3:
+            return None, None
+        closes = [float(row["close"]) for row in candles[-25:] if float(row.get("close") or 0) > 0]
+        returns = [math.log(closes[index] / closes[index - 1]) for index in range(1, len(closes))]
+        realized = None
+        if len(returns) >= 2:
+            mean = sum(returns) / len(returns)
+            variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
+            realized = math.sqrt(max(0.0, variance)) * math.sqrt(len(returns)) * 100
+        tr_values, previous_close = [], None
+        for row in candles[-24:]:
+            high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
+            tr_values.append(high - low if previous_close is None else max(high - low, abs(high - previous_close), abs(low - previous_close)))
+            previous_close = close
+        last_close = float(candles[-1]["close"])
+        atr_pct = sum(tr_values) / len(tr_values) / last_close * 100 if tr_values and last_close > 0 else None
+        return realized, atr_pct
+
     def get_market_heatmap(self) -> list[dict]:
-        """Return cached public tickers with cross-sectional relative strength and activity rank."""
-        snapshots = [
-            item for item in self.get_all_market_snapshots()
-            if item.get("price") is not None
-            and item.get("volume_24h") is not None
-            and item.get("price_change_24h") is not None
-        ]
+        """Return ticker heatmap enriched with measured 24h candle volatility."""
+        snapshots = [item for item in self.get_all_market_snapshots()
+                     if item.get("price") is not None and item.get("volume_24h") is not None
+                     and item.get("price_change_24h") is not None]
         if not snapshots:
             return []
         average_change = sum(item["price_change_24h"] for item in snapshots) / len(snapshots)
@@ -692,16 +784,16 @@ class OrchestratorBridge:
         result = []
         for item in snapshots:
             rank = sum(1 for volume in volumes if volume <= item["volume_24h"])
+            volatility, atr = self._volatility_metrics(item["market"], item["symbol"])
             result.append({
-                "symbol": item["symbol"],
-                "market": item["market"],
-                "price_change_24h": item["price_change_24h"],
-                "volume_24h": item["volume_24h"],
-                "price": item["price"],
-                "regime": item.get("regime") or "UNKNOWN",
+                "symbol": item["symbol"], "market": item["market"],
+                "price_change_24h": item["price_change_24h"], "volume_24h": item["volume_24h"],
+                "price": item["price"], "regime": item.get("regime") or "UNKNOWN",
                 "relative_strength_pct": item["price_change_24h"] - average_change,
                 "volume_rank_pct": rank / len(volumes) * 100,
-                "volatility_24h_pct": None,
+                "volatility_24h_pct": volatility, "atr_24h_pct": atr,
+                "data_age_seconds": item.get("data_age_seconds"),
+                "data_freshness": item.get("data_freshness", "UNKNOWN"),
             })
         return sorted(result, key=lambda item: item["volume_24h"], reverse=True)
 
@@ -730,38 +822,61 @@ class OrchestratorBridge:
     # ===== Volume =====
 
     async def get_volume_stats(self, symbol: str, market: str) -> dict:
-        """Return measured aggressor-side quote volume for recent public aggregate trades."""
+        """Return sampled aggressor flow plus completed daily quote-volume comparisons."""
         client = self.orch.spot_client if market == "SPOT" else self.orch.futures_client
-        trades, ticker = await asyncio.gather(
+        cache_key, now = (market, symbol), time.monotonic()
+        cached = self._analytics_cache.get(cache_key)
+        if cached and now - cached[0] < 60:
+            result = dict(cached[1])
+            age = max(0.0, now - cached[0])
+            result["data_age_seconds"] = age
+            result["data_freshness"] = "LIVE" if age <= 90 else "DELAYED" if age <= 300 else "STALE"
+            return result
+        trades, ticker, daily = await asyncio.gather(
             client.get_aggregate_trades(symbol, limit=500),
             client.get_ticker_24h(symbol),
+            client.get_klines(symbol, "1d", limit=8),
         )
-        buy_volume = 0.0
-        sell_volume = 0.0
+        buy_volume = sell_volume = 0.0
         latest_trade_ms = None
         for trade in trades:
-            price = float(trade["p"])
-            quantity = float(trade["q"])
-            quote_volume = price * quantity
+            price, quantity = float(trade["p"]), float(trade["q"])
+            if not math.isfinite(price * quantity) or price <= 0 or quantity < 0:
+                continue
             if trade.get("m") is True:
-                sell_volume += quote_volume
+                sell_volume += price * quantity
             else:
-                buy_volume += quote_volume
+                buy_volume += price * quantity
             latest_trade_ms = max(latest_trade_ms or 0, int(trade["T"]))
-        return {
-            "symbol": symbol,
-            "market": market,
-            "buy_volume": buy_volume,
-            "sell_volume": sell_volume,
-            "total_volume": float(ticker["quoteVolume"]),
-            "volume_change_24h": None,
-            "buy_volume_7d_avg": None,
-            "sell_volume_7d_avg": None,
-            "flow_is_estimated": False,
-            "flow_sample_size": len(trades),
-            "flow_sample_scope": "Last 500 aggregate trades",
+        now_ms, completed = int(time.time() * 1000), []
+        for row in daily:
+            if len(row) < 8:
+                continue
+            try:
+                close_time, quote_volume = int(row[6]), float(row[7])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if close_time < now_ms and math.isfinite(quote_volume) and quote_volume >= 0:
+                completed.append((close_time, quote_volume))
+        completed.sort()
+        values = [value for _, value in completed]
+        baseline = values[-7:] if len(values) >= 7 else values
+        avg_daily = sum(baseline) / len(baseline) if baseline else None
+        current_24h = float(ticker["quoteVolume"])
+        change = ((current_24h / avg_daily) - 1) * 100 if avg_daily and avg_daily > 0 else None
+        result = {
+            "symbol": symbol, "market": market, "buy_volume": buy_volume, "sell_volume": sell_volume,
+            "total_volume": current_24h, "volume_change_24h": None,
+            "buy_volume_7d_avg": None, "sell_volume_7d_avg": None,
+            "average_daily_quote_volume_7d": avg_daily, "volume_change_vs_7d_avg_pct": change,
+            "comparison_period": "Current rolling 24h vs mean of up to 7 completed UTC daily candles",
+            "data_timestamp": datetime.now(timezone.utc), "data_age_seconds": 0.0, "data_freshness": "LIVE",
+            "flow_is_estimated": False, "flow_sample_size": len(trades),
+            "flow_sample_scope": "Last 500 aggregate trades; not full 24h",
             "flow_last_trade_time": datetime.fromtimestamp(latest_trade_ms / 1000, tz=timezone.utc) if latest_trade_ms else None,
         }
+        self._analytics_cache[cache_key] = (now, result)
+        return dict(result)
 
     # ===== Long/Short =====
 

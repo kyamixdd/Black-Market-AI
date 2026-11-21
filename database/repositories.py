@@ -227,19 +227,23 @@ class Repository:
 
     def get_open_orders(self, market: str | None = None) -> list[PaperOrderModel]:
         with self._get_session() as session:
-            stmt = select(PaperOrderModel).where(PaperOrderModel.status.in_(["OPEN", "PARTIAL"]))
+            stmt = select(PaperOrderModel).where(
+                PaperOrderModel.status.in_(["OPEN", "PARTIAL", "FILLING", "RECOVERY_REVIEW"])
+            )
             if market:
                 stmt = stmt.where(PaperOrderModel.market == market)
             return list(session.scalars(stmt).all())
 
     def save_position(self, pos: dict[str, Any]) -> str:
         with self._get_session() as session:
+            allowed = {column.key for column in PaperPositionModel.__table__.columns}
+            values = {key: value for key, value in pos.items() if key in allowed}
             existing = session.get(PaperPositionModel, pos["position_id"])
             if existing:
-                for k, v in pos.items():
-                    setattr(existing, k, v)
+                for key, value in values.items():
+                    setattr(existing, key, value)
             else:
-                session.add(PaperPositionModel(**pos))
+                session.add(PaperPositionModel(**values))
             session.commit()
             return pos["position_id"]
 
@@ -284,6 +288,7 @@ class Repository:
                 "fee": trade.get("fee", 0.0),
                 "strategy": trade.get("strategy", "UNKNOWN"),
                 "signal_id": trade.get("signal_id"),
+                "order_id": trade.get("order_id"),
                 "opened_at": trade["opened_at"],
                 "closed_at": trade["closed_at"],
                 "close_reason": trade.get("close_reason", "UNKNOWN"),
@@ -302,6 +307,30 @@ class Repository:
                 position.realized_pnl = trade["pnl"]
                 position.fees_paid = trade.get("fee", position.fees_paid)
                 position.closed_at = trade["closed_at"]
+            session.commit()
+            return trade["position_id"]
+
+    def save_partial_trade(self, trade: dict[str, Any], position: dict[str, Any]) -> str:
+        """Persist a partial execution and its remaining open position atomically."""
+        with self._get_session() as session:
+            session.add(TradeHistoryModel(
+                position_id=trade["position_id"], symbol=trade["symbol"], market=trade["market"],
+                side=trade["side"], entry_price=trade["entry_price"], exit_price=trade["exit_price"],
+                amount=trade["amount"], leverage=trade.get("leverage", 1.0), pnl=trade["pnl"],
+                pnl_pct=trade["pnl_pct"], fee=trade.get("fee", 0.0),
+                strategy=trade.get("strategy", "UNKNOWN"), signal_id=trade.get("signal_id"),
+                order_id=trade.get("order_id"), opened_at=trade["opened_at"],
+                closed_at=trade["closed_at"], close_reason=trade.get("close_reason", "PARTIAL"),
+            ))
+            stored = session.get(PaperPositionModel, position["position_id"])
+            if stored:
+                stored.amount = position["amount"]
+                stored.reserved_notional = position.get("reserved_notional", 0.0)
+                stored.reserved_margin = position.get("reserved_margin", 0.0)
+                stored.fees_paid = position.get("fees_paid", 0.0)
+                stored.realized_pnl = position.get("realized_pnl", 0.0)
+                stored.unrealized_pnl = position.get("unrealized_pnl", 0.0)
+                stored.status = "OPEN"
             session.commit()
             return trade["position_id"]
 

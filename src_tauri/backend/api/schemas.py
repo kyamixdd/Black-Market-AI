@@ -137,6 +137,8 @@ class PositionResponse(BaseModel):
     unrealized_pnl: float
     realized_pnl: float
     fees_paid: float
+    reserved_margin: float = 0.0
+    reserved_notional: float = 0.0
     stop_loss: float | None = None
     take_profit: float | None = None
     liquidation_price: float | None = None

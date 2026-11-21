@@ -84,28 +84,28 @@ export function LiveMarketChart({
       width: container.clientWidth,
       height: container.clientHeight,
       layout: {
-        background: { color: '#141516' },
-        textColor: '#858a8f',
+        background: { color: '#111114' },
+        textColor: '#71717A',
         fontFamily: 'JetBrains Mono, IBM Plex Mono, Consolas, monospace',
         fontSize: 9,
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: '#25272a' },
-        horzLines: { color: '#25272a' },
+        vertLines: { color: '#24242A' },
+        horzLines: { color: '#24242A' },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { color: '#858a8f', width: 1, style: 2, visible: true, labelVisible: true },
-        horzLine: { color: '#858a8f', width: 1, style: 2, visible: true, labelVisible: true },
+        vertLine: { color: '#71717A', width: 1, style: 2, visible: true, labelVisible: true },
+        horzLine: { color: '#71717A', width: 1, style: 2, visible: true, labelVisible: true },
       },
       rightPriceScale: {
-        borderColor: '#303235',
+        borderColor: '#303038',
         autoScale: true,
         scaleMargins: { top: 0.1, bottom: 0.25 },
       },
       timeScale: {
-        borderColor: '#303235',
+        borderColor: '#303038',
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 4,
@@ -127,15 +127,15 @@ export function LiveMarketChart({
     })
 
     candleSeriesRef.current = chart.addSeries(CandlestickSeries, {
-      upColor: '#f1f1f1',
+      upColor: '#F4F4F5',
       // Down candles must remain visible against the near-black chart background.
       // Keep the palette monochrome while using a light fill for both directions.
-      downColor: '#9a9da0',
-      borderUpColor: '#f1f1f1',
-      borderDownColor: '#c7c9ca',
-      wickUpColor: '#f1f1f1',
-      wickDownColor: '#c7c9ca',
-      priceLineColor: '#b5b9bc',
+      downColor: '#71717A',
+      borderUpColor: '#F4F4F5',
+      borderDownColor: '#A1A1AA',
+      wickUpColor: '#F4F4F5',
+      wickDownColor: '#A1A1AA',
+      priceLineColor: '#A1A1AA',
       lastValueVisible: true,
     })
     volumeSeriesRef.current = chart.addSeries(HistogramSeries, {
@@ -145,14 +145,14 @@ export function LiveMarketChart({
       priceLineVisible: false,
     })
     smaSeriesRef.current = chart.addSeries(LineSeries, {
-      color: '#bfc3c5',
+      color: '#D4D4D8',
       lineWidth: 1,
       lastValueVisible: false,
       priceLineVisible: false,
       crosshairMarkerVisible: false,
     })
     emaSeriesRef.current = chart.addSeries(LineSeries, {
-      color: '#858a8f',
+      color: '#71717A',
       lineWidth: 1,
       lastValueVisible: false,
       priceLineVisible: false,
@@ -230,7 +230,7 @@ export function LiveMarketChart({
       volumeSeries.setData(candles.map((candle) => ({
         time: candle.time as UTCTimestamp,
         value: candle.volume ?? 0,
-        color: candle.close >= candle.open ? '#bfc3c5' : '#666b70',
+        color: candle.close >= candle.open ? '#D4D4D8' : '#52525B',
       })))
       dataKeyRef.current = key
       if (candles.length) chart.timeScale().fitContent()
@@ -246,7 +246,7 @@ export function LiveMarketChart({
       volumeSeries.setData(candles.map((candle) => ({
         time: candle.time as UTCTimestamp,
         value: candle.volume ?? 0,
-        color: candle.close >= candle.open ? '#bfc3c5' : '#666b70',
+        color: candle.close >= candle.open ? '#D4D4D8' : '#52525B',
       })))
       if (visibleRange) chart.timeScale().setVisibleRange(visibleRange)
     } else if (candles.length) {
@@ -268,7 +268,7 @@ export function LiveMarketChart({
         volumeSeries.setData(candles.map((candle) => ({
           time: candle.time as UTCTimestamp,
           value: candle.volume ?? 0,
-          color: candle.close >= candle.open ? '#bfc3c5' : '#666b70',
+          color: candle.close >= candle.open ? '#D4D4D8' : '#52525B',
         })))
       } else {
       for (const candle of candles) {
@@ -283,7 +283,7 @@ export function LiveMarketChart({
         volumeSeries.update({
           time: candle.time as UTCTimestamp,
           value: candle.volume ?? 0,
-          color: candle.close >= candle.open ? '#bfc3c5' : '#666b70',
+          color: candle.close >= candle.open ? '#D4D4D8' : '#52525B',
         })
       }
       }

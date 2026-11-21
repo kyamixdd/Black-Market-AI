@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = pytest.mark.live  # These smoke tests call public Binance endpoints.
+
 from exchange.futures_client import FuturesClient
 from exchange.market_discovery import MarketDiscovery
 from exchange.rate_limiter import RateLimiter

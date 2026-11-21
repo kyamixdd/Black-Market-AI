@@ -29,6 +29,10 @@ export type WorkspaceMarket = {
   orderbook_imbalance?: number | null
   regime?: string
   timestamp?: string
+  volatility_24h_pct?: number | null
+  atr_24h_pct?: number | null
+  data_age_seconds?: number | null
+  data_freshness?: string
 }
 
 export type WorkspaceSignal = {
@@ -225,7 +229,56 @@ export type DashboardPreferences = {
   showRiskAlerts: boolean
 }
 
+export type StrategyComparisonResult = {
+  strategy: string
+  status: string
+  total_return_pct?: number
+  max_drawdown_pct?: number
+  sharpe_ratio?: number | null
+  win_rate_pct?: number
+  profit_factor?: number | 'infinite' | null
+  trades_evaluated?: number
+  evaluation_bars?: number
+}
+export type StrategyComparison = {
+  status: string
+  symbol?: string
+  market?: string
+  timeframe?: string
+  candles?: number
+  evaluation_start_time?: string
+  evaluation_end_time?: string
+  walk_forward_folds?: number
+  training_policy?: string
+  cost_policy?: string
+  strategies: StrategyComparisonResult[]
+}
+
+export type ModelPerformance = {
+  prediction_count: number
+  accuracy_pct: number | null
+  precision_macro_pct: number | null
+  recall_macro_pct: number | null
+  trade_count: number
+  profit_factor: number | 'infinite' | null
+  win_rate_pct: number | null
+  max_drawdown_pct: number | null
+  sharpe_ratio: number | null
+}
+
 export type WorkspaceData = {
+  volumeAnalytics?: {
+    total_volume?: number
+    average_daily_quote_volume_7d?: number | null
+    volume_change_vs_7d_avg_pct?: number | null
+    comparison_period?: string | null
+    data_age_seconds?: number | null
+    data_freshness?: string
+    buy_volume?: number | null
+    sell_volume?: number | null
+    flow_sample_size?: number
+    flow_sample_scope?: string | null
+  } | null
   markets: WorkspaceMarket[]
   signals: WorkspaceSignal[]
   portfolio: WorkspacePortfolio | null
@@ -235,6 +288,8 @@ export type WorkspaceData = {
   strategies: WorkspaceStrategy[]
   strategyWeights: Record<string, unknown>
   predictions: WorkspacePrediction[]
+  performance: ModelPerformance | null
+  strategyComparison: StrategyComparison | null
   models: WorkspaceModel[]
   learning: WorkspaceLearning | null
   risk: WorkspaceRisk | null
@@ -252,6 +307,9 @@ type Props = {
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
   onSelectMarket: (symbol: string, market: 'SPOT' | 'FUTURES') => void
+  onPositionAction: (positionId: string, action: 'close' | 'update', values?: { stop_loss?: number; take_profit?: number }) => Promise<void>
+  onManualTrade: (payload: { symbol: string; market: 'SPOT' | 'FUTURES'; side: 'BUY' | 'SELL' | 'LONG' | 'SHORT'; order_type: 'MARKET' | 'LIMIT'; quantity: number; price?: number; stop_loss: number; take_profit?: number; leverage: number }) => Promise<void>
+  onSettingsSave: (settings: Record<string, unknown>) => Promise<void>
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -358,10 +416,16 @@ function SignalInspector({
 function PositionInspector({
   position,
   onClose,
+  onPositionAction,
 }: {
   position: WorkspacePosition
   onClose: () => void
+  onPositionAction: Props['onPositionAction']
 }) {
+  const [stopLoss, setStopLoss] = useState(position.stop_loss?.toString() ?? '')
+  const [takeProfit, setTakeProfit] = useState(position.take_profit?.toString() ?? '')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
   return (
     <section className="workspace-inspector" aria-label="Position details">
       <div className="workspace-inspector-heading">
@@ -377,6 +441,29 @@ function PositionInspector({
         <DetailCard label="LIQUIDATION / MARGIN" value={`${price(num(position.liquidation_price ?? undefined))} / ${position.margin_ratio == null ? '—' : `${(position.margin_ratio * 100).toFixed(2)}%`}`} />
         <DetailCard label="FEES / STRATEGY" value={`${money(num(position.fees_paid))} / ${position.strategy ?? '—'}`} />
         <DetailCard label="OPENED" value={timestamp(position.opened_at)} />
+      </div>
+      <div className="workspace-inspector-actions">
+        <label>Stop loss <input className="workspace-search" type="number" min="0" step="any" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} /></label>
+        <label>Take profit <input className="workspace-search" type="number" min="0" step="any" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} /></label>
+        <button className="table-action" disabled={busy || (!stopLoss && !takeProfit)} onClick={async () => {
+          setBusy(true); setMessage('')
+          try {
+            await onPositionAction(position.position_id ?? '', 'update', {
+              ...(stopLoss ? { stop_loss: Number(stopLoss) } : {}),
+              ...(takeProfit ? { take_profit: Number(takeProfit) } : {}),
+            })
+            setMessage('Risk levels updated.')
+          } catch (error) { setMessage(error instanceof Error ? error.message : 'Update failed.') }
+          finally { setBusy(false) }
+        }}>Update risk levels</button>
+        <button className="table-action" disabled={busy} onClick={async () => {
+          if (!window.confirm('Close this paper position at the latest available market price?')) return
+          setBusy(true); setMessage('')
+          try { await onPositionAction(position.position_id ?? '', 'close'); onClose() }
+          catch (error) { setMessage(error instanceof Error ? error.message : 'Close failed.') }
+          finally { setBusy(false) }
+        }}>Close position</button>
+        {message && <span role="status">{message}</span>}
       </div>
     </section>
   )
@@ -414,16 +501,17 @@ function MarketScreen({ data, onSelectMarket }: Pick<Props, 'data' | 'onSelectMa
       </div>
       {markets.length ? (
         <Table minWidth={900}>
-          <TableHead labels={['SYMBOL', 'MARKET', 'LAST PRICE', '24H CHANGE', '24H QUOTE VOL', 'SPREAD', 'BOOK IMBALANCE', 'REGIME', 'ACTION']} />
+          <TableHead labels={['SYMBOL', 'MARKET', 'LAST PRICE', '24H CHANGE', '24H QUOTE VOL', 'REALIZED VOL', 'ATR 24H', 'DATA AGE', 'FRESHNESS', 'ACTION']} />
           {markets.slice(0, 1000).map((market, index) => (
             <tr key={`${market.market}-${market.symbol}-${index}`}>
               <td className="table-primary">{market.symbol ?? '—'}</td><td>{market.market ?? '—'}</td>
               <td>{price(num(market.price))}</td>
               <td className={(market.price_change_24h ?? 0) >= 0 ? 'positive' : 'negative'}>{pct(num(market.price_change_24h))}</td>
               <td>{compact(num(market.volume_24h))}</td>
-              <td>{market.bid_ask_spread == null ? '—' : `${market.bid_ask_spread.toFixed(2)} bps`}</td>
-              <td>{market.orderbook_imbalance == null ? '—' : market.orderbook_imbalance.toFixed(3)}</td>
-              <td>{market.regime ?? '—'}</td>
+              <td>{market.volatility_24h_pct == null ? '—' : `${market.volatility_24h_pct.toFixed(2)}%`}</td>
+              <td>{market.atr_24h_pct == null ? '—' : `${market.atr_24h_pct.toFixed(2)}%`}</td>
+              <td>{market.data_age_seconds == null ? '—' : `${Math.round(market.data_age_seconds)}s`}</td>
+              <td>{market.data_freshness ?? 'UNKNOWN'}</td>
               <td><button className="table-action" disabled={!market.symbol} onClick={() => onSelectMarket(market.symbol ?? '', market.market === 'FUTURES' ? 'FUTURES' : 'SPOT')}>Analyze</button></td>
             </tr>
           ))}
@@ -460,11 +548,17 @@ function SignalsScreen({ signals, onSelectMarket }: Pick<Props, 'onSelectMarket'
   )
 }
 
-function AnalysisScreen({ symbol, marketType, candles }: { symbol: string; marketType: string; candles: WorkspaceData['analysisCandles'] }) {
+function AnalysisScreen({ symbol, marketType, candles, volumeAnalytics }: { symbol: string; marketType: string; candles: WorkspaceData['analysisCandles']; volumeAnalytics: WorkspaceData['volumeAnalytics'] }) {
   return (
     <>
       <ScreenHeader title="Market Analysis" description={`${symbol} · ${marketType} · technical readings computed from loaded Binance public candles across configured intervals`} />
       <div className="workspace-summary"><SummaryCard label="SYMBOL" value={symbol} /><SummaryCard label="MARKET" value={marketType} /><SummaryCard label="TIMEFRAMES" value="9" detail="1m → 1w" /><SummaryCard label="ANALYSIS" value="DESCRIPTIVE" detail="Not a forecast" /></div>
+      <div className="workspace-summary">
+        <SummaryCard label="ROLLING 24H QUOTE VOLUME" value={compact(num(volumeAnalytics?.total_volume))} />
+        <SummaryCard label="7D AVG DAILY QUOTE VOL" value={compact(num(volumeAnalytics?.average_daily_quote_volume_7d))} />
+        <SummaryCard label="VS 7D DAILY AVG" value={pct(num(volumeAnalytics?.volume_change_vs_7d_avg_pct))} detail={volumeAnalytics?.comparison_period ?? 'Insufficient completed daily candles'} />
+        <SummaryCard label="TRADE-FLOW SAMPLE" value={String(volumeAnalytics?.flow_sample_size ?? 0)} detail={volumeAnalytics?.flow_sample_scope ?? 'Unavailable'} />
+      </div>
       <Table minWidth={980}>
         <TableHead labels={['TIMEFRAME', 'CANDLES', 'LAST CLOSE', 'PERIOD CHANGE', 'RSI (14)', 'SMA (20)', 'CLOSE VS SMA20', 'LAST CANDLE UTC']} />
         {TIMEFRAMES.map((timeframe) => {
@@ -487,7 +581,7 @@ function AnalysisScreen({ symbol, marketType, candles }: { symbol: string; marke
   )
 }
 
-function PortfolioScreen({ portfolio, positions, trades, stats }: { portfolio: WorkspacePortfolio | null; positions: WorkspacePosition[]; trades: WorkspaceTrade[]; stats: WorkspaceTradeStats | null }) {
+function PortfolioScreen({ portfolio, positions, trades, stats, onPositionAction }: { portfolio: WorkspacePortfolio | null; positions: WorkspacePosition[]; trades: WorkspaceTrade[]; stats: WorkspaceTradeStats | null; onPositionAction: Props['onPositionAction'] }) {
   const [accountView, setAccountView] = useState<'ALL' | 'SPOT' | 'FUTURES'>('ALL')
   const [selectedPosition, setSelectedPosition] = useState<WorkspacePosition | null>(null)
   const visiblePositions = positions.filter((position) => accountView === 'ALL' || position.market === accountView)
@@ -528,7 +622,7 @@ function PortfolioScreen({ portfolio, positions, trades, stats }: { portfolio: W
           <td><button className="table-action" onClick={() => setSelectedPosition(position)}>Inspect</button></td>
         </tr>)}
       </Table> : <EmptyState text={`No open simulated ${accountView === 'ALL' ? '' : `${accountView} `}positions.`} />}
-      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} />}
+      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} onPositionAction={onPositionAction} />}
       <div className="workspace-note">Balances and trade activity are simulated only. No Binance order endpoints or live execution are used.</div>
       <h2 className="workspace-section-title">Recent completed trades · {visibleTrades.length} shown / {stats?.total ?? trades.length} total</h2>
       {visibleTrades.length ? <Table minWidth={900}>
@@ -543,11 +637,50 @@ function PortfolioScreen({ portfolio, positions, trades, stats }: { portfolio: W
   )
 }
 
-function PositionsScreen({ positions }: { positions: WorkspacePosition[] }) {
+function PositionsScreen({ positions, onPositionAction, onManualTrade }: { positions: WorkspacePosition[]; onPositionAction: Props['onPositionAction']; onManualTrade: Props['onManualTrade'] }) {
   const [selectedPosition, setSelectedPosition] = useState<WorkspacePosition | null>(null)
+  const [symbol, setSymbol] = useState('BTCUSDT')
+  const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
+  const [side, setSide] = useState<'BUY' | 'SELL' | 'LONG' | 'SHORT'>('BUY')
+  const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('MARKET')
+  const [quantity, setQuantity] = useState('')
+  const [entryPrice, setEntryPrice] = useState('')
+  const [stopLoss, setStopLoss] = useState('')
+  const [takeProfit, setTakeProfit] = useState('')
+  const [leverage, setLeverage] = useState('1')
+  const [tradeBusy, setTradeBusy] = useState(false)
+  const [tradeMessage, setTradeMessage] = useState('')
   return (
     <>
       <ScreenHeader title="Positions" description="Open simulated exposure across separate Spot and Futures paper accounts" />
+      <section className="workspace-inspector" aria-label="Manual paper trade">
+        <div className="workspace-inspector-heading"><strong>MANUAL PAPER TRADE</strong><span>Simulator only · risk checks enforced</span></div>
+        <form className="workspace-inspector-actions" onSubmit={async (event) => {
+          event.preventDefault(); setTradeBusy(true); setTradeMessage('')
+          try {
+            await onManualTrade({
+              symbol: symbol.trim().toUpperCase(), market, side, order_type: orderType,
+              quantity: Number(quantity), ...(orderType === 'LIMIT' ? { price: Number(entryPrice) } : {}),
+              stop_loss: Number(stopLoss), ...(takeProfit ? { take_profit: Number(takeProfit) } : {}),
+              leverage: Number(leverage),
+            })
+            setTradeMessage('Paper order accepted. Refreshing positions.')
+          } catch (error) { setTradeMessage(error instanceof Error ? error.message : 'Order rejected.') }
+          finally { setTradeBusy(false) }
+        }}>
+          <label>Symbol <input className="workspace-search" value={symbol} onChange={(event) => setSymbol(event.target.value)} required maxLength={30} /></label>
+          <label>Market <select className="workspace-select" value={market} onChange={(event) => { const next = event.target.value as typeof market; setMarket(next); setSide(next === 'SPOT' ? 'BUY' : 'LONG') }}><option value="SPOT">Spot</option><option value="FUTURES">Futures</option></select></label>
+          <label>Side <select className="workspace-select" value={side} onChange={(event) => setSide(event.target.value as typeof side)}>{(market === 'SPOT' ? ['BUY'] : ['LONG', 'SHORT']).map((value) => <option key={value}>{value}</option>)}</select></label>
+          <label>Order <select className="workspace-select" value={orderType} onChange={(event) => setOrderType(event.target.value as typeof orderType)}><option value="MARKET">Market</option><option value="LIMIT">Limit</option></select></label>
+          <label>Quantity <input className="workspace-search" type="number" min="0" step="any" value={quantity} onChange={(event) => setQuantity(event.target.value)} required /></label>
+          {orderType === 'LIMIT' && <label>Limit price <input className="workspace-search" type="number" min="0" step="any" value={entryPrice} onChange={(event) => setEntryPrice(event.target.value)} required /></label>}
+          <label>Stop loss <input className="workspace-search" type="number" min="0" step="any" value={stopLoss} onChange={(event) => setStopLoss(event.target.value)} required /></label>
+          <label>Take profit <input className="workspace-search" type="number" min="0" step="any" value={takeProfit} onChange={(event) => setTakeProfit(event.target.value)} /></label>
+          <label>Leverage <input className="workspace-search" type="number" min="1" max="125" step="1" value={leverage} onChange={(event) => setLeverage(event.target.value)} required /></label>
+          <button className="table-action" type="submit" disabled={tradeBusy || !quantity || !stopLoss || (orderType === 'LIMIT' && !entryPrice)}>{tradeBusy ? 'Submitting…' : 'Place paper order'}</button>
+          {tradeMessage && <span role="status">{tradeMessage}</span>}
+        </form>
+      </section>
       <div className="workspace-summary"><SummaryCard label="OPEN POSITIONS" value={String(positions.length)} /><SummaryCard label="SPOT" value={String(positions.filter((position) => position.market === 'SPOT').length)} /><SummaryCard label="FUTURES" value={String(positions.filter((position) => position.market === 'FUTURES').length)} /><SummaryCard label="UNREALIZED P&L" value={money(positions.reduce((total, position) => total + (position.unrealized_pnl ?? 0), 0))} /></div>
       {positions.length ? <Table minWidth={1200}>
         <TableHead labels={['POSITION', 'ASSET', 'ACCOUNT', 'SIDE', 'ENTRY PRICE', 'CURRENT PRICE', 'AMOUNT', 'LEVERAGE', 'UNREALIZED P&L', 'STOP LOSS', 'TAKE PROFIT', 'LIQ. PRICE', 'MARGIN RATIO', 'OPENED', 'ACTION']} />
@@ -560,7 +693,7 @@ function PositionsScreen({ positions }: { positions: WorkspacePosition[] }) {
           <td><button className="table-action" onClick={() => setSelectedPosition(position)}>Inspect</button></td>
         </tr>)}
       </Table> : <EmptyState text="No open positions in the paper simulator." />}
-      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} />}
+      {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} onPositionAction={onPositionAction} />}
     </>
   )
 }
@@ -675,12 +808,51 @@ function IntelligenceScreen({ data }: { data: WorkspaceData }) {
   )
 }
 
+function metricPercent(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(2)}%`
+}
+function metricNumber(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '—' : value.toFixed(2)
+}
 function LearningScreen({ data }: { data: WorkspaceData }) {
   const promotions = data.events.filter((event) => ['MODEL_PROMOTED', 'MODEL_ROLLED_BACK', 'MODEL_TRAINED'].includes(event.event_type ?? ''))
   return (
     <>
       <ScreenHeader title="Learning" description="Local model status, predictions, outcomes, and persisted promotion or rollback events" />
       <div className="workspace-summary"><SummaryCard label="MODEL STATUS" value={data.learning?.model_status ?? 'Unavailable'} /><SummaryCard label="LEARNING LOOP" value={data.learning?.training_state ?? '—'} detail={data.learning?.last_cycle_status ?? 'No cycle reported'} /><SummaryCard label="ACTIVE VERSION" value={data.learning?.version ?? '—'} /><SummaryCard label="BOOTSTRAP SAMPLES" value={String(data.learning?.training_samples ?? '—')} detail="Historical labeled hourly candles" /><SummaryCard label="ONLINE UPDATES" value={String(data.learning?.river_updates ?? '—')} /><SummaryCard label="PREDICTIONS" value={String(data.learning?.predictions_total ?? '—')} /><SummaryCard label="RESOLVED" value={String(data.learning?.predictions_resolved ?? '—')} /><SummaryCard label="MEASURED ACCURACY" value={data.learning?.accuracy == null ? '—' : `${data.learning.accuracy.toFixed(2)}%`} detail="Resolved outcomes only" /></div>
+      <h2 className="workspace-section-title">Model performance · evaluated data only</h2>
+      <div className="workspace-summary">
+        <SummaryCard label="PREDICTION ACCURACY" value={metricPercent(data.performance?.accuracy_pct)} detail={`${data.performance?.prediction_count ?? 0} resolved predictions`} />
+        <SummaryCard label="PRECISION · MACRO" value={metricPercent(data.performance?.precision_macro_pct)} detail="Macro average across observed classes" />
+        <SummaryCard label="RECALL · MACRO" value={metricPercent(data.performance?.recall_macro_pct)} detail="Macro average across observed classes" />
+        <SummaryCard label="PROFIT FACTOR" value={data.performance?.profit_factor === 'infinite' ? '∞' : metricNumber(data.performance?.profit_factor)} detail="Gross profit / gross loss" />
+        <SummaryCard label="WIN RATE" value={metricPercent(data.performance?.win_rate_pct)} detail={`${data.performance?.trade_count ?? 0} closed paper trades`} />
+        <SummaryCard label="MAX DRAWDOWN" value={metricPercent(data.performance?.max_drawdown_pct)} detail="Closed-trade equity sequence" />
+        <SummaryCard label="SHARPE RATIO" value={metricNumber(data.performance?.sharpe_ratio)} detail="Daily realized P&L; annualized" />
+        <SummaryCard label="TRADES EVALUATED" value={String(data.performance?.trade_count ?? 0)} detail="Closed paper trades only" />
+      </div>
+      <div className="workspace-note">Classification metrics use resolved predictions; trading metrics use closed paper trades. Sharpe uses daily realized P&L divided by initial paper equity, annualized with √365, and is unavailable with fewer than two daily observations. Missing metrics are shown as unavailable, not zero.</div>
+      <h2 className="workspace-section-title">Strategy comparison · walk-forward out-of-sample</h2>
+      {data.strategyComparison?.status === 'ok' ? <>
+        <div className="workspace-summary">
+          <SummaryCard label="ASSET / MARKET" value={`${data.strategyComparison.symbol ?? '—'} · ${data.strategyComparison.market ?? '—'}`} detail={`${data.strategyComparison.timeframe ?? '—'} · ${data.strategyComparison.candles ?? 0} candles`} />
+          <SummaryCard label="WALK-FORWARD FOLDS" value={String(data.strategyComparison.walk_forward_folds ?? 0)} detail="Expanding historical windows" />
+          <SummaryCard label="TEST WINDOW" value={`${timestamp(data.strategyComparison.evaluation_start_time)} → ${timestamp(data.strategyComparison.evaluation_end_time)}`} detail="Same unseen period for all strategies" />
+        </div>
+        <Table minWidth={950}>
+          <TableHead labels={['STRATEGY', 'RETURN', 'MAX DRAWDOWN', 'SHARPE', 'WIN RATE', 'PROFIT FACTOR', 'TRADES', 'BARS']} />
+          {data.strategyComparison.strategies.map((item) => <tr key={item.strategy}>
+            <td className="table-primary">{item.strategy}</td>
+            <td className={(item.total_return_pct ?? 0) >= 0 ? 'positive' : 'negative'}>{item.total_return_pct == null ? '—' : pct(item.total_return_pct)}</td>
+            <td>{item.max_drawdown_pct == null ? '—' : pct(item.max_drawdown_pct)}</td>
+            <td>{item.sharpe_ratio == null ? '—' : item.sharpe_ratio.toFixed(2)}</td>
+            <td>{item.win_rate_pct == null ? '—' : pct(item.win_rate_pct)}</td>
+            <td>{item.profit_factor === 'infinite' ? '∞' : item.profit_factor == null ? '—' : item.profit_factor.toFixed(2)}</td>
+            <td>{item.trades_evaluated ?? '—'}</td><td>{item.evaluation_bars ?? '—'}</td>
+          </tr>)}
+        </Table>
+        <div className="workspace-note">{data.strategyComparison.training_policy}. Costs: {data.strategyComparison.cost_policy}. No slippage or futures funding is included. Model rows remain flat until a valid out-of-sample fold prediction is available.</div>
+      </> : <EmptyState text={data.strategyComparison?.status === 'insufficient_data' ? 'Not enough closed historical candles to compare strategies.' : 'Strategy comparison will appear when historical candle data is available.'} />}
       <h2 className="workspace-section-title">Model registry · candidate / champion state</h2>
       {data.models.length ? <Table minWidth={900}>
         <TableHead labels={['VERSION', 'MODEL', 'STATUS', 'ACTIVE', 'CHAMPION', 'PARENT', 'TRAINED']} />
@@ -742,15 +914,21 @@ function SettingsScreen({
   settings,
   preferences,
   onPreferencesChange,
+  onSettingsSave,
 }: {
   settings: WorkspaceSettings | null
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
+  onSettingsSave: Props['onSettingsSave']
 }) {
+  const [draft, setDraft] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const value = (key: keyof WorkspaceSettings) => draft[key] ?? (Array.isArray(settings?.[key]) ? (settings?.[key] as string[]).join(', ') : String(settings?.[key] ?? ''))
   const updatePreference = (key: keyof DashboardPreferences) => onPreferencesChange({ ...preferences, [key]: !preferences[key] })
   return (
     <>
-      <ScreenHeader title="Settings" description="Dashboard preferences are stored locally. Engine configuration is reported read-only; edits require changing local configuration and restarting." />
+      <ScreenHeader title="Settings" description="Engine settings are validated, saved locally by the backend, and applied to the running scanner and risk controls." />
       <h2 className="workspace-section-title">Dashboard preferences · this device</h2>
       <div className="settings-card-list">
         {([
@@ -763,7 +941,28 @@ function SettingsScreen({
           </button>
         ))}
       </div>
-      <h2 className="workspace-section-title">Engine configuration · read-only</h2>
+      <h2 className="workspace-section-title">Engine configuration · persistent</h2>
+      <form className="settings-card-list" onSubmit={async (event) => {
+        event.preventDefault(); setSaving(true); setMessage('')
+        const payload: Record<string, unknown> = {}
+        const boolKeys = ['spot_enabled','futures_enabled','scan_all_eligible_symbols','telegram_enabled']
+        const numberKeys = ['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions']
+        for (const key of boolKeys) if (draft[key] !== undefined) payload[key] = draft[key] === 'true'
+        for (const key of numberKeys) if (draft[key] !== undefined && draft[key] !== '') payload[key] = Number(draft[key])
+        if (draft.timeframes !== undefined) payload.timeframes = draft.timeframes.split(',').map((item) => item.trim()).filter(Boolean)
+        try { await onSettingsSave(payload); setDraft({}); setMessage('Settings saved and applied.') }
+        catch (error) { setMessage(error instanceof Error ? error.message : 'Settings could not be saved.') }
+        finally { setSaving(false) }
+      }}>
+        <label className="settings-card"><span><b>Spot market data</b><small>Enable or pause Spot scanning</small></span><select className="workspace-select" value={value('spot_enabled')} onChange={(event) => setDraft((state) => ({ ...state, spot_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+        <label className="settings-card"><span><b>USDⓈ-M Futures</b><small>Enable or pause Futures scanning</small></span><select className="workspace-select" value={value('futures_enabled')} onChange={(event) => setDraft((state) => ({ ...state, futures_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+        <label className="settings-card"><span><b>Scan broader symbol set</b><small>Uses up to 50 high-volume eligible symbols per market</small></span><select className="workspace-select" value={value('scan_all_eligible_symbols')} onChange={(event) => setDraft((state) => ({ ...state, scan_all_eligible_symbols: event.target.value }))}><option value="true">Enabled</option><option value="false">Top 10</option></select></label>
+        <label className="settings-card"><span><b>Analysis timeframes</b><small>Comma-separated Binance intervals</small></span><input className="workspace-search" value={value('timeframes')} onChange={(event) => setDraft((state) => ({ ...state, timeframes: event.target.value }))} /></label>
+        {(['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions'] as const).map((key) => <label className="settings-card" key={key}><span><b>{key.replaceAll('_',' ').toUpperCase()}</b></span><input className="workspace-search" type="number" min="0.01" step="any" value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))} /></label>)}
+        <label className="settings-card"><span><b>Telegram notifications</b><small>Uses credentials already configured in the private environment</small></span><select className="workspace-select" value={value('telegram_enabled')} onChange={(event) => setDraft((state) => ({ ...state, telegram_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+        <button className="table-action" type="submit" disabled={saving || !Object.keys(draft).length}>{saving ? 'Saving…' : 'Save engine settings'}</button>
+        {message && <span role="status">{message}</span>}
+      </form>
       <div className="workspace-summary">
         <SummaryCard label="SPOT MARKET DATA" value={settings ? settings.spot_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} />
         <SummaryCard label="USDⓈ-M FUTURES" value={settings ? settings.futures_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} />
@@ -781,7 +980,7 @@ function SettingsScreen({
         <SummaryCard label="POSITION LIMITS" value={settings ? `${settings.max_spot_positions ?? '—'} Spot / ${settings.max_futures_positions ?? '—'} Futures` : '—'} />
         <SummaryCard label="TIMEFRAMES" value={settings?.timeframes?.length ? settings.timeframes.join(', ') : '—'} />
       </div>
-      <div className="workspace-note">Risk controls and notification credentials are not editable in this dashboard. Configure Telegram secrets only through the private local environment file. Binance public market data requires no API credentials; real trading is disabled.</div>
+      <div className="workspace-note">Telegram credentials remain secret and cannot be changed here. Starting balances can only be changed before the first paper trade. Real exchange trading remains disabled.</div>
     </>
   )
 }
@@ -792,15 +991,15 @@ export function DashboardScreen(props: Props) {
     <section className={`workspace-screen workspace-${screen.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`} aria-label={`${screen} screen`}>
       {screen === 'Markets' && <MarketScreen data={data} onSelectMarket={props.onSelectMarket} />}
       {screen === 'AI Signals' && <SignalsScreen signals={data.signals} onSelectMarket={props.onSelectMarket} />}
-      {screen === 'Market Analysis' && <AnalysisScreen symbol={props.symbol} marketType={props.marketType} candles={data.analysisCandles} />}
-      {screen === 'Portfolio' && <PortfolioScreen portfolio={data.portfolio} positions={data.positions} trades={data.trades} stats={data.tradeStats} />}
-      {screen === 'Positions' && <PositionsScreen positions={data.positions} />}
+      {screen === 'Market Analysis' && <AnalysisScreen symbol={props.symbol} marketType={props.marketType} candles={data.analysisCandles} volumeAnalytics={data.volumeAnalytics} />}
+      {screen === 'Portfolio' && <PortfolioScreen portfolio={data.portfolio} positions={data.positions} trades={data.trades} stats={data.tradeStats} onPositionAction={props.onPositionAction} />}
+      {screen === 'Positions' && <PositionsScreen positions={data.positions} onPositionAction={props.onPositionAction} onManualTrade={props.onManualTrade} />}
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
-      {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} />}
+      {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
     </section>
   )
 }

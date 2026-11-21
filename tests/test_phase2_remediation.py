@@ -26,7 +26,7 @@ def temporary_database(tmp_path):
     database.close()
 
 
-def test_position_recovery_restores_balances_daily_pnl_and_open_fees(temporary_database):
+def test_position_recovery_restores_balances_daily_pnl_reserved_principal_and_open_fees(temporary_database):
     repo = Repository(temporary_database.session_maker())
     now = datetime.now(timezone.utc)
     repo.save_position({
@@ -105,7 +105,7 @@ def test_position_recovery_restores_balances_daily_pnl_and_open_fees(temporary_d
 
     assert recovery.recover_positions()["orders"] == 1
 
-    assert simulator.spot_balance == initial_spot + 1.0
+    assert simulator.spot_balance == initial_spot - 99.0
     assert simulator.futures_balance == initial_futures - 4.0
     assert simulator.get_daily_pnl() == -1.0
     assert len(simulator.spot_positions) == 1
@@ -113,7 +113,7 @@ def test_position_recovery_restores_balances_daily_pnl_and_open_fees(temporary_d
     assert simulator.open_orders["ORD-OPEN-1"]["strategy"] == "MOMENTUM"
 
     recovery.recover_positions()
-    assert simulator.spot_balance == initial_spot + 1.0
+    assert simulator.spot_balance == initial_spot - 99.0
     assert len(simulator.spot_positions) == 1
     assert len(simulator.open_orders) == 1
 

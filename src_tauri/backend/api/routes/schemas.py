@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 
 
 class MarketType(str, Enum):
@@ -98,6 +98,8 @@ class MarketSnapshotResponse(BaseModel):
     bid_ask_spread: float | None = None
     orderbook_imbalance: float | None = None
     regime: str
+    data_age_seconds: float | None = None
+    data_freshness: str = "UNKNOWN"
 
 
 class MarketListResponse(BaseModel):
@@ -183,6 +185,13 @@ class PortfolioBalanceResponse(BaseModel):
     monthly_pnl: float = Field(0.0, description="Realized P&L from trades closed during the current UTC month.")
     realized_pnl: float = Field(0.0, description="Realized P&L across completed trades.")
     unrealized_pnl: float = Field(0.0, description="Current unrealized P&L across open positions.")
+    spot_available_balance: float = 0.0
+    futures_available_balance: float = 0.0
+    total_available_balance: float = 0.0
+    spot_used_capital: float = 0.0
+    futures_used_margin: float = 0.0
+    total_used_margin: float = 0.0
+    total_used_capital: float = 0.0
     drawdown_pct: float = 0.0
 
 
@@ -251,6 +260,31 @@ class TradeStatisticsResponse(BaseModel):
     win_rate: float
     profit_factor: float
     max_drawdown_pct: float
+
+
+class PaperOrderResponse(BaseModel):
+    order_id: str
+    symbol: str
+    market: MarketType
+    side: str
+    entry_price: float
+    amount: float
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    leverage: float = 1.0
+    order_type: str
+    status: str
+    created_at: datetime | None = None
+    signal_id: str | None = None
+    filled_amount: float = 0.0
+    avg_fill_price: float = 0.0
+    fee: float = 0.0
+    strategy: str = "UNKNOWN"
+
+
+class OpenOrderListResponse(BaseModel):
+    orders: list[PaperOrderResponse]
+    total: int
 
 
 class SignalStatisticsResponse(BaseModel):
@@ -426,6 +460,9 @@ class MarketHeatmapItemResponse(BaseModel):
     relative_strength_pct: float | None = None
     volume_rank_pct: float | None = None
     volatility_24h_pct: float | None = None
+    atr_24h_pct: float | None = None
+    data_age_seconds: float | None = None
+    data_freshness: str = "UNKNOWN"
 
 
 class MarketHeatmapResponse(BaseModel):
@@ -450,6 +487,12 @@ class VolumeResponse(BaseModel):
     volume_change_24h: float | None = None
     buy_volume_7d_avg: float | None = None
     sell_volume_7d_avg: float | None = None
+    average_daily_quote_volume_7d: float | None = None
+    volume_change_vs_7d_avg_pct: float | None = None
+    comparison_period: str | None = None
+    data_timestamp: datetime | None = None
+    data_age_seconds: float | None = None
+    data_freshness: str = "UNKNOWN"
     flow_is_estimated: bool = False
     flow_sample_size: int = 0
     flow_sample_scope: str | None = None
@@ -494,19 +537,41 @@ class SignalRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     spot_enabled: bool | None = None
     futures_enabled: bool | None = None
     scan_all_eligible_symbols: bool | None = None
     timeframes: list[str] | None = None
-    spot_initial_balance: float | None = None
-    futures_initial_balance: float | None = None
-    risk_per_trade_pct: float | None = None
-    risk_max_daily_loss_pct: float | None = None
-    risk_max_total_open_pct: float | None = None
-    risk_max_leverage: float | None = None
-    max_spot_positions: int | None = None
-    max_futures_positions: int | None = None
+    spot_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000, allow_inf_nan=False)
+    futures_initial_balance: float | None = Field(default=None, gt=0, le=1_000_000_000, allow_inf_nan=False)
+    risk_per_trade_pct: float | None = Field(default=None, gt=0, le=5, allow_inf_nan=False)
+    risk_max_daily_loss_pct: float | None = Field(default=None, gt=0, le=25, allow_inf_nan=False)
+    risk_max_total_open_pct: float | None = Field(default=None, gt=0, le=50, allow_inf_nan=False)
+    risk_max_leverage: float | None = Field(default=None, ge=1, le=125, allow_inf_nan=False)
+    max_spot_positions: int | None = Field(default=None, ge=1, le=100)
+    max_futures_positions: int | None = Field(default=None, ge=1, le=100)
     telegram_enabled: bool | None = None
+
+    @field_validator("timeframes")
+    @classmethod
+    def validate_timeframes(cls, value):
+        allowed = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"}
+        if value is None:
+            return value
+        if not value or len(value) > 15 or len(set(value)) != len(value):
+            raise ValueError("Select between 1 and 15 unique timeframes.")
+        invalid = sorted(set(value) - allowed)
+        if invalid:
+            raise ValueError(f"Unsupported timeframes: {', '.join(invalid)}")
+        return value
+
+    @model_validator(mode="after")
+    def validate_risk_relationships(self):
+        if (self.risk_per_trade_pct is not None and self.risk_max_total_open_pct is not None
+                and self.risk_per_trade_pct > self.risk_max_total_open_pct):
+            raise ValueError("Risk per trade cannot exceed maximum total open risk.")
+        return self
 
 
 class SettingsResponse(BaseModel):
@@ -548,3 +613,32 @@ class ErrorResponse(BaseModel):
 class SuccessResponse(BaseModel):
     success: bool = True
     message: str | None = None
+
+
+class ManualOrderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str = Field(min_length=3, max_length=30, pattern=r"^[A-Z0-9]{3,30}$")
+    market: MarketType
+    side: Literal["BUY", "SELL", "LONG", "SHORT"]
+    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    quantity: float = Field(gt=0, le=1_000_000_000, allow_inf_nan=False)
+    price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    stop_loss: float = Field(gt=0, allow_inf_nan=False)
+    take_profit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    leverage: float = Field(default=1.0, ge=1.0, le=125.0, allow_inf_nan=False)
+
+
+class PositionUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stop_loss: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    take_profit: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+
+class PartialCloseRequest(BaseModel):
+    quantity: float = Field(gt=0, allow_inf_nan=False)
+
+
+class ManualActionResponse(BaseModel):
+    success: bool
+    id: str | None = None
+    message: str

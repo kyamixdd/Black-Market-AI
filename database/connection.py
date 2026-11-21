@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
@@ -30,9 +30,17 @@ class Database:
                 self._engine = create_engine(
                     f"sqlite:///{path}",
                     future=True,
-                    connect_args={"check_same_thread": False},
+                    connect_args={"check_same_thread": False, "timeout": 30},
                     echo=False,
                 )
+                @event.listens_for(self._engine, "connect")
+                def _configure_sqlite_connection(connection, _record):
+                    cursor = connection.cursor()
+                    cursor.execute("PRAGMA foreign_keys=ON")
+                    cursor.execute("PRAGMA busy_timeout=30000")
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=FULL")
+                    cursor.close()
             else:
                 self._engine = create_engine(self.url, future=True)
         return self._engine
@@ -44,7 +52,42 @@ class Database:
 
     def init_db(self) -> None:
         Base.metadata.create_all(self.engine)
+        self._migrate_paper_trading_columns()
         logger.info("Database initialized at %s", self.url)
+
+    def _migrate_paper_trading_columns(self) -> None:
+        """Add recovery fields to existing SQL databases without dropping data."""
+        additions = {
+            "paper_positions": {
+                "reserved_notional": "FLOAT NOT NULL DEFAULT 0.0",
+                "reserved_margin": "FLOAT NOT NULL DEFAULT 0.0",
+                "last_funding_time": "INTEGER NOT NULL DEFAULT 0",
+                "order_id": "VARCHAR(64)",
+                "signal_id": "VARCHAR(64)",
+                "strategy": "VARCHAR(32) NOT NULL DEFAULT 'UNKNOWN'",
+                "order_type": "VARCHAR(16) NOT NULL DEFAULT 'MARKET'",
+            },
+            "trade_history": {
+                "order_id": "VARCHAR(64)",
+            },
+        }
+        with self.engine.begin() as connection:
+            inspector = inspect(connection)
+            tables = set(inspector.get_table_names())
+            preparer = connection.dialect.identifier_preparer
+            for table, columns in additions.items():
+                if table not in tables:
+                    continue
+                existing = {column["name"] for column in inspector.get_columns(table)}
+                quoted_table = preparer.quote(table)
+                for name, definition in columns.items():
+                    if name not in existing:
+                        quoted_name = preparer.quote(name)
+                        connection.exec_driver_sql(
+                            f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_name} {definition}"
+                        )
+                        existing.add(name)
+
 
     def integrity_check(self) -> str:
         if self.engine.dialect.name != "sqlite":

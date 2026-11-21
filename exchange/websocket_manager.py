@@ -53,6 +53,8 @@ class WebSocketManager:
                             data = json.loads(msg)
                         except Exception:
                             continue
+                        if isinstance(data, dict):
+                            data["_market"] = "SPOT" if base_url == SPOT_WS_URL else "FUTURES"
                         for handler in self._handlers:
                             try:
                                 await handler(data)

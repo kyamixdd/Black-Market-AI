@@ -54,25 +54,33 @@ class Orchestrator:
         self.futures_client: FuturesClient = FuturesClient(self.rate_limiter)
         self.ws_manager: WebSocketManager = WebSocketManager(self.rate_limiter)
         self.candle_manager: CandleManager = CandleManager()
-        self.scanner: Scanner = Scanner(self.event_bus, self.registry, self.cache,
-                                       self.spot_client, self.futures_client)
-        self.decision_engine: DecisionEngine = DecisionEngine(self.event_bus)
-        self.strategy_selector: StrategySelector = StrategySelector()
-        self.feature_engine: FeatureEngine = FeatureEngine()
-        self.predictor: Predictor = Predictor()
-        self.simulator: Simulator = Simulator(self.event_bus)
-        self.telegram: TelegramClient | None = TelegramClient() if TELEGRAM_ENABLED else None
-        # Data integrity
         self.integrity: DataIntegrityGuardian = DataIntegrityGuardian(self.candle_manager)
-        # Intelligence core
-        self.intelligence: IntelligenceCore = IntelligenceCore(self.event_bus, self.candle_manager, self.integrity)
+        self.intelligence: IntelligenceCore = IntelligenceCore(
+            self.event_bus, self.candle_manager, self.integrity
+        )
+        self.decision_engine: DecisionEngine = self.intelligence.decision_engine
+        self.strategy_selector: StrategySelector = self.intelligence.strategy_selector
+        self.feature_engine: FeatureEngine = self.intelligence.feature_engine
+        self.predictor: Predictor = self.intelligence.predictor
+        self.simulator: Simulator = Simulator(self.event_bus, self.cache)
+        self.simulator.persist_order_callback = self._persist_paper_order
+        self.simulator.persist_position_callback = self.repo.save_position
+        self.simulator.persist_trade_callback = self.repo.save_trade_history
+        self.simulator.persist_partial_trade_callback = self.repo.save_partial_trade
+        self.scanner: Scanner = Scanner(
+            self.event_bus, self.registry, self.cache,
+            self.spot_client, self.futures_client,
+            self.candle_manager, self.intelligence,
+            websocket_manager=self.ws_manager,
+        )
+        self.telegram: TelegramClient | None = TelegramClient() if TELEGRAM_ENABLED else None
         # Keep one canonical predictor for the API, live inference, and learning loop.
-        self.predictor = self.intelligence.predictor
         self.learning_service = LiveLearningService(self)
         # Learning accountability
         self.outcome_labeler = OutcomeLabeler(self.repo, self.simulator)
         self.performance_analyzer = PerformanceAnalyzer(self.repo)
         self.health_monitor: HealthMonitor = HealthMonitor()
+        self._runtime_settings = {}
         self._running: bool = False
         self._tasks: list[asyncio.Task] = []
         self._discovery: MarketDiscovery = MarketDiscovery(self.registry, self.rate_limiter,
@@ -83,6 +91,8 @@ class Orchestrator:
         self._tracked_symbols: list[str] = []
         self._recent_snapshots: list[dict] = []
         self._current_regime: str = "UNKNOWN"
+        self.apply_runtime_settings(self._load_runtime_settings(), persist=False)
+
         self.disaster_recovery = create_disaster_recovery_orchestrator(
             db=self.db,
             simulator=self.simulator,
@@ -95,6 +105,108 @@ class Orchestrator:
             persist_state=self._persist_state,
             reconnect_callback=self.ws_manager.restart,
         )
+
+    @staticmethod
+    def _load_runtime_settings() -> dict:
+        from core.runtime_settings_store import load_runtime_settings
+        from src_tauri.backend.api.routes.schemas import SettingsRequest
+        saved = load_runtime_settings()
+        if not saved:
+            return {}
+        return SettingsRequest.model_validate(saved).model_dump(exclude_none=True)
+
+    def apply_runtime_settings(self, settings: dict, persist: bool = True) -> None:
+        """Apply validated settings to live components; never reset active paper equity."""
+        from core.runtime_settings_store import save_runtime_settings
+
+        if not isinstance(settings, dict):
+            raise ValueError("Runtime settings must be an object.")
+        simulator = self.simulator
+        risk = simulator.risk_manager
+        has_activity = bool(
+            simulator.spot_positions or simulator.futures_positions
+            or simulator.open_orders or simulator.closed_trades
+        )
+        balance_changed = (
+            settings.get("spot_initial_balance", simulator.initial_spot_balance) != simulator.initial_spot_balance
+            or settings.get("futures_initial_balance", simulator.initial_futures_balance) != simulator.initial_futures_balance
+        )
+        if balance_changed and has_activity:
+            raise ValueError("Paper starting balances cannot be changed after trading activity exists.")
+
+        from config import (
+            SPOT_ENABLED, USDM_FUTURES_ENABLED, SCAN_ALL_ELIGIBLE_SYMBOLS,
+            TIMEFRAMES, TELEGRAM_ENABLED,
+        )
+        from src_tauri.backend.api.routes.schemas import SettingsRequest
+
+        # Validate the complete effective configuration, not just fields present
+        # in this PATCH-like request. This prevents partial updates from making
+        # combinations invalid (for example risk/trade above total open risk).
+        effective = {
+            "spot_enabled": self._discovery.spot_enabled,
+            "futures_enabled": self._discovery.futures_enabled,
+            "scan_all_eligible_symbols": self.scanner.analysis_symbol_limit > 10,
+            "timeframes": list(self.scanner.analysis_timeframes),
+            "spot_initial_balance": simulator.initial_spot_balance,
+            "futures_initial_balance": simulator.initial_futures_balance,
+            "risk_per_trade_pct": risk.max_risk_pct,
+            "risk_max_daily_loss_pct": risk.max_daily_loss_pct,
+            "risk_max_total_open_pct": risk.max_open_risk_pct,
+            "risk_max_leverage": risk.max_leverage,
+            "max_spot_positions": risk.max_spot_positions,
+            "max_futures_positions": risk.max_futures_positions,
+            "telegram_enabled": self.telegram is not None,
+        }
+        next_settings = SettingsRequest.model_validate({
+            **effective, **self._runtime_settings, **settings
+        }).model_dump(exclude_none=True)
+
+        telegram_enabled = bool(next_settings.get("telegram_enabled", TELEGRAM_ENABLED))
+        if telegram_enabled:
+            from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+            if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+                raise ValueError("Telegram cannot be enabled until its bot token and chat ID are configured in the private environment.")
+
+        # Persist the complete next state before mutating live components. A failed
+        # disk write therefore leaves the running engine on its previous settings.
+        if persist:
+            save_runtime_settings(next_settings)
+
+        # Apply numeric risk controls only after request schema validation.
+        risk.max_risk_pct = float(next_settings.get("risk_per_trade_pct", risk.max_risk_pct))
+        risk.max_daily_loss_pct = float(next_settings.get("risk_max_daily_loss_pct", risk.max_daily_loss_pct))
+        risk.max_open_risk_pct = float(next_settings.get("risk_max_total_open_pct", risk.max_open_risk_pct))
+        risk.max_leverage = float(next_settings.get("risk_max_leverage", risk.max_leverage))
+        risk.max_spot_positions = int(next_settings.get("max_spot_positions", risk.max_spot_positions))
+        risk.max_futures_positions = int(next_settings.get("max_futures_positions", risk.max_futures_positions))
+
+        if balance_changed:
+            spot = float(next_settings.get("spot_initial_balance", simulator.initial_spot_balance))
+            futures = float(next_settings.get("futures_initial_balance", simulator.initial_futures_balance))
+            simulator.initial_spot_balance = simulator.spot_balance = spot
+            simulator.initial_futures_balance = simulator.futures_balance = futures
+
+        scanner = self.scanner
+        scanner.enabled_markets = {
+            market for market, enabled in (
+                ("SPOT", next_settings.get("spot_enabled", True)),
+                ("FUTURES", next_settings.get("futures_enabled", True)),
+            ) if enabled
+        }
+        scanner.analysis_timeframes = tuple(next_settings.get("timeframes", ("15m", "1h")))
+        scanner.analysis_symbol_limit = 50 if next_settings.get("scan_all_eligible_symbols", False) else 10
+        self._discovery.spot_enabled = bool(next_settings.get("spot_enabled", True))
+        self._discovery.futures_enabled = bool(next_settings.get("futures_enabled", True))
+
+        if telegram_enabled and self.telegram is None:
+            self.telegram = TelegramClient()
+        elif not telegram_enabled:
+            self.telegram = None
+
+        self._runtime_settings = next_settings
+
+
 
     async def initialize(self) -> None:
         logger.info("Initializing BlackMarket AI...")
@@ -131,12 +243,14 @@ class Orchestrator:
         self.event_bus.subscribe(EventType.SIGNAL_EXPIRED, self._on_signal_expired)
         # Market data for price updates
         self.event_bus.subscribe(EventType.MARKET_DATA, self._on_market_data)
+        self.event_bus.subscribe(EventType.MARKET_SNAPSHOT, self._on_market_snapshot)
         # Learning feedback
         self.event_bus.subscribe(EventType.POSITION_CLOSED, self._on_position_closed)
         # Position opened
         self.event_bus.subscribe(EventType.POSITION_OPENED, self._on_position_opened)
         self.event_bus.subscribe(EventType.ORDER_PLACED, self._on_order_placed)
         self.event_bus.subscribe(EventType.ORDER_FILLED, self._on_order_filled)
+        self.event_bus.subscribe(EventType.TRADE_CANCELLED, self._on_order_cancelled)
         # Risk alerts
         self.event_bus.subscribe(EventType.RISK_ALERT, self._on_risk_alert)
         # System health
@@ -179,6 +293,36 @@ class Orchestrator:
         if price and symbol:
             await self.simulator.update_prices(market, symbol, price)
 
+    async def _on_market_snapshot(self, event) -> None:
+        """Mark open positions and check pending limits from the scanner's latest cache."""
+        market = event.market or event.payload.get("market", "SPOT")
+        positions = self.simulator._get_positions(market)
+        symbols = {
+            position.get("symbol") for position in positions.values()
+            if position.get("status") == "OPEN"
+        }
+        for symbol in symbols:
+            snapshot = self.cache.get_snapshot(market, symbol)
+            if not snapshot:
+                continue
+            price = snapshot.get("price")
+            if not price or price <= 0:
+                continue
+            await self.simulator.update_prices(
+                market, symbol, price,
+                mark_price=snapshot.get("mark_price"),
+                funding_rate=snapshot.get("funding_rate"),
+            )
+
+        pending_symbols = {
+            order.get("symbol") for order in self.simulator.open_orders.values()
+            if order.get("market") == market and order.get("status") == "OPEN"
+        }
+        for symbol in pending_symbols:
+            price = self.cache.get_price(market, symbol)
+            if price and price > 0:
+                await self.simulator.check_limit_orders(market, symbol, price)
+
     async def _on_position_closed(self, event) -> None:
         # Learning feedback: evaluate prediction if any
         trade = event.payload.get("trade")
@@ -198,6 +342,9 @@ class Orchestrator:
         self._persist_paper_order(event.payload.get("order"))
 
     async def _on_order_filled(self, event) -> None:
+        self._persist_paper_order(event.payload.get("order"))
+
+    async def _on_order_cancelled(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
 
     def _persist_paper_order(self, order: dict[str, Any] | None) -> None:

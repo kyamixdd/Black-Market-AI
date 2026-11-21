@@ -289,7 +289,7 @@ On startup, the application checks database integrity and recovers persisted pap
 
 ### Data Protection
 
-- Database files are encrypted at rest (SQLite)
+- SQLite database files are **not encrypted by the application**. Protect them with OS-level full-disk encryption and appropriate user-account permissions.
 - Configuration files (.env) should never be committed to version control
 - Backup files are stored locally with timestamps
 - No sensitive data is logged or transmitted
@@ -306,11 +306,10 @@ On startup, the application checks database integrity and recovers persisted pap
    ```
 
 2. **Database Issues**
-   ```bash
-   # Delete corrupted database and reinitialize
-   del data/blackmarket.db
-   python -c "from database.connection import Database; Database('sqlite:///data/blackmarket.db').init_db()"
-   ```
+   - Do **not** delete or overwrite a database that fails an integrity check; it may contain recoverable paper-trading history.
+   - Stop the application and make a byte-for-byte copy of the database and its related SQLite sidecar files (if present) before attempting recovery.
+   - Use the application's verified backup/restore procedure where possible. Test recovery on a copy, never on the only original.
+   - If no verified backup exists, preserve the original file and review the backend log before attempting repair.
 
 3. **WebSocket Connection Issues**
    - The system automatically retries with exponential backoff
@@ -370,5 +369,4 @@ This project is for educational and research purposes only. Use at your own risk
 
 ---
 
-**Remember**: This is a paper trading system. No real money is ever at risk.#   B l a c k - M a r k e t - A I  
- 
+**Remember**: This is a paper trading system. No real money is ever at risk.#
