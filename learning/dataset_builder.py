@@ -42,6 +42,10 @@ class DatasetBuilder:
         if len(resolved) < min_samples:
             logger.warning("Insufficient resolved samples: %d < %d required", len(resolved), min_samples)
             empty = (np.array([]), np.array([]))
+            if include_metadata:
+                return (*empty, np.array([], dtype=np.int64), {key: np.array([]) for key in ("actual_return_pct", "regimes", "horizon_minutes", "transaction_costs", "markets")})
+            if include_metadata:
+                return (*empty, np.array([], dtype=np.int64), {key: np.array([]) for key in ("actual_return_pct", "regimes", "horizon_minutes", "transaction_costs", "markets")})
             return (*empty, np.array([], dtype=np.int64)) if include_timestamps else empty
 
         X_list = []
@@ -50,6 +54,8 @@ class DatasetBuilder:
         return_list = []
         regime_list = []
         horizon_list = []
+        cost_list = []
+        market_list = []
 
         for pred in resolved:
             try:
@@ -75,6 +81,8 @@ class DatasetBuilder:
                     return_list.append(float(pred.actual_return_pct) if pred.actual_return_pct is not None else np.nan)
                     regime_list.append(str(pred.regime or "UNKNOWN").upper())
                     horizon_list.append(int(pred.horizon_minutes or 60))
+                    cost_list.append(float(pred.transaction_costs) if pred.transaction_costs is not None else np.nan)
+                    market_list.append(str(pred.market or "UNKNOWN").upper())
             except Exception as exc:
                 logger.warning("Failed to build features for %s: %s", pred.prediction_id, exc)
                 continue
@@ -92,6 +100,8 @@ class DatasetBuilder:
             "actual_return_pct": np.asarray(return_list, dtype=np.float64)[order],
             "regimes": np.asarray(regime_list, dtype=object)[order],
             "horizon_minutes": np.asarray(horizon_list, dtype=np.int32)[order],
+            "transaction_costs": np.asarray(cost_list, dtype=np.float64)[order],
+            "markets": np.asarray(market_list, dtype=object)[order],
         }
         logger.info("Built dataset: X=%s, y=%s", X.shape, y.shape)
         if include_metadata:
