@@ -396,14 +396,15 @@ class Repository:
             target = session.get(ModelRegistryModel, version)
             if not target:
                 return
-            # Deactivate others of same type
+            # Atomically replace the champion for this model family.
             session.execute(
                 update(ModelRegistryModel)
                 .where(ModelRegistryModel.model_type == target.model_type)
-                .values(is_active=False)
+                .values(is_active=False, is_champion=False)
             )
             target.is_active = True
-            target.status = "PROMOTED"
+            target.is_champion = True
+            target.status = "CHAMPION"
             session.commit()
 
     def rollback_model(self, version: str) -> str | None:
