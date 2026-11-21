@@ -95,7 +95,15 @@ class Simulator:
             for p in spot_positions
         )
         futures_margin = sum_finite(
-            p.get("reserved_margin", float(p.get("entry_price", 0.0)) * float(p.get("amount", 0.0)) / max(float(p.get("leverage", 1.0)), 1.0)))
+            (
+                p.get("reserved_margin")
+                if p.get("reserved_margin") is not None
+                else (
+                    float(p.get("entry_price", 0.0))
+                    * float(p.get("amount", 0.0))
+                    / max(float(p.get("leverage", 1.0)), 1.0)
+                )
+            )
             for p in futures_positions
         )
         spot_unrealized = sum_finite(p.get("unrealized_pnl", 0.0) for p in spot_positions)
