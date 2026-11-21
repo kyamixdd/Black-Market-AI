@@ -391,21 +391,66 @@ class Repository:
             stmt = select(ModelRegistryModel).order_by(ModelRegistryModel.trained_at.desc())
             return list(session.scalars(stmt).all())
 
-    def promote_model(self, version: str) -> None:
-        with self._get_session() as session:
-            target = session.get(ModelRegistryModel, version)
-            if not target:
-                return
-            # Atomically replace the champion for this model family.
-            session.execute(
-                update(ModelRegistryModel)
-                .where(ModelRegistryModel.model_type == target.model_type)
-                .values(is_active=False, is_champion=False)
+    @staticmethod
+    def _has_complete_promotion_evidence(target: ModelRegistryModel) -> bool:
+        """Only OOF, timestamp-purged, cost-aware gate evidence can authorize activation."""
+        try:
+            evidence_data = json.loads(target.evaluation_data or "{}")
+            gate = evidence_data.get("promotion_gate") or {}
+            provenance = gate.get("validation_provenance") or {}
+            models = gate.get("models") or {}
+            economics = gate.get("economic_evidence") or {}
+            champions = gate.get("champion_evidence") or {}
+            return (
+                gate.get("passes") is True
+                and provenance.get("method") == "purged_timestamp_walk_forward"
+                and provenance.get("out_of_sample") is True
+                and provenance.get("timestamps_required") is True
+                and int(provenance.get("target_horizon_ms", 0)) > 0
+                and int(provenance.get("purge_gap_ms", 0)) >= int(provenance.get("target_horizon_ms", 1))
+                and int(provenance.get("rf_oof_count", 0)) > 0
+                and int(provenance.get("xgb_oof_count", 0)) > 0
+                and models.get("rf", {}).get("passes") is True
+                and models.get("xgb", {}).get("passes") is True
+                and economics.get("rf", {}).get("status") == "ok"
+                and economics.get("xgb", {}).get("status") == "ok"
+                and champions.get("rf", {}).get("status") == "ok"
+                and champions.get("xgb", {}).get("status") == "ok"
+                and target.status in {"CANDIDATE", "VALIDATED", "CHALLENGER"}
+                and target.is_active is False
             )
-            target.is_active = True
-            target.is_champion = True
-            target.status = "CHAMPION"
+        except (TypeError, ValueError, AttributeError):
+            return False
+
+    def promote_models(self, versions: list[str]) -> bool:
+        """Atomically activate a set of model artifacts only with complete OOF evidence."""
+        if not versions or len(set(versions)) != len(versions):
+            return False
+        with self._get_session() as session:
+            targets = [session.get(ModelRegistryModel, version) for version in versions]
+            if any(target is None for target in targets):
+                return False
+            targets = [target for target in targets if target is not None]
+            if any(not self._has_complete_promotion_evidence(target) for target in targets):
+                return False
+            families = {target.model_type for target in targets}
+            if len(families) != len(targets):
+                return False
+            for target in targets:
+                session.execute(
+                    update(ModelRegistryModel)
+                    .where(ModelRegistryModel.model_type == target.model_type)
+                    .values(is_active=False, is_champion=False)
+                )
+                target.is_active = True
+                target.is_champion = True
+                target.status = "CHAMPION"
             session.commit()
+            return True
+
+    def promote_model(self, version: str) -> bool:
+        """Strict single-model promotion; unvalidated legacy/River records fail closed."""
+        return self.promote_models([version])
 
     def rollback_model(self, version: str) -> str | None:
         with self._get_session() as session:
