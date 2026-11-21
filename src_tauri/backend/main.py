@@ -63,7 +63,7 @@ _api_token = os.environ.get("BLACKMARKET_API_TOKEN")
 _REMOTE_API_ENABLED = os.environ.get("BLACKMARKET_REMOTE_API_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
 _ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get("BLACKMARKET_ALLOWED_ORIGINS", "").split(",") if origin.strip()]
 _request_server_shutdown: Callable[[], None] | None = None
-_tauri_origins = ["http://tauri.localhost", "tauri://localhost", *_ALLOWED_ORIGINS]
+_tauri_origins = ["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost", *_ALLOWED_ORIGINS]
 if os.environ.get("BLACKMARKET_DESKTOP_DEV") == "1":
     _tauri_origins.extend(["http://localhost:3000", "http://127.0.0.1:3000"])
 
@@ -325,7 +325,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_tauri_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
