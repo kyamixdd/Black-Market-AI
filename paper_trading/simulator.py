@@ -64,6 +64,70 @@ class Simulator:
     def get_balance(self, market: str) -> float:
         return self.spot_balance if market == "SPOT" else self.futures_balance
 
+    def get_account_equity_breakdown(self) -> dict[str, float]:
+        """Return available cash, allocated collateral, and mark-to-market equity.
+
+        Opening a position moves cash into reserved Spot principal or Futures
+        initial margin. Those amounts remain account assets; only fees and
+        realized/unrealized losses reduce equity.
+        """
+        def sum_finite(values) -> float:
+            total = 0.0
+            for value in values:
+                try:
+                    number = float(value or 0.0)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if math.isfinite(number):
+                    total += number
+            return total
+
+        spot_positions = [
+            p for p in self.spot_positions.values()
+            if p.get("status", "OPEN") in ("OPEN", "CLOSING")
+        ]
+        futures_positions = [
+            p for p in self.futures_positions.values()
+            if p.get("status", "OPEN") in ("OPEN", "CLOSING")
+        ]
+        spot_reserved = sum_finite(
+            p.get("reserved_notional", float(p.get("entry_price", 0.0)) * float(p.get("amount", 0.0)))
+            for p in spot_positions
+        )
+        futures_margin = sum_finite(
+            (
+                p.get("reserved_margin")
+                if p.get("reserved_margin") is not None
+                else (
+                    float(p.get("entry_price", 0.0))
+                    * float(p.get("amount", 0.0))
+                    / max(float(p.get("leverage", 1.0)), 1.0)
+                )
+            )
+            for p in futures_positions
+        )
+        spot_unrealized = sum_finite(p.get("unrealized_pnl", 0.0) for p in spot_positions)
+        futures_unrealized = sum_finite(p.get("unrealized_pnl", 0.0) for p in futures_positions)
+        spot_available = float(self.spot_balance)
+        futures_available = float(self.futures_balance)
+        spot_equity = spot_available + spot_reserved + spot_unrealized
+        futures_equity = futures_available + futures_margin + futures_unrealized
+        return {
+            "spot_available_balance": spot_available,
+            "futures_available_balance": futures_available,
+            "total_available_balance": spot_available + futures_available,
+            "spot_used_capital": spot_reserved,
+            "futures_used_margin": futures_margin,
+            "total_used_margin": futures_margin,
+            "total_used_capital": spot_reserved + futures_margin,
+            "spot_unrealized_pnl": spot_unrealized,
+            "futures_unrealized_pnl": futures_unrealized,
+            "spot_equity": spot_equity,
+            "futures_equity": futures_equity,
+            "total_equity": spot_equity + futures_equity,
+        }
+
+
     def get_daily_pnl(self) -> float:
         """Return realized P&L for the current UTC calendar day."""
         today = datetime.now(timezone.utc).date()

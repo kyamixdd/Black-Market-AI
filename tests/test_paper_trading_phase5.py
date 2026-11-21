@@ -1313,3 +1313,51 @@ async def test_partial_close_rejects_full_or_excess_quantity_without_mutation():
     with pytest.raises(ValueError):
         await simulator._partial_close_position(position, 110.0, 0.1)
     assert position == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("market,leverage,collateral_key,available_key,collateral", [
+    ("SPOT", 1.0, "reserved_notional", "spot_available_balance", 100.0),
+    ("FUTURES", 5.0, "reserved_margin", "futures_available_balance", 20.0),
+])
+async def test_opening_position_at_entry_price_preserves_portfolio_equity(
+    market, leverage, collateral_key, available_key, collateral
+):
+    from src_tauri.backend.bridge.orchestrator_bridge import OrchestratorBridge
+
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *_args: 0.0
+    simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
+    simulator.validate_new_position = lambda *_args: (True, "OK")
+    simulator._calculate_order_quantity = lambda *_args: (1.0, leverage)
+
+    bridge = object.__new__(OrchestratorBridge)
+    bridge.simulator = simulator
+    bridge._all_closed_trades = lambda: []
+    bridge.get_trade_statistics = lambda: {"max_drawdown_pct": 0.0}
+
+    before = bridge.get_portfolio_summary()
+    signal = {
+        "signal_id": f"PORTFOLIO-EQUITY-{market}",
+        "symbol": "BTCUSDT",
+        "market": market,
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": leverage,
+    }
+    position_id = await simulator.execute_signal(signal, quantity_override=1.0)
+    assert position_id is not None
+    await simulator.update_prices(market, "BTCUSDT", 100.0)
+    after = bridge.get_portfolio_summary()
+    account = simulator.get_account_equity_breakdown()
+
+    assert after["total_balance"] == pytest.approx(before["total_balance"])
+    assert after["total_return_pct"] == pytest.approx(before["total_return_pct"])
+    assert account[available_key] == pytest.approx(
+        (simulator.initial_spot_balance if market == "SPOT" else simulator.initial_futures_balance) - collateral
+    )
+    assert account["total_used_capital"] >= collateral
+    assert account["total_equity"] == pytest.approx(before["total_balance"])
+    assert simulator._get_positions(market)[position_id][collateral_key] == pytest.approx(collateral)
