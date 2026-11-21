@@ -109,6 +109,43 @@ def _finite_metric(value):
     return number if isfinite(number) else None
 
 
+@router.get("/strategy-comparison")
+async def get_strategy_comparison(
+    symbol: str = Query("BTCUSDT", min_length=3, max_length=20, pattern=r"^[A-Z0-9]+$"),
+    market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
+    timeframe: str = Query("1h", pattern="^(5m|15m|30m|1h|4h|1d)$"),
+    limit: int = Query(1000, ge=180, le=2000),
+):
+    """Compare five strategies on an identical historical out-of-sample period."""
+    import time
+    from learning.strategy_comparison import compare_strategies
+
+    bridge = get_bridge()
+    end_time = int(time.time() * 1000)
+    candles = await bridge.get_candles(
+        symbol=symbol,
+        market=market,
+        timeframe=timeframe,
+        limit=limit,
+        end_time=end_time,
+    )
+    if not candles:
+        return {
+            "status": "insufficient_data",
+            "symbol": symbol,
+            "market": market,
+            "timeframe": timeframe,
+            "candles": 0,
+            "strategies": [],
+            "reason": "no_closed_historical_candles",
+        }
+    normalized = [
+        {**candle, "symbol": symbol, "market": market, "timeframe": timeframe}
+        for candle in candles
+    ]
+    return compare_strategies(normalized)
+
+
 @router.get("/models", response_model=ModelRegistryListResponse)
 async def get_models():
     """Get model registry."""

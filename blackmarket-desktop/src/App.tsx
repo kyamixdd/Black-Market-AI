@@ -199,6 +199,7 @@ const EMPTY_DATA: DashboardData = {
   strategyWeights: {},
   predictions: [],
   performance: null,
+  strategyComparison: null,
   models: [],
   riskAlerts: [],
   settings: null,
@@ -736,16 +737,18 @@ function App() {
       }
 
       if (activeScreen === 'Learning') {
-        const [predictionsPayload, modelPayload, performancePayload] = await Promise.all([
+        const [predictionsPayload, modelPayload, performancePayload, comparisonPayload] = await Promise.all([
           requestJson<{ predictions?: WorkspaceData['predictions'] }>('/learning/predictions?limit=1000'),
           requestJson<{ models?: WorkspaceData['models'] }>('/learning/models'),
           requestJson<WorkspaceData['performance']>('/learning/performance'),
+          requestJson<WorkspaceData['strategyComparison']>(`/learning/strategy-comparison?symbol=${encodeURIComponent(symbol)}&market=${marketType}&timeframe=1h&limit=1000`),
         ])
         if (!active) return
         setData((current) => ({
           ...current,
           predictions: predictionsPayload?.predictions ?? current.predictions,
           performance: performancePayload ?? current.performance,
+          strategyComparison: comparisonPayload ?? current.strategyComparison,
           models: modelPayload?.models ?? current.models,
         }))
       }
