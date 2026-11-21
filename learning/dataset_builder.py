@@ -43,7 +43,7 @@ class DatasetBuilder:
             logger.warning("Insufficient resolved samples: %d < %d required", len(resolved), min_samples)
             empty = (np.array([]), np.array([]))
             if include_metadata:
-                return (*empty, np.array([], dtype=np.int64), {key: np.array([]) for key in ("actual_return_pct", "regimes", "horizon_minutes", "transaction_costs", "markets")})
+                return (*empty, np.array([], dtype=np.int64), {key: np.array([]) for key in ("timestamps", "actual_return_pct", "regimes", "horizon_minutes", "transaction_costs", "markets")})
             return (*empty, np.array([], dtype=np.int64)) if include_timestamps else empty
 
         X_list = []
