@@ -167,3 +167,21 @@ def calibrate_model_confidence_threshold(predictions: Any, model_version: str, *
         "calibration_samples": len(rows),
         "selected_metrics": result.get("selected_metrics"),
     }
+
+
+def evaluate_live_confidence(confidence: Any, threshold: Any, model_version: str | None,
+                            calibrated_model_version: str | None) -> tuple[bool, str]:
+    """Fail-closed live gate; threshold must belong to the exact active model."""
+    value = _finite(confidence)
+    cutoff = _finite(threshold)
+    if not model_version or model_version == "untrained":
+        return False, "active_model_unavailable"
+    if calibrated_model_version != model_version:
+        return False, "model_threshold_version_mismatch"
+    if cutoff is None or not 0.5 <= cutoff <= 1.0:
+        return False, "calibrated_threshold_unavailable"
+    if value is None or not 0.0 <= value <= 1.0:
+        return False, "prediction_confidence_unavailable"
+    if value < cutoff:
+        return False, "below_historical_confidence_threshold"
+    return True, "historically_calibrated_confidence_passed"
