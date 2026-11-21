@@ -586,9 +586,13 @@ def test_partial_close_route_validates_and_dispatches_to_simulator(monkeypatch):
 
     calls = []
     position = {"position_id": "paper-2", "symbol": "BTCUSDT", "market": "SPOT", "status": "OPEN", "amount": 2.0}
+    async def partial_close(pos, price, quantity):
+        calls.append((pos, price, quantity))
+        return True
+
     simulator = SimpleNamespace(
         spot_positions={"paper-2": position}, futures_positions={},
-        _partial_close_position=lambda pos, price, quantity: calls.append((pos, price, quantity)) or True,
+        _partial_close_position=partial_close,
     )
     bridge = SimpleNamespace(
         simulator=simulator,
@@ -612,9 +616,13 @@ def test_limit_order_cancel_route_dispatches_and_handles_non_open_orders(monkeyp
 
     calls = []
     open_order = {"order_id": "limit-1", "status": "OPEN"}
+    async def cancel_order(order_id):
+        calls.append(order_id)
+        return {"status": "CANCELLED"}
+
     simulator = SimpleNamespace(
         open_orders={"limit-1": open_order},
-        cancel_limit_order=lambda order_id: calls.append(order_id) or {"status": "CANCELLED"},
+        cancel_limit_order=cancel_order,
     )
     monkeypatch.setattr(trades, "get_bridge", lambda: SimpleNamespace(simulator=simulator))
     app = FastAPI()
