@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
 import { DataTable as Table, DetailCard, EmptyState, ScreenHeader, SummaryCard, TableHead } from '../components/ui/TerminalPrimitives'
 
 export type ScreenName =
@@ -11,6 +12,7 @@ export type ScreenName =
   | 'Trade History'
   | 'Intelligence'
   | 'Learning'
+  | 'Strategy Lab'
   | 'Risk Management'
   | 'Activity'
   | 'Settings'
@@ -324,6 +326,8 @@ type Props = {
   onCancelOrder: (orderId: string) => Promise<void>
   onManualTrade: (payload: { symbol: string; market: 'SPOT' | 'FUTURES'; side: 'BUY' | 'SELL' | 'LONG' | 'SHORT'; order_type: 'MARKET' | 'LIMIT'; quantity: number; price?: number; stop_loss: number; take_profit?: number; leverage: number }) => Promise<void>
   onSettingsSave: (settings: Record<string, unknown>) => Promise<void>
+  onStrategyLabRun: (payload: Record<string, unknown>) => Promise<any>
+  onStrategyLabCompare: (payload: Record<string, unknown>) => Promise<any>
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -1036,9 +1040,139 @@ export function DashboardScreen(props: Props) {
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
+      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
       {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
     </section>
+  )
+}
+
+
+function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRun']; onCompare: Props['onStrategyLabCompare'] }) {
+  const [strategy, setStrategy] = useState('momentum')
+  const [symbol, setSymbol] = useState('BTCUSDT')
+  const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
+  const [timeframe, setTimeframe] = useState('1h')
+  const [start, setStart] = useState('2026-09-15')
+  const [end, setEnd] = useState('2026-11-21')
+  const [capital, setCapital] = useState('1000')
+  const [risk, setRisk] = useState('1')
+  const [mode, setMode] = useState('risk_pct')
+  const [notional, setNotional] = useState('100')
+  const [maxPosition, setMaxPosition] = useState('50')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<any>(null)
+  const [selectedTrade, setSelectedTrade] = useState<any>(null)
+  const [comparison, setComparison] = useState<any>(null)
+  const [minScore, setMinScore] = useState('0')
+  const [feeRate, setFeeRate] = useState('')
+  const [slippage, setSlippage] = useState('')
+  const [spread, setSpread] = useState('')
+  const [funding, setFunding] = useState('')
+  const run = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
+    try {
+      const data = await onRun({
+        strategy, symbol: symbol.toUpperCase(), market, timeframe,
+        start_date: new Date(start + 'T00:00:00Z').toISOString(),
+        end_date: new Date(end + 'T23:59:59Z').toISOString(),
+        initial_capital: Number(capital), sizing_mode: mode,
+        risk_per_trade_pct: Number(risk), fixed_notional: Number(notional),
+        max_position_pct: Number(maxPosition), strategy_parameters: { min_score: Number(minScore) },
+        fee_rate: feeRate === '' ? undefined : Number(feeRate),
+        slippage_bps: slippage === '' ? undefined : Number(slippage),
+        spread_bps: spread === '' ? undefined : Number(spread),
+        funding_rate: funding === '' ? undefined : Number(funding),
+      })
+      setResult(data)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  const compare = async () => {
+    setBusy(true); setError(''); setComparison(null)
+    try {
+      setComparison(await onCompare({
+        symbol: symbol.toUpperCase(), market, timeframe,
+        start_date: new Date(start + 'T00:00:00Z').toISOString(),
+        end_date: new Date(end + 'T23:59:59Z').toISOString(),
+        initial_capital: Number(capital), sizing_mode: mode,
+        risk_per_trade_pct: Number(risk), fixed_notional: Number(notional),
+        max_position_pct: Number(maxPosition), strategy_parameters: { min_score: Number(minScore) },
+        fee_rate: feeRate === '' ? undefined : Number(feeRate),
+        slippage_bps: slippage === '' ? undefined : Number(slippage),
+        spread_bps: spread === '' ? undefined : Number(spread),
+        funding_rate: funding === '' ? undefined : Number(funding),
+      }))
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  const metrics = result?.metrics
+  const curve = result?.equity_curve ?? []
+  const curveValues = curve.map((point: { equity: number }) => point.equity).filter((value: number) => Number.isFinite(value))
+  const curveMin = curveValues.length ? Math.min(...curveValues) : 0
+  const curveMax = curveValues.length ? Math.max(...curveValues) : 1
+  const curvePoints = curve.map((point: { equity: number }, index: number) => {
+    const x = 8 + (index / Math.max(1, curve.length - 1)) * 584
+    const y = 8 + ((curveMax - point.equity) / Math.max(1e-9, curveMax - curveMin)) * 164
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+  return (
+    <div className="workspace-content strategy-lab">
+      <ScreenHeader title="Strategy Lab" description="Historical research · simulated execution · paper-trading compatible" />
+      <form className="workspace-form" onSubmit={run}>
+        <div className="workspace-form-grid">
+          <label>Strategy<select value={strategy} onChange={e => setStrategy(e.target.value)}>{['momentum','breakout','trend_following','mean_reversion','reversal'].map(v => <option key={v}>{v}</option>)}</select></label>
+          <label>Asset<input value={symbol} onChange={e => setSymbol(e.target.value)} maxLength={20} required /></label>
+          <label>Market<select value={market} onChange={e => setMarket(e.target.value as 'SPOT'|'FUTURES')}><option>SPOT</option><option>FUTURES</option></select></label>
+          <label>Timeframe<select value={timeframe} onChange={e => setTimeframe(e.target.value)}>{['1m','3m','5m','15m','30m','1h','4h','1d','1w'].map(v => <option key={v}>{v}</option>)}</select></label>
+          <label>Start date<input type="date" value={start} onChange={e => setStart(e.target.value)} required /></label>
+          <label>End date<input type="date" value={end} onChange={e => setEnd(e.target.value)} required /></label>
+          <label>Starting capital<input type="number" min="1" step="any" value={capital} onChange={e => setCapital(e.target.value)} required /></label>
+          <label>Position sizing<select value={mode} onChange={e => setMode(e.target.value)}><option value="risk_pct">Risk % per trade</option><option value="fixed_notional">Fixed notional</option></select></label>
+          <label>Risk per trade (%)<input type="number" min="0.01" max="100" step="any" value={risk} onChange={e => setRisk(e.target.value)} /></label>
+          <label>Fixed notional<input type="number" min="0.01" step="any" value={notional} onChange={e => setNotional(e.target.value)} /></label>
+          <label>Max position (% equity)<input type="number" min="0.01" max="100" step="any" value={maxPosition} onChange={e => setMaxPosition(e.target.value)} /></label>
+          <label>Minimum strategy score<input type="number" min="0" step="any" value={minScore} onChange={e => setMinScore(e.target.value)} /></label>
+          <label>Fee rate (optional)<input type="number" min="0" step="any" placeholder="Use market default" value={feeRate} onChange={e => setFeeRate(e.target.value)} /></label>
+          <label>Slippage (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={slippage} onChange={e => setSlippage(e.target.value)} /></label>
+          <label>Spread (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={spread} onChange={e => setSpread(e.target.value)} /></label>
+          <label>Funding rate per 8h (optional)<input type="number" step="any" placeholder="Futures assumption only" value={funding} onChange={e => setFunding(e.target.value)} /></label>
+        </div>
+        <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Running backtest…' : 'Run historical backtest'}</button>
+        <button className="table-action" type="button" disabled={busy} onClick={() => void compare()}>Compare all strategies</button>
+      </form>
+      {error && <div role="alert" className="workspace-error">{error}</div>}
+      {result?.status === 'insufficient_data' && <EmptyState text={`Insufficient historical candles. Available: ${result.available_candles}; required: ${result.required_candles}. Try a wider range or another timeframe.`} />}
+      {comparison?.results && <section><h2>Strategy comparison · same conditions</h2><div className="workspace-summary-grid">{comparison.results.map((item: any) => <SummaryCard key={item.strategy} label={item.strategy} value={item.metrics ? pct(item.metrics.net_return_pct) : item.status} detail={item.metrics ? `DD ${pct(item.metrics.max_drawdown_pct)} · ${item.metrics.trade_count} trades` : 'Insufficient history'} />)}</div></section>}
+      {metrics && <>
+        <div className="workspace-summary-grid">
+          {[
+            ['Net return', metrics.net_return_pct == null ? '—' : pct(metrics.net_return_pct)],
+            ['Gross return', metrics.gross_return_pct == null ? '—' : pct(metrics.gross_return_pct)],
+            ['Max drawdown', pct(metrics.max_drawdown_pct)],
+            ['Profit factor', metrics.profit_factor ?? '—'],
+            ['Win rate', pct(metrics.win_rate_pct)],
+            ['Sharpe', metrics.sharpe_ratio == null ? '—' : num(metrics.sharpe_ratio)?.toFixed(2) ?? '—'],
+            ['Trades', String(metrics.trade_count ?? 0)],
+            ['Exposure', pct(metrics.exposure_pct)],
+            ['Buy & hold', metrics.benchmark_buy_hold_return_pct == null ? '—' : pct(metrics.benchmark_buy_hold_return_pct)],
+            ['Average winner', money(num(metrics.average_winning_trade))],
+            ['Average loser', money(num(metrics.average_losing_trade))],
+            ['Average reward / risk', metrics.average_reward_risk == null ? '—' : `${num(metrics.average_reward_risk)?.toFixed(2) ?? '—'}R`],
+          ].map(([label,value]) => <SummaryCard key={label} label={label} value={String(value)} />)}
+        </div>
+        <p className="workspace-note">Execution assumptions: next-bar open entry, conservative stop-first intrabar exit, taker fees, spread and slippage. Funding is omitted unless a rate is explicitly supplied. Research results do not guarantee future performance.</p>
+        <section className="workspace-panel"><h2>Equity curve</h2><svg viewBox="0 0 600 180" role="img" aria-label="Backtest marked-to-market equity curve" className="strategy-equity-chart"><polyline points={curvePoints} fill="none" stroke="currentColor" strokeWidth="2" /></svg><p className="workspace-note">Costs · fees {money(num(metrics.costs?.fees))} · spread {money(num(metrics.costs?.spread))} · slippage {money(num(metrics.costs?.slippage))} · funding {money(num(metrics.costs?.funding))}</p></section>
+        <Table>
+          <TableHead labels={['Trade','Side','Entry','Exit','Net P&L','Exit reason']} />
+          <tbody>{(result.trades ?? []).map((trade: any) => <tr key={trade.trade_id} onClick={() => setSelectedTrade(trade)}><td>{trade.trade_id}</td><td>{trade.side}</td><td>{price(num(trade.entry_fill))}</td><td>{price(num(trade.exit_fill))}</td><td>{money(num(trade.net_pnl))}</td><td>{trade.close_reason}</td></tr>)}</tbody>
+        </Table>
+        {selectedTrade && <DetailCard label="Selected trade details" value={JSON.stringify(selectedTrade, null, 2)} />}
+        <details><summary>Equity curve data ({result.equity_curve?.length ?? 0} points)</summary><pre>{JSON.stringify(result.equity_curve, null, 2)}</pre></details>
+      </>}
+    </div>
   )
 }

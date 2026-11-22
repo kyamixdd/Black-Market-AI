@@ -1,7 +1,9 @@
 """Learning API routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+import re
+
+from fastapi import APIRouter, Query, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
 from .schemas import (
@@ -159,3 +161,77 @@ async def get_models():
     bridge = get_bridge()
     models = bridge.get_model_registry()
     return ModelRegistryListResponse(models=[ModelRegistryResponse(**m) for m in models])
+
+@router.post("/strategy-lab")
+async def run_strategy_lab(payload: dict):
+    """Run a deterministic historical simulation using completed candle data."""
+    from datetime import datetime
+    from learning.strategy_lab import LabConfig, STRATEGIES, run_strategy_lab
+
+    symbol = str(payload.get("symbol", "BTCUSDT")).upper()
+    market = str(payload.get("market", "SPOT")).upper()
+    timeframe = str(payload.get("timeframe", "1h"))
+    strategy = str(payload.get("strategy", "momentum")).lower()
+    if not re.fullmatch(r"[A-Z0-9]{3,20}", symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol")
+    if strategy not in STRATEGIES:
+        raise HTTPException(status_code=422, detail="Unsupported strategy")
+    try:
+        start = datetime.fromisoformat(str(payload["start_date"]).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(payload["end_date"]).replace("Z", "+00:00"))
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            raise ValueError("Date range must be timezone-aware and start before end")
+        config = LabConfig(
+            symbol=symbol, market=market, timeframe=timeframe,
+            start_time=int(start.timestamp() * 1000), end_time=int(end.timestamp() * 1000),
+            initial_capital=payload.get("initial_capital", 1000),
+            sizing_mode=payload.get("sizing_mode", "risk_pct"),
+            risk_per_trade_pct=payload.get("risk_per_trade_pct", 1),
+            fixed_notional=payload.get("fixed_notional", 100),
+            max_position_pct=payload.get("max_position_pct", 50),
+            fee_rate=payload.get("fee_rate"), slippage_bps=payload.get("slippage_bps"),
+            spread_bps=payload.get("spread_bps"), funding_rate=payload.get("funding_rate"),
+            strategy_parameters=payload.get("strategy_parameters", {}),
+        )
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid backtest configuration: {exc}") from exc
+    bridge = get_bridge()
+    candles = []
+    cursor = config.end_time
+    page_limit = 1000 if market == "SPOT" else 1500
+    # Walk backward so user-selected ranges longer than one exchange page are supported.
+    # Bound requests to 20 pages (20k Spot / 30k Futures candles) to prevent unbounded work.
+    for _ in range(20):
+        page = await bridge.get_candles(symbol, market, timeframe, limit=page_limit, end_time=cursor)
+        page = [row for row in page if int(row.get("close_time", 0)) <= cursor]
+        if not page:
+            break
+        candles.extend(page)
+        earliest = min(int(row["open_time"]) for row in page)
+        if earliest <= config.start_time:
+            break
+        cursor = earliest - 1
+    candles = [row for row in candles if config.start_time <= int(row.get("open_time", 0))
+               and int(row.get("close_time", row.get("open_time", 0))) <= config.end_time]
+    candles.sort(key=lambda row: int(row["open_time"]))
+    try:
+        return run_strategy_lab(candles, config, strategy)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/strategy-lab/compare")
+async def compare_strategy_lab(payload: dict):
+    """Compare selected strategies on the same symbol, timeframe and candle window."""
+    from learning.strategy_lab import STRATEGIES
+    names = payload.get("strategies", list(STRATEGIES))
+    if not isinstance(names, list) or not names or any(name not in STRATEGIES for name in names):
+        raise HTTPException(status_code=422, detail="Select one or more supported strategies")
+    results = []
+    for name in names:
+        config = dict(payload)
+        config["strategy"] = name
+        results.append(await run_strategy_lab(config))
+    return {"status": "ok", "conditions": {k: payload.get(k) for k in
+            ("symbol", "market", "timeframe", "start_date", "end_date", "initial_capital")},
+            "results": results}
