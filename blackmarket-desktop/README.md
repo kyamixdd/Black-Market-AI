@@ -22,7 +22,7 @@ npm test
 npm run tauri:dev
 ```
 
-The browser-only `npm run dev` / Vite preview does not start the supervised Python backend. Use Tauri to validate desktop startup and backend lifecycle.
+The browser-only `npm run dev` / Vite preview does not start the supervised Python backend. Tauri is the supported development path for validating desktop startup and managed backend lifecycle.
 
 ## Windows installer
 
@@ -34,12 +34,12 @@ From the repository root, run:
 
 The script builds the bundled Python backend, then builds the Tauri NSIS installer. Output is under `src-tauri/target/release/bundle/nsis`.
 
-The repository CI includes a Windows installer smoke test. Still perform release-specific manual acceptance, verify the exact artifact and version, and back up user data before installing/upgrading.
+The repository CI includes a Windows installer smoke test. Release acceptance includes manual verification of the release artifact/version and a user-data backup before installation or upgrade.
 
 ## Website sharing
 
-The Next.js website imports this canonical source tree. Keep UI changes here rather than maintaining a separate website copy. Website server configuration and private-preview limitations are documented in `../blackmarket-web/README.md`.
+The Next.js website imports this canonical source tree. The website imports this shared source tree; UI changes belong here. Website server configuration and private-preview limitations are documented in `../blackmarket-web/README.md`.
 
 ## Release caveat
 
-A passing frontend build or CI run does not prove live Binance availability, hosted website/backend readiness, or future ML/trading performance. See the repository root `RELEASE_READINESS.md`.
+Frontend and CI results do not establish live exchange availability, hosted deployment readiness, or future model/trading performance. See the repository root `RELEASE_READINESS.md`.
