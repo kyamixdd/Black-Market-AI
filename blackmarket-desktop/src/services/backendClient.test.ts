@@ -24,7 +24,7 @@ test('startup failure is surfaced instead of returning placeholder data', async 
     baseUrl: '/api/backend',
     fetcher: async () => response(503, { detail: 'Local backend failed to start: database unavailable' }),
   })
-  await assert.rejects(client.get('/health'), /Local backend failed to start: database unavailable/)
+  await assert.rejects(client.requestJson('http://127.0.0.1:8765/health'), /Local backend failed to start: database unavailable/)
 })
 
 test('portfolio refresh returns updated balance after paper order', async () => {
