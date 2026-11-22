@@ -32,7 +32,7 @@ app_package = re.search(r'(?m)^name = "app"\nversion = "([^"]+)"', cargo_lock)
 checks["Cargo.lock app package"] = app_package.group(1) if app_package else ""
 
 backend = (ROOT / "src_tauri/backend/main.py").read_text(encoding="utf-8")
-backend_versions = set(re.findall(r'"?version"?\\s*:\\s*"([0-9]+\\.[0-9]+\\.[0-9]+)"', backend))
+backend_versions = set(re.findall(r'"?version"?\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', backend))
 if backend_versions != {product_version}:
     checks["backend health version(s)"] = ", ".join(sorted(backend_versions)) or "missing"
 
