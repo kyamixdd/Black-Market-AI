@@ -1,89 +1,95 @@
 # Release Readiness
 
-## Audit metadata
+## Snapshot
 
-- Review date: 2026-11-22
+- Review date: 2026-11-23
 - Repository: `kyamixdd/Black-Market-AI`
 - Branch: `black-market-ai-beta`
-- Product version: `1.0.0` (Tauri configuration and backend health version)
-- Latest successful full CI evidence before Stage 12 release-workflow changes: run #517 / workflow run ID `45042936231`
-- Verified source commit for that artifact: `15004ecda6ace15c24747dd966557222a27a026d`
+- Reviewed source commit: `ee602590442d9d29060d525e1aff5539dc42f01c`
+- Documentation snapshot before this update: `c9e488f14814b670308574582c6e7cb175c2b51b`
+- Product version: `1.0.0`
 
 ## Release classification
 
-**Desktop: beta / release candidate. Hosted website: private preview, not production-ready.**
+**Desktop: beta candidate. Website: private preview.**
 
-This is an evidence-based engineering readiness assessment, not a security certification or financial performance rating. A green frontend build does not prove the hosted backend, account persistence, or streaming behavior works in production.
+The desktop path has automated packaging and installation smoke-test coverage. The website is not verified as a complete public hosted service. This document records release evidence and outstanding acceptance checks; it is not a security certification or financial performance assessment.
 
-## Desktop release evidence
+## CI verification
 
-GitHub Actions run `45042936231` completed successfully. It built the Windows self-contained backend and NSIS installer and performed an automated install/startup/shutdown/uninstall smoke test.
+GitHub Actions run [#605](https://github.com/kyamixdd/Black-Market-AI/actions/runs/45055409152) completed successfully for source commit `ee602590442d9d29060d525e1aff5539dc42f01c`.
 
-Evidence from that run:
-- PyInstaller bundled backend: approximately 352.7 MB.
-- NSIS installer: approximately 143.37 MiB.
-- Installed app started with Python removed from PATH.
-- Health check verified backend readiness, SQLite connectivity, and WebSocket readiness.
-- Desktop shutdown terminated the backend process.
-- Silent uninstall completed without leaving the backend process running.
-- GitHub artifact archive digest: `sha256:8c56c4ee485c06b3461a82bf0f94b00dadd4c9e2beb9b4f3c9ffafd0807ac8bc`.
-- Artifact source commit: `15004ecda6ace15c24747dd966557222a27a026d`.
+Successful jobs:
 
-This artifact predates the Stage 12 version-alignment, manifest, and tagged-release automation commits. Do not publish it as the tested artifact for a later source revision. The updated branch CI must complete successfully before selecting its artifact for release.
+- Responsive browser smoke tests
+- Python backend regression tests
+- Dependency vulnerability audit
+- Desktop TypeScript, lint and market-data tests
+- Shared website frontend build
+- Rust and Tauri compile checks
+- Windows bundled backend and NSIS install smoke test
 
-## Stage 12 release improvements
+The result is specific to the recorded commit. A new release candidate requires fresh successful CI and artifact identity verification.
 
-- Desktop npm package, Tauri Cargo package, Cargo lock entry, and desktop npm lock root are aligned to product version `1.0.0`.
-- Added `scripts/verify_release_version.py` to check Tauri, backend health, desktop package/lock, Cargo package/lock, and hosted package versions.
-- Added `scripts/write_release_manifest.ps1` to validate installer filename/version and write installer SHA-256 and source/run/signature metadata.
-- Windows CI now uploads the installer with `release-manifest.json` and `installer.sha256`.
-- Windows CI checks reinstall preservation of a marker in the user data directory.
-- Added a tag-triggered release workflow. A matching `vX.Y.Z` tag builds and tests the installer, then creates a **draft** GitHub release using the same tested installer and its metadata. Draft releases require review before publication.
-- Added `RELEASE_NOTES.md` and `docs/RELEASING_AND_HOSTING.md`.
+## Desktop release checks
 
-## Desktop checks still required before public release
+The Windows installer workflow builds the Python backend as a bundled executable, packages it with Tauri/NSIS, and verifies installation, backend readiness, shutdown, reinstall data preservation and uninstall process cleanup.
 
-- [ ] Complete a clean-machine manual acceptance test on supported Windows versions.
-- [ ] Verify an actual version-to-version upgrade, not only same-version reinstall.
-- [ ] Verify uninstall behavior with real user data and confirm whether data should be retained or removed.
-- [ ] Review installer signing. The installer is not signed unless the release manifest reports a valid Authenticode signer.
-- [ ] Verify release tag, release notes, manifest, installer filename/version, source commit, and checksum all match.
-- [ ] Confirm the final published installer is the exact tested installer; do not rebuild after testing and publish a different binary.
+Complete before public release:
 
-## Hosted deployment status
+- [ ] Manual clean-machine acceptance on supported Windows versions.
+- [ ] Version-to-version upgrade test.
+- [ ] User-data retention/removal behavior documented and verified.
+- [ ] Installer Authenticode status checked; disclose unsigned builds.
+- [ ] Release version and notes match the built artifact.
+- [ ] Manifest source commit, workflow run, filename, size and SHA-256 match the artifact.
+- [ ] Publish the exact tested installer; do not rebuild a different binary after acceptance.
+- [ ] Confirm a root project license has been selected and added.
 
-**No complete hosted deployment is verified.**
+The repository tree reviewed for this snapshot did not contain a root `LICENSE` file. Public source distribution requires an explicit license decision.
 
-- The current Vercel connector context returned no accessible projects or production deployments for this repository.
-- Previous Vercel setup records described a Next.js root directory under `blackmarket-web`, but the Git integration/deployment was not confirmed against the current branch and source.
-- The previously used Render UI demo was a static site, not a verified FastAPI backend.
-- A Render workspace is available, but service inventory could not be queried without explicit workspace selection in the current connector session.
-- No current hosted FastAPI backend URL, durable database, server-side token configuration, or end-to-end deployment has been verified.
+## Website status
 
-The hosted frontend expects server-only `BLACKMARKET_BACKEND_URL`, `BLACKMARKET_API_TOKEN`, `BLACKMARKET_SESSION_SECRET`, and `BLACKMARKET_WEB_PASSWORD_HASH`. These must not be exposed as client-side variables. The backend must use remote API mode, a strong bearer token, HTTPS ingress, and restricted network access where supported.
+The Next.js website uses server-side single-password authentication and a same-origin backend proxy. It remains a private-preview path.
 
-The new manual **Hosted deployment smoke test** checks backend health/database/WebSocket status, rejects unauthenticated API requests, accepts authenticated read-only status requests, checks SSE headers/initial data, and optionally checks the frontend's server-side `/api/health` proxy. It has not been run against a verified deployment because no intended backend/frontend URLs were available from the connected deployment accounts.
+Required configuration is server-side:
 
-## Hosted persistence and $0 constraint
+- `BLACKMARKET_BACKEND_URL`
+- `BLACKMARKET_API_TOKEN`
+- `BLACKMARKET_SESSION_SECRET`
+- `BLACKMARKET_WEB_PASSWORD_HASH`
 
-The project must remain on a strict free deployment path. Do not enable billing or create paid resources.
+Before public access:
 
-SQLite persistence is only durable when the database file is stored on durable storage. A free hosted container's ephemeral filesystem must not be treated as durable account, paper-trading, or strategy data. Verify durable storage and restart/restore behavior for the chosen host before enabling hosted paper accounts.
+- [ ] Deploy a reachable FastAPI backend with remote API mode explicitly enabled.
+- [ ] Verify HTTPS ingress and backend access restrictions.
+- [ ] Verify session and backend token handling without exposing secrets to client bundles.
+- [ ] Run the hosted deployment smoke test against actual backend/frontend URLs.
+- [ ] Verify REST, SSE and WebSocket/event behavior.
+- [ ] Verify market-data freshness and reconnect behavior.
+- [ ] Complete a disposable paper-account order lifecycle.
+- [ ] Verify database durability across restart/deploy.
+- [ ] Complete backup and restore validation.
+- [ ] Document that the current shared-password gate is not multi-user identity or per-user data isolation.
+
+A Vercel frontend build or static deployment does not establish a working hosted Python engine.
+
+## Security and data
+
+Review [SECURITY.md](SECURITY.md) for the threat model. The local API is loopback-bound by default with bearer authentication; remote mode is opt-in. SQLite and backup archives are not application-encrypted. Hosted process-local rate/session controls are not distributed abuse protection.
+
+Before publication, review dependencies and GitHub Actions permissions, confirm no secrets are committed, and inspect the release artifact and source commit.
 
 ## Release decision
 
-The desktop remains a **beta / release candidate**. The successful Windows smoke test establishes a useful packaging baseline, but Stage 12 release automation changes require a fresh successful CI run and its artifact must be traced by manifest/checksum.
+The desktop can be treated as a beta candidate after the remaining manual acceptance and artifact checks are complete. The website must remain private preview until the hosted backend, authentication, streaming, durable storage and restore workflow have been verified.
 
-The hosted web application remains **private preview** until a real backend is connected, server-side secrets/authentication are verified, API/SSE connectivity succeeds, and database persistence survives a host restart and restore test.
-
-No real-money execution is supported or intended. Market data, simulated fills, backtests, and model outputs are not guaranteed financial outcomes.
+Paper trading, market signals, backtests and model outputs are research tools. No real-money execution is supported or intended, and no result guarantees future profitability.
 
 ## References
 
 - [Repository](https://github.com/kyamixdd/Black-Market-AI)
 - [Working branch](https://github.com/kyamixdd/Black-Market-AI/tree/black-market-ai-beta)
-- [Latest CI run used for packaging evidence](https://github.com/kyamixdd/Black-Market-AI/actions/runs/45042936231)
-- [Desktop release workflow](.github/workflows/desktop-release.yml)
-- [Hosted smoke workflow](.github/workflows/hosted-smoke.yml)
-- [Release and hosting guide](docs/RELEASING_AND_HOSTING.md)
-- [Security policy](SECURITY.md)
+- [Reviewed source commit](https://github.com/kyamixdd/Black-Market-AI/commit/ee602590442d9d29060d525e1aff5539dc42f01c)
+- [CI run #605](https://github.com/kyamixdd/Black-Market-AI/actions/runs/45055409152)
+- [Release and hosting procedures](docs/RELEASING_AND_HOSTING.md)
