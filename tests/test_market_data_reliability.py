@@ -63,3 +63,15 @@ def test_ttl_cache_expires_and_enforces_capacity():
     assert len(cache) == 2
     assert cache.get("b", now=14) is None
     assert cache.get("a", now=16) is None
+
+def test_market_cache_reports_source_and_freshness():
+    from market.market_cache import MarketCache
+
+    cache = MarketCache()
+    unavailable = cache.get_data_status("SPOT")
+    assert unavailable["state"] == "UNAVAILABLE"
+    cache.update_ticker("SPOT", "BTCUSDT", 100, 10, 1, source="WEBSOCKET")
+    status = cache.get_data_status("SPOT")
+    assert status["state"] == "LIVE"
+    assert status["data_source"] == "WEBSOCKET"
+    assert status["latest_symbol"] == "BTCUSDT"
