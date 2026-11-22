@@ -901,14 +901,6 @@ function App() {
     ])
     setMessageInput('')
     try {
-      const response = await requestJson<{
-        answer?: string
-        status?: string
-        tool?: string
-        sources?: string[]
-        disclaimer?: string
-      }>('/assistant/query', true)
-      // requestJson's generic GET helper is used elsewhere; assistant requires POST.
       const payload = await mutateJson<{
         answer?: string
         status?: string
