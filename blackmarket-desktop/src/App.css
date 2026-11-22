@@ -3443,7 +3443,6 @@ button:not(:disabled):active {
   }
 }
 
-
 /* RiskPanel compact dial and status semantics */
 .risk-status {
   display: inline-flex;
