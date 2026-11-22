@@ -22,6 +22,8 @@ def test_settings_report_telegram_configuration_without_exposing_credentials(mon
         max_leverage=3.0,
         max_spot_positions=5,
         max_futures_positions=5,
+        max_position_size_pct=50.0,
+        max_asset_exposure_pct=30.0,
     )
 
     settings = bridge.get_settings()
