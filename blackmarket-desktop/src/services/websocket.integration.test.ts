@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { setApiToken } from './localAuth.ts'
+import { setApiToken } from './localAuth.js'
 import { WebSocketService } from './websocket.ts'
 
 class MockSocket {
