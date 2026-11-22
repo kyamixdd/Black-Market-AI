@@ -158,6 +158,23 @@ async def get_strategy_comparison(
     return result
 
 
+
+@router.get("/strategy-dna")
+async def get_strategy_dna():
+    """Build auditable strategy profiles from saved backtests and closed paper trades."""
+    from learning.strategy_dna import build_strategy_dna
+
+    repository = Repository(get_session_maker())
+    reports = repository.list_backtest_reports(limit=500)
+    bridge = get_bridge()
+    trades = bridge.get_recent_trades(limit=10000)
+    simulator = bridge.simulator
+    capital = (
+        float(getattr(simulator, "initial_spot_balance", 0) or 0)
+        + float(getattr(simulator, "initial_futures_balance", 0) or 0)
+    )
+    return build_strategy_dna(reports, trades, capital=capital)
+
 @router.get("/models", response_model=ModelRegistryListResponse)
 async def get_models():
     """Get model registry."""
