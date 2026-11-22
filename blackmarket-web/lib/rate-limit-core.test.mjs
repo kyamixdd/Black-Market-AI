@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rateLimited, requestClientKey } from "./rate-limit-core.mjs";
+import { rateLimited, requestClientKey, isSameOriginMutation } from "./rate-limit-core.mjs";
 
 test("rate limiter rejects requests beyond configured limit and resets after window", () => {
   const key = "security-test-" + crypto.randomUUID();
@@ -16,4 +16,11 @@ test("client key uses nearest forwarded hop and caps key length", () => {
   assert.equal(requestClientKey(request), "proxy-added");
   const oversized = { headers: { get: (name) => name === "x-real-ip" ? "a".repeat(200) : null } };
   assert.equal(requestClientKey(oversized).length, 128);
+});
+
+test("same-origin mutation check rejects missing, malformed, and cross-origin Origin", () => {
+  assert.equal(isSameOriginMutation("https://app.example", "https://app.example/api/login"), true);
+  assert.equal(isSameOriginMutation("https://evil.example", "https://app.example/api/login"), false);
+  assert.equal(isSameOriginMutation(null, "https://app.example/api/login"), false);
+  assert.equal(isSameOriginMutation("not a url", "https://app.example/api/login"), false);
 });
