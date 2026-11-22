@@ -1,4 +1,4 @@
-# Stage 14 — Public Strategy Library
+# Community Strategy Library
 
 ## Available features
 - Public strategy listing with text search, strategy-type, asset, timeframe and sort filters.
