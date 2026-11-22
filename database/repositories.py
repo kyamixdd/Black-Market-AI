@@ -502,7 +502,8 @@ class Repository:
             "known_limitations": json.loads(obj.limitations_json),
             "backtest_report": json.loads(obj.report_json),
             "report_provenance": obj.report_provenance,
-            "report_sha256": obj.report_sha256,
+            "report_sha256": obj.report_sha256, "source_report_id": obj.source_report_id,
+            "reproducibility_status": "NOT_REPLAYED", "verification_status": "NOT_VERIFIED",
             "version": obj.version, "favorite_count": favorite_count,
             "is_favorite": is_favorite, "is_owner": is_owner, "created_at": obj.created_at.isoformat() if obj.created_at else None,
             "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
@@ -525,7 +526,7 @@ class Repository:
                 "risk_json": self._json_value(record.get("risk_configuration", {})),
                 "limitations_json": self._json_value(record.get("known_limitations", [])),
                 "report_json": report_json, "report_sha256": sha256(report_json.encode("utf-8")).hexdigest(),
-                "report_provenance": "USER_SUBMITTED", "version": version, "visibility": "PUBLIC",
+                "report_provenance": record.get("report_provenance", "USER_SUBMITTED"),\n                "source_report_id": record.get("source_report_id"), "version": version, "visibility": "PUBLIC",
             }
             if obj is None:
                 obj = PublicStrategyModel(public_id=record["public_id"], **values)
@@ -696,7 +697,7 @@ class Repository:
                 "symbol": record["symbol"], "market": record["market"], "timeframe": record["timeframe"],
                 "status": record.get("status", "saved"),
                 "config_json": self._json_value(record.get("config", {})),
-                "report_json": self._json_value(record.get("report", {})),
+                "report_json": self._json_value(record.get("report", {})),\n                "origin": record.get("origin", "USER_SUBMITTED"),
             }
             if obj is None:
                 obj = BacktestReportModel(report_id=record["report_id"], **values)
@@ -730,7 +731,7 @@ class Repository:
         return {
             "report_id": obj.report_id, "strategy_id": obj.strategy_id, "strategy_name": obj.strategy_name,
             "symbol": obj.symbol, "market": obj.market, "timeframe": obj.timeframe, "status": obj.status,
-            "config": json.loads(obj.config_json), "report": json.loads(obj.report_json),
+            "config": json.loads(obj.config_json), "report": json.loads(obj.report_json), "origin": obj.origin,
             "created_at": obj.created_at.isoformat() if obj.created_at else None,
         }
 
