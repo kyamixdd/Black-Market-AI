@@ -1099,7 +1099,8 @@ function CommunityLibraryScreen() {
         supported_timeframes: timeframes.split(',').map(value => value.trim()).filter(Boolean),
         rules: JSON.parse(rules), risk_configuration: JSON.parse(risk),
         known_limitations: limitations.split('\n').map(value => value.trim()).filter(Boolean),
-        backtest_report: JSON.parse(report),\n        ...(sourceReportId.trim() ? { source_report_id: sourceReportId.trim() } : {}),
+        backtest_report: JSON.parse(report),
+        ...(sourceReportId.trim() ? { source_report_id: sourceReportId.trim() } : {}),
       }
       await mutateJson(editingId ? `/community/strategies/${editingId}` : '/community/strategies', editingId ? 'PUT' : 'POST', payload)
       setNotice(editingId ? 'Published strategy version updated.' : 'Strategy published. Shared performance is labelled user-submitted.')
@@ -1128,7 +1129,8 @@ function CommunityLibraryScreen() {
     setRules(JSON.stringify(item.rules, null, 2))
     setRisk(JSON.stringify(item.risk_configuration, null, 2))
     setLimitations(item.known_limitations.join('\n'))
-    setReport(JSON.stringify(item.backtest_report, null, 2))\n    setSourceReportId(item.source_report_id ?? '')
+    setReport(JSON.stringify(item.backtest_report, null, 2))
+    setSourceReportId(item.source_report_id ?? '')
     setNotice(`Editing your published strategy. Saving creates version ${item.version + 1}.`)
   }
 
@@ -1209,7 +1211,8 @@ function CommunityLibraryScreen() {
         <label>Strategy rules (JSON)<textarea className="workspace-search" rows={4} required value={rules} onChange={event => setRules(event.target.value)} /></label>
         <label>Risk configuration (JSON)<textarea className="workspace-search" rows={3} value={risk} onChange={event => setRisk(event.target.value)} /></label>
         <label>Known limitations (one per line)<textarea className="workspace-search" rows={3} value={limitations} onChange={event => setLimitations(event.target.value)} /></label>
-        <label>Local Strategy Lab report ID (optional)<input className="workspace-search" maxLength={64} value={sourceReportId} onChange={event => setSourceReportId(event.target.value)} placeholder="Paste a saved report ID to use its generated metrics" /></label>\n        <label>Backtest summary (JSON, user-submitted unless a local report ID is supplied)<textarea className="workspace-search" rows={3} value={report} onChange={event => setReport(event.target.value)} /></label>
+        <label>Local Strategy Lab report ID (optional)<input className="workspace-search" maxLength={64} value={sourceReportId} onChange={event => setSourceReportId(event.target.value)} placeholder="Paste a saved report ID to use its generated metrics" /></label>
+        <label>Backtest summary (JSON, user-submitted unless a local report ID is supplied)<textarea className="workspace-search" rows={3} value={report} onChange={event => setReport(event.target.value)} /></label>
         <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Publishing…' : 'Publish to public library'}</button>
       </form>
     </section>
