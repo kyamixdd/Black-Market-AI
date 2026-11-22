@@ -18,8 +18,12 @@ class MomentumAnalyzer:
         losses = np.where(diff < 0, -diff, 0.0)
         avg_gain = np.mean(gains[-period:])
         avg_loss = np.mean(losses[-period:])
+        if avg_gain == 0 and avg_loss == 0:
+            return 50.0
         if avg_loss == 0:
             return 100.0
+        if avg_gain == 0:
+            return 0.0
         rs = avg_gain / avg_loss
         return float(100.0 - (100.0 / (1.0 + rs)))
 
@@ -68,41 +72,42 @@ class MomentumAnalyzer:
     @staticmethod
     def adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
             period: int = 14) -> dict[str, float]:
-        """Average Directional Index. Returns ADX, +DI, -DI."""
-        if len(closes) < period + 1:
+        """Wilder-smoothed ADX and directional indicators."""
+        if period < 2 or len(closes) < period * 2 + 1 or len(highs) != len(closes) or len(lows) != len(closes):
             return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0}
-
-        tr_list = []
-        plus_dm_list = []
-        minus_dm_list = []
-        for i in range(1, len(closes)):
-            h = highs[i]
-            l = lows[i]
-            cp = closes[i - 1]
-            tr = max(h - l, abs(h - cp), abs(l - cp))
-            tr_list.append(tr)
-            up_move = highs[i] - highs[i - 1]
-            down_move = lows[i - 1] - lows[i]
-            plus_dm = up_move if (up_move > down_move and up_move > 0) else 0.0
-            minus_dm = down_move if (down_move > up_move and down_move > 0) else 0.0
-            plus_dm_list.append(plus_dm)
-            minus_dm_list.append(minus_dm)
-
-        if len(tr_list) < period:
+        tr, plus_dm, minus_dm = [], [], []
+        for index in range(1, len(closes)):
+            high, low, previous_close = highs[index], lows[index], closes[index - 1]
+            tr.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+            up = highs[index] - highs[index - 1]
+            down = lows[index - 1] - lows[index]
+            plus_dm.append(up if up > down and up > 0 else 0.0)
+            minus_dm.append(down if down > up and down > 0 else 0.0)
+        tr = np.asarray(tr, dtype=float)
+        plus_dm = np.asarray(plus_dm, dtype=float)
+        minus_dm = np.asarray(minus_dm, dtype=float)
+        if not all(np.isfinite(array).all() for array in (tr, plus_dm, minus_dm)) or (tr < 0).any():
             return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0}
-
-        tr_arr = np.array(tr_list)
-        plus_dm_arr = np.array(plus_dm_list)
-        minus_dm_arr = np.array(minus_dm_list)
-
-        atr = np.mean(tr_arr[-period:])
-        if atr <= 0:
-            return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0}
-
-        plus_di = 100.0 * np.mean(plus_dm_arr[-period:]) / atr
-        minus_di = 100.0 * np.mean(minus_dm_arr[-period:]) / atr
-        di_sum = plus_di + minus_di
-        if di_sum <= 0:
-            return {"adx": 0.0, "plus_di": plus_di, "minus_di": minus_di}
-        dx = 100.0 * abs(plus_di - minus_di) / di_sum
-        return {"adx": float(dx), "plus_di": float(plus_di), "minus_di": float(minus_di)}
+        smooth_tr = float(np.sum(tr[:period]))
+        smooth_plus = float(np.sum(plus_dm[:period]))
+        smooth_minus = float(np.sum(minus_dm[:period]))
+        dx_values = []
+        last_plus = last_minus = 0.0
+        for index in range(period - 1, len(tr)):
+            if index > period - 1:
+                smooth_tr = smooth_tr - smooth_tr / period + tr[index]
+                smooth_plus = smooth_plus - smooth_plus / period + plus_dm[index]
+                smooth_minus = smooth_minus - smooth_minus / period + minus_dm[index]
+            if smooth_tr <= 0:
+                dx_values.append(0.0)
+                continue
+            last_plus = 100.0 * smooth_plus / smooth_tr
+            last_minus = 100.0 * smooth_minus / smooth_tr
+            denominator = last_plus + last_minus
+            dx_values.append(100.0 * abs(last_plus - last_minus) / denominator if denominator > 0 else 0.0)
+        if len(dx_values) < period:
+            return {"adx": 0.0, "plus_di": float(last_plus), "minus_di": float(last_minus)}
+        adx = float(np.mean(dx_values[:period]))
+        for value in dx_values[period:]:
+            adx = ((adx * (period - 1)) + value) / period
+        return {"adx": adx, "plus_di": float(last_plus), "minus_di": float(last_minus)}

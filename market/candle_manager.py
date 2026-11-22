@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import time
 from collections import defaultdict
 
 import numpy as np
@@ -23,6 +25,7 @@ class CandleManager:
     def __init__(self):
         self._candles: dict[tuple, list[dict]] = defaultdict(list)
         self._max_per_series = 500
+        self._collection_status: dict[tuple[str, str, str], dict] = {}
 
     @staticmethod
     def _find_candle_index(series: list[dict], open_time: int) -> int:
@@ -163,6 +166,8 @@ class CandleManager:
                                   timeframe: str, limit: int = 500) -> int:
         """Collect historical candles from exchange and populate cache."""
         client = spot_client if market == "SPOT" else futures_client
+        key = (market, symbol, timeframe)
+        started = time.time()
         try:
             klines = await client.get_klines(symbol, timeframe, limit=limit)
             added = 0
@@ -178,7 +183,21 @@ class CandleManager:
                     added += 1
                 elif self.update_current_candle(market, symbol, timeframe, open_time, o, h, l, c, v, close_time):
                     added += 1
+            self._collection_status[key] = {
+                "state": "SUCCESS", "updated_at": time.time(), "duration_seconds": time.time() - started,
+                "returned_candles": len(klines), "changed_candles": added, "error": None,
+            }
             return added
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
-            logger.error("Historical collection failed for %s %s %s: %s", market, symbol, timeframe, exc)
+            self._collection_status[key] = {
+                "state": "FAILED", "updated_at": time.time(), "duration_seconds": time.time() - started,
+                "returned_candles": 0, "changed_candles": 0, "error": type(exc).__name__,
+            }
+            logger.warning("Historical collection failed for %s %s %s: %s", market, symbol, timeframe, exc)
             return 0
+
+    def get_collection_status(self, market: str, symbol: str, timeframe: str) -> dict | None:
+        status = self._collection_status.get((market, symbol, timeframe))
+        return dict(status) if status else None

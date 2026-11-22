@@ -6,6 +6,7 @@ import math
 import time
 import logging
 from asyncio import Semaphore
+from datetime import datetime, timezone
 
 from core.event_bus import EventBus
 from core.event_models import EventType, make_event
@@ -56,6 +57,18 @@ class Scanner:
         self.analysis_timeframes = tuple(TIMEFRAMES)
         self._running = False
         self._tasks: list[asyncio.Task] = []
+        self._scan_status: dict[str, dict] = {market: {"state": "IDLE", "started_at": None, "completed_at": None, "symbols_selected": 0, "timeframes_configured": list(self.analysis_timeframes), "refresh_successes": 0, "refresh_failures": 0, "last_error": None} for market in ("SPOT", "FUTURES")}
+
+    def status_snapshot(self) -> dict:
+        return {
+            "running": self._running,
+            "markets": {market: {**status, "timeframes_configured": list(status["timeframes_configured"])} for market, status in self._scan_status.items()},
+            "configured_timeframes": list(self.analysis_timeframes),
+            "analysis_batch_size": self.analysis_symbol_limit,
+            "scan_all_eligible": self.scan_all_eligible,
+            "stream_symbol_limit": self.stream_symbol_limit,
+            "max_concurrent_scans": self.max_concurrent_scans,
+        }
 
     async def _analyze_market(self, market: str) -> None:
         """Refresh candles for the most liquid symbols, then run strategy analysis."""
@@ -69,15 +82,17 @@ class Scanner:
         ]
         candidates.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
         if not candidates:
+            self._scan_status[market].update({"state": "NO_ELIGIBLE_DATA", "completed_at": datetime.now(timezone.utc).isoformat(), "last_error": "No eligible ticker snapshot available"})
             return
 
         # Rotate through the full eligible universe in bounded batches. This avoids
         # permanently ignoring symbols beyond the first page while controlling REST load.
-        batch_size = self.analysis_symbol_limit
+        batch_size = min(self.analysis_symbol_limit, len(candidates) if self.scan_all_eligible else self.analysis_symbol_limit)
         offset = self._analysis_offsets.get(market, 0)
         if self.scan_all_eligible:
-            selected = (candidates + candidates)[offset:offset + batch_size]
-            self._analysis_offsets[market] = (offset + batch_size) % len(candidates)
+            end = offset + batch_size
+            selected = candidates[offset:end] + candidates[:max(0, end - len(candidates))]
+            self._analysis_offsets[market] = end % len(candidates)
         else:
             selected = candidates[:batch_size]
             self._analysis_offsets[market] = 0
@@ -85,22 +100,48 @@ class Scanner:
         if not prioritized:
             return
 
+        status = self._scan_status[market]
+        status.update({"state": "SCANNING", "started_at": datetime.now(timezone.utc).isoformat(),
+                       "symbols_selected": len(prioritized), "refresh_successes": 0,
+                       "refresh_failures": 0, "last_error": None})
         semaphore = Semaphore(self.max_concurrent_scans)
 
-        async def refresh(symbol: str, timeframe: str) -> None:
+        async def refresh(symbol: str, timeframe: str) -> bool:
             async with semaphore:
-                await self.candle_manager.collect_historical(
-                    self.spot_client, self.futures_client, market, symbol, timeframe, limit=200,
-                )
+                try:
+                    await self.candle_manager.collect_historical(
+                        self.spot_client, self.futures_client, market, symbol, timeframe, limit=200,
+                    )
+                    collection = self.candle_manager.get_collection_status(market, symbol, timeframe)
+                    if collection and collection.get("state") == "FAILED":
+                        status["refresh_failures"] += 1
+                        status["last_error"] = f"{symbol} {timeframe}: {collection.get('error')}"
+                        return False
+                    return bool(collection and collection.get("state") == "SUCCESS")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    status["refresh_failures"] += 1
+                    status["last_error"] = f"{symbol} {timeframe}: {type(exc).__name__}"
+                    logger.warning("Candle refresh failed for %s %s %s: %s", market, symbol, timeframe, exc)
+                    return False
 
-        # Populate every configured timeframe for each rotating symbol batch with
-        # bounded concurrency; one slow endpoint cannot block the entire scan.
-        await asyncio.gather(*(
+        results = await asyncio.gather(*(
             refresh(symbol, timeframe)
             for _market, symbol in prioritized
             for timeframe in self.analysis_timeframes
-        ))
-        await self.intelligence.run_prioritized_scan(prioritized)
+        ), return_exceptions=True)
+        status["refresh_successes"] = sum(result is True for result in results)
+        status["refresh_failures"] += sum(isinstance(result, BaseException) for result in results)
+        try:
+            await self.intelligence.run_prioritized_scan(prioritized)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            status["last_error"] = f"strategy scan: {type(exc).__name__}"
+            logger.exception("Strategy scan batch failed for %s", market)
+        status["completed_at"] = datetime.now(timezone.utc).isoformat()
+        status["state"] = "DEGRADED" if status["refresh_failures"] or status["last_error"] else "COMPLETE"
 
     async def _handle_stream_message(self, market: str, message: dict) -> None:
         """Consume Binance combined-stream 24h ticker events into the shared cache."""
@@ -159,9 +200,12 @@ class Scanner:
                     symbol = ticker.get("symbol")
                     if not self.registry.is_eligible(symbol, market):
                         continue
-                    price = float(ticker.get("lastPrice", 0))
-                    volume = float(ticker.get("quoteVolume", 0))
-                    change = float(ticker.get("priceChangePercent", 0))
+                    try:
+                        price = float(ticker.get("lastPrice", 0))
+                        volume = float(ticker.get("quoteVolume", 0))
+                        change = float(ticker.get("priceChangePercent", 0))
+                    except (TypeError, ValueError, OverflowError):
+                        continue
                     if not valid_price(price) or not valid_volume(volume) or not math.isfinite(change):
                         continue
                     self.cache.update_ticker(market, symbol, price, volume, change, source="REST")
