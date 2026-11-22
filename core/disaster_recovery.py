@@ -278,6 +278,10 @@ class DatabaseBackupManager:
             target_path = Path(target_path)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path: Path | None = None
+            settings_tmp: Path | None = None
+            rollback_path: Path | None = None
+            settings_original: bytes | None = None
+            settings_replaced = False
             live_target = target_path.resolve() == Path(self._get_source_path()).resolve()
             try:
                 import tempfile
@@ -297,6 +301,23 @@ class DatabaseBackupManager:
                 finally:
                     check.close()
 
+                metadata = self.validate_backup(backup_path)
+                settings_restore_path = None
+                if live_target and metadata.get("settings_backup_file"):
+                    from core.runtime_settings_store import SETTINGS_PATH
+                    settings_restore_path = SETTINGS_PATH
+                    settings_restore_path.parent.mkdir(parents=True, exist_ok=True)
+                    settings_original = settings_restore_path.read_bytes() if settings_restore_path.exists() else None
+                    with tempfile.NamedTemporaryFile(prefix=".runtime-settings-restore-", suffix=".tmp", dir=settings_restore_path.parent, delete=False) as staged:
+                        settings_tmp = Path(staged.name)
+                        staged.write(Path(str(backup_path) + ".settings.json").read_bytes())
+                        staged.flush()
+                        os.fsync(staged.fileno())
+                    try:
+                        os.chmod(settings_tmp, 0o600)
+                    except OSError:
+                        pass
+
                 if live_target:
                     try:
                         with self.db.engine.connect() as connection:
@@ -304,6 +325,10 @@ class DatabaseBackupManager:
                     except Exception:
                         logger.debug("WAL checkpoint before restore skipped", exc_info=True)
                     self.db.close()
+                    if target_path.is_file():
+                        with tempfile.NamedTemporaryFile(prefix=".database-rollback-", suffix=".db", dir=target_path.parent, delete=False) as rollback:
+                            rollback_path = Path(rollback.name)
+                        shutil.copy2(target_path, rollback_path)
 
                 for suffix in ("-wal", "-shm"):
                     Path(str(target_path) + suffix).unlink(missing_ok=True)
@@ -311,11 +336,31 @@ class DatabaseBackupManager:
                 tmp_path = None
                 if live_target:
                     self.db.init_db()
-                logger.info("Restored database from %s", backup_path)
+                    if settings_tmp is not None and settings_restore_path is not None:
+                        os.replace(settings_tmp, settings_restore_path)
+                        settings_tmp = None
+                        settings_replaced = True
+                    if rollback_path is not None:
+                        rollback_path.unlink(missing_ok=True)
+                        rollback_path = None
+                logger.info("Restored database and settings from %s", backup_path)
                 return True
             except Exception as exc:
                 logger.error("Restore failed: %s", exc, exc_info=True)
-                if live_target and self.db._engine is None:
+                if live_target and rollback_path is not None and rollback_path.exists():
+                    try:
+                        self.db.close()
+                        os.replace(rollback_path, target_path)
+                        rollback_path = None
+                        if settings_replaced and settings_restore_path is not None:
+                            if settings_original is None:
+                                settings_restore_path.unlink(missing_ok=True)
+                            else:
+                                settings_restore_path.write_bytes(settings_original)
+                        self.db.init_db()
+                    except Exception:
+                        logger.critical("Database rollback after failed restore was unsuccessful", exc_info=True)
+                elif live_target and self.db._engine is None:
                     try:
                         self.db.init_db()
                     except Exception:
@@ -324,6 +369,10 @@ class DatabaseBackupManager:
             finally:
                 if tmp_path is not None:
                     tmp_path.unlink(missing_ok=True)
+                if settings_tmp is not None:
+                    settings_tmp.unlink(missing_ok=True)
+                if rollback_path is not None:
+                    rollback_path.unlink(missing_ok=True)
 
 
 class IdempotentEventProcessor:
