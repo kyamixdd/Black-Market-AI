@@ -197,6 +197,7 @@ def _save_lab_report(strategy_name: str, payload: dict, report: dict) -> str:
         "status": report.get("status", "completed"),
         "config": payload,
         "report": report,
+        "origin": "LOCAL_BACKTEST",
     }
     repository.save_backtest_report(record)
     return report_id
