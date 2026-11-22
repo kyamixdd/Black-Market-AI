@@ -166,6 +166,8 @@ class Orchestrator:
             "risk_max_daily_loss_pct": risk.max_daily_loss_pct,
             "risk_max_total_open_pct": risk.max_open_risk_pct,
             "risk_max_leverage": risk.max_leverage,
+            "risk_max_position_size_pct": risk.max_position_size_pct,
+            "risk_max_asset_exposure_pct": risk.max_asset_exposure_pct,
             "max_spot_positions": risk.max_spot_positions,
             "max_futures_positions": risk.max_futures_positions,
             "telegram_enabled": self.telegram is not None,
@@ -190,6 +192,8 @@ class Orchestrator:
         risk.max_daily_loss_pct = float(next_settings.get("risk_max_daily_loss_pct", risk.max_daily_loss_pct))
         risk.max_open_risk_pct = float(next_settings.get("risk_max_total_open_pct", risk.max_open_risk_pct))
         risk.max_leverage = float(next_settings.get("risk_max_leverage", risk.max_leverage))
+        risk.max_position_size_pct = float(next_settings.get("risk_max_position_size_pct", risk.max_position_size_pct))
+        risk.max_asset_exposure_pct = float(next_settings.get("risk_max_asset_exposure_pct", risk.max_asset_exposure_pct))
         risk.max_spot_positions = int(next_settings.get("max_spot_positions", risk.max_spot_positions))
         risk.max_futures_positions = int(next_settings.get("max_futures_positions", risk.max_futures_positions))
 
