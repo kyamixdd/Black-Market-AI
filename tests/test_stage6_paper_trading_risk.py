@@ -121,6 +121,9 @@ async def test_extreme_futures_gap_cannot_drive_simulated_account_below_zero():
 async def test_pending_limit_orders_cannot_overreserve_futures_margin():
     sim = Simulator(EventBus())
     sim.futures_balance = 100.0
+    # The smaller test balance must not be interpreted as an intraday loss.
+    sim.daily_start_equity = sim.get_account_equity_breakdown()["total_equity"]
+    sim.daily_pnl_date = datetime.now(timezone.utc).date()
     sim.risk_manager.max_risk_pct = 10.0
     sim.risk_manager.max_open_risk_pct = 20.0
     sim.risk_manager.max_position_size_pct = 100.0
@@ -138,6 +141,9 @@ async def test_pending_limit_orders_cannot_overreserve_futures_margin():
 async def test_market_order_cannot_consume_collateral_reserved_by_limit_order():
     sim = Simulator(EventBus())
     sim.futures_balance = 100.0
+    # The smaller test balance must not be interpreted as an intraday loss.
+    sim.daily_start_equity = sim.get_account_equity_breakdown()["total_equity"]
+    sim.daily_pnl_date = datetime.now(timezone.utc).date()
     sim.risk_manager.max_risk_pct = 10.0
     sim.risk_manager.max_open_risk_pct = 20.0
     sim.risk_manager.max_position_size_pct = 100.0
