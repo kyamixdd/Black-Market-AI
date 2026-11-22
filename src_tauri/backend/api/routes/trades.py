@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import math
+import logging
 from fastapi import APIRouter, HTTPException, Query
 
 from ...bridge.orchestrator_bridge import get_bridge
+from core.observability import log_event
 from .schemas import (
     TradeListResponse, TradeResponse, TradeStatisticsResponse,
     OpenOrderListResponse, ManualOrderRequest, ManualActionResponse,
 )
 
 router = APIRouter(prefix="/trades", tags=["trades"])
+logger = logging.getLogger(__name__)
 
 
 def _validated_snapshot_price(snapshot: dict | None) -> float:
@@ -110,11 +113,15 @@ async def open_manual_trade(request: ManualOrderRequest):
     if request.order_type == "LIMIT":
         order_id = await simulator.place_limit_order(signal, request.quantity)
         if not order_id:
+            log_event(logger, logging.WARNING, "paper_order_rejected", symbol=request.symbol, market=request.market.value, order_type="LIMIT", reason="risk_controls")
             raise HTTPException(409, "Order rejected by paper-trading risk controls.")
+        log_event(logger, logging.INFO, "paper_order_placed", symbol=request.symbol, market=request.market.value, order_type="LIMIT", order_id=order_id)
         return ManualActionResponse(success=True, id=order_id, message="Limit order placed.")
     position_id = await simulator.execute_signal(signal, request.quantity)
     if not position_id:
+        log_event(logger, logging.WARNING, "paper_order_rejected", symbol=request.symbol, market=request.market.value, order_type="MARKET", reason="risk_controls")
         raise HTTPException(409, "Trade rejected by paper-trading risk controls.")
+    log_event(logger, logging.INFO, "paper_position_opened", symbol=request.symbol, market=request.market.value, position_id=position_id)
     return ManualActionResponse(success=True, id=position_id, message="Paper position opened.")
 
 
@@ -133,4 +140,5 @@ async def cancel_order(order_id: str):
     cancelled = await simulator.cancel_limit_order(order_id)
     if cancelled is None:
         raise HTTPException(409, "Order state changed before cancellation could complete.")
+    log_event(logger, logging.INFO, "paper_order_cancelled", order_id=order_id)
     return ManualActionResponse(success=True, id=order_id, message="Order cancelled.")
