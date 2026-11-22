@@ -70,6 +70,7 @@ class WebSocketManager:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
+                self._connected_connections = max(0, self._connected_connections - 1)
                 self._reconnect_attempts += 1
                 logger.warning("WS connection error on %s: %s (reconnecting in %.1fs)",
                                base_url, exc, backoff)
