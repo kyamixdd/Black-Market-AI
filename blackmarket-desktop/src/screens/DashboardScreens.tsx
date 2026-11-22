@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { mutateJson, requestJson } from '../services/backendClient'
 import { DataTable as Table, DetailCard, EmptyState, ScreenHeader, SummaryCard, TableHead } from '../components/ui/TerminalPrimitives'
 
 export type ScreenName =
@@ -328,6 +329,7 @@ type Props = {
   onSettingsSave: (settings: Record<string, unknown>) => Promise<void>
   onStrategyLabRun: (payload: Record<string, unknown>) => Promise<any>
   onStrategyLabCompare: (payload: Record<string, unknown>) => Promise<any>
+  onWorkspaceLoad: (workspace: any) => void
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -1040,7 +1042,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
-      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} />}
+      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} data={data} preferences={props.preferences} screen={screen} symbol={props.symbol} marketType={props.marketType} onWorkspaceLoad={props.onWorkspaceLoad} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
       {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
@@ -1049,7 +1051,11 @@ export function DashboardScreen(props: Props) {
 }
 
 
-function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRun']; onCompare: Props['onStrategyLabCompare'] }) {
+function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol: dashboardSymbol, marketType, onWorkspaceLoad }: {
+  onRun: Props['onStrategyLabRun']; onCompare: Props['onStrategyLabCompare'];
+  data: WorkspaceData; preferences: DashboardPreferences; screen: ScreenName;
+  symbol: string; marketType: 'SPOT' | 'FUTURES'; onWorkspaceLoad: Props['onWorkspaceLoad'];
+}) {
   const [strategy, setStrategy] = useState('momentum')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
@@ -1071,6 +1077,92 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
   const [slippage, setSlippage] = useState('')
   const [spread, setSpread] = useState('')
   const [funding, setFunding] = useState('')
+  const [savedStrategies, setSavedStrategies] = useState<any[]>([])
+  const [savedReports, setSavedReports] = useState<any[]>([])
+  const [savedWorkspaces, setSavedWorkspaces] = useState<any[]>([])
+  const [strategyName, setStrategyName] = useState('')
+  const [chosenStrategyId, setChosenStrategyId] = useState('')
+  const [chosenReportId, setChosenReportId] = useState('')
+  const [chosenWorkspaceId, setChosenWorkspaceId] = useState('')
+  const [loadedReport, setLoadedReport] = useState<any>(null)
+  const [loadedWorkspace, setLoadedWorkspace] = useState<any>(null)
+  const [persistenceMessage, setPersistenceMessage] = useState('')
+  const reloadSaved = async () => {
+    const [strategies, reports, workspaces] = await Promise.all([
+      requestJson<{ strategies?: any[] }>('/research/strategies'),
+      requestJson<{ reports?: any[] }>('/research/reports'),
+      requestJson<{ workspaces?: any[] }>('/research/workspaces'),
+    ])
+    setSavedStrategies(strategies?.strategies ?? [])
+    setSavedReports(reports?.reports ?? [])
+    setSavedWorkspaces(workspaces?.workspaces ?? [])
+  }
+  useEffect(() => { void reloadSaved() }, [])
+  const saveCurrentStrategy = async () => {
+    const saved = await mutateJson<any>('/research/strategies', 'POST', {
+      name: strategyName.trim() || strategy,
+      strategy_key: strategy,
+      description: 'Saved from Strategy Lab',
+      tags: ['strategy-lab'],
+      definition: {
+        symbol: symbol.toUpperCase(), market, timeframe, sizing_mode: mode,
+        initial_capital: Number(capital), risk_per_trade_pct: Number(risk),
+        fixed_notional: Number(notional), max_position_pct: Number(maxPosition),
+        strategy_parameters: { min_score: Number(minScore) },
+        fee_rate: feeRate === '' ? null : Number(feeRate),
+        slippage_bps: slippage === '' ? null : Number(slippage),
+        spread_bps: spread === '' ? null : Number(spread),
+        funding_rate: funding === '' ? null : Number(funding),
+      },
+    })
+    setChosenStrategyId(saved.strategy_id)
+    setPersistenceMessage('Strategy saved to the database.')
+    await reloadSaved()
+  }
+  const loadChosenStrategy = () => {
+    const saved = savedStrategies.find(item => item.strategy_id === chosenStrategyId)
+    if (!saved) return
+    const definition = saved.definition ?? {}
+    setStrategy(saved.strategy_key)
+    if (definition.symbol) setSymbol(String(definition.symbol))
+    if (definition.market === 'SPOT' || definition.market === 'FUTURES') setMarket(definition.market)
+    if (definition.timeframe) setTimeframe(String(definition.timeframe))
+    if (definition.sizing_mode) setMode(String(definition.sizing_mode))
+    if (definition.initial_capital != null) setCapital(String(definition.initial_capital))
+    if (definition.risk_per_trade_pct != null) setRisk(String(definition.risk_per_trade_pct))
+    if (definition.fixed_notional != null) setNotional(String(definition.fixed_notional))
+    if (definition.max_position_pct != null) setMaxPosition(String(definition.max_position_pct))
+    if (definition.strategy_parameters?.min_score != null) setMinScore(String(definition.strategy_parameters.min_score))
+    setPersistenceMessage('Saved strategy configuration loaded into the form.')
+  }
+  const loadChosenReport = async () => {
+    if (!chosenReportId) return
+    const report = await requestJson<any>(`/research/reports/${encodeURIComponent(chosenReportId)}`)
+    if (report) setLoadedReport(report)
+  }
+  const saveWorkspaceSnapshot = async () => {
+    const saved = await mutateJson<any>('/research/workspaces', 'POST', {
+      name: `Workspace ${new Date().toLocaleString()}`,
+      schema_version: 1,
+      payload: {
+        screen, symbol: dashboardSymbol, marketType, preferences,
+        dashboardData: data,
+        strategyLab: { strategy, symbol, market, timeframe, start, end, capital, risk, mode, notional, maxPosition, minScore, feeRate, slippage, spread, funding, result, comparison },
+      },
+    })
+    setChosenWorkspaceId(saved.workspace_id)
+    setPersistenceMessage('Workspace snapshot saved.')
+    await reloadSaved()
+  }
+  const loadChosenWorkspace = async () => {
+    if (!chosenWorkspaceId) return
+    const workspace = await requestJson<any>(`/research/workspaces/${encodeURIComponent(chosenWorkspaceId)}`)
+    if (workspace) {
+      setLoadedWorkspace(workspace)
+      onWorkspaceLoad(workspace)
+      setPersistenceMessage('Workspace snapshot loaded into the dashboard.')
+    }
+  }
   const run = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
@@ -1145,6 +1237,23 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
         <button className="table-action" type="button" disabled={busy} onClick={() => void compare()}>Compare all strategies</button>
       </form>
       {error && <div role="alert" className="workspace-error">{error}</div>}
+      <section className="workspace-panel persistence-panel">
+        <h2>Saved research & workspaces</h2>
+        <div className="workspace-form-grid">
+          <label>Strategy name<input value={strategyName} onChange={event => setStrategyName(event.target.value)} placeholder={strategy} maxLength={120} /></label>
+          <button className="table-action" type="button" onClick={() => void saveCurrentStrategy()}>Save strategy definition</button>
+          <label>Saved strategy<select value={chosenStrategyId} onChange={event => setChosenStrategyId(event.target.value)}><option value="">Choose saved strategy</option>{savedStrategies.map(item => <option key={item.strategy_id} value={item.strategy_id}>{item.name} · {item.strategy_key} v{item.version}</option>)}</select></label>
+          <button className="table-action" type="button" disabled={!chosenStrategyId} onClick={loadChosenStrategy}>Load strategy</button>
+          <label>Saved backtest report<select value={chosenReportId} onChange={event => setChosenReportId(event.target.value)}><option value="">Choose report</option>{savedReports.map(item => <option key={item.report_id} value={item.report_id}>{item.symbol} · {item.strategy_name} · {timestamp(item.created_at)}</option>)}</select></label>
+          <button className="table-action" type="button" disabled={!chosenReportId} onClick={() => void loadChosenReport()}>Open report</button>
+          <button className="table-action" type="button" onClick={() => void saveWorkspaceSnapshot()}>Save workspace snapshot</button>
+          <label>Saved workspace<select value={chosenWorkspaceId} onChange={event => setChosenWorkspaceId(event.target.value)}><option value="">Choose workspace</option>{savedWorkspaces.map(item => <option key={item.workspace_id} value={item.workspace_id}>{item.name} · {timestamp(item.updated_at)}</option>)}</select></label>
+          <button className="table-action" type="button" disabled={!chosenWorkspaceId} onClick={() => void loadChosenWorkspace()}>Restore workspace</button>
+        </div>
+        {persistenceMessage && <p role="status" className="workspace-note">{persistenceMessage}</p>}
+        {loadedReport && <details open><summary>Saved report · {loadedReport.report_id}</summary><pre>{JSON.stringify(loadedReport, null, 2)}</pre></details>}
+        {loadedWorkspace && <details><summary>Restored workspace data</summary><pre>{JSON.stringify({name: loadedWorkspace.name, updated_at: loadedWorkspace.updated_at, schema_version: loadedWorkspace.schema_version, payload: loadedWorkspace.payload}, null, 2)}</pre></details>}
+      </section>
       {result?.status === 'insufficient_data' && <EmptyState text={`Insufficient historical candles. Available: ${result.available_candles}; required: ${result.required_candles}. Try a wider range or another timeframe.`} />}
       {comparison?.results && <section><h2>Strategy comparison · same conditions</h2><div className="workspace-summary-grid">{comparison.results.map((item: any) => <SummaryCard key={item.strategy} label={item.strategy} value={item.metrics ? pct(item.metrics.net_return_pct) : item.status} detail={item.metrics ? `DD ${pct(item.metrics.max_drawdown_pct)} · ${item.metrics.trade_count} trades` : 'Insufficient history'} />)}</div></section>}
       {metrics && <>
