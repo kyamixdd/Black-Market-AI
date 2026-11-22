@@ -1099,6 +1099,7 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   }
   useEffect(() => { void reloadSaved() }, [])
   const saveCurrentStrategy = async () => {
+    try {
     const saved = await mutateJson<any>('/research/strategies', 'POST', {
       name: strategyName.trim() || strategy,
       strategy_key: strategy,
@@ -1141,6 +1142,7 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     if (report) setLoadedReport(report)
   }
   const saveWorkspaceSnapshot = async () => {
+    try {
     const saved = await mutateJson<any>('/research/workspaces', 'POST', {
       name: `Workspace ${new Date().toLocaleString()}`,
       schema_version: 1,
