@@ -2356,7 +2356,7 @@
   html,
   body,
   #root {
-    min-width: 360px;
+    min-width: 320px;
     min-height: 100%;
     height: auto;
   }
@@ -2366,7 +2366,7 @@
   }
 
   .terminal {
-    min-width: 360px;
+    min-width: 320px;
     min-height: 100vh;
     overflow: visible;
   }
