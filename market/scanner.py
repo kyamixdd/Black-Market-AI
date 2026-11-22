@@ -162,9 +162,9 @@ class Scanner:
                     price = float(ticker.get("lastPrice", 0))
                     volume = float(ticker.get("quoteVolume", 0))
                     change = float(ticker.get("priceChangePercent", 0))
-                    if price <= 0:
+                    if not valid_price(price) or not valid_volume(volume) or not math.isfinite(change):
                         continue
-                    self.cache.update_ticker(market, symbol, price, volume, change)
+                    self.cache.update_ticker(market, symbol, price, volume, change, source="REST")
                 await self._refresh_stream_subscriptions(market)
                 await self.event_bus.publish(make_event(
                     EventType.MARKET_SNAPSHOT, "scanner", market=market,
