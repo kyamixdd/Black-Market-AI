@@ -1070,6 +1070,7 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
   const [feeRate, setFeeRate] = useState('')
   const [slippage, setSlippage] = useState('')
   const [spread, setSpread] = useState('')
+  const [funding, setFunding] = useState('')
   const run = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
@@ -1084,6 +1085,7 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
         fee_rate: feeRate === '' ? undefined : Number(feeRate),
         slippage_bps: slippage === '' ? undefined : Number(slippage),
         spread_bps: spread === '' ? undefined : Number(spread),
+        funding_rate: funding === '' ? undefined : Number(funding),
       })
       setResult(data)
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
@@ -1102,6 +1104,7 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
         fee_rate: feeRate === '' ? undefined : Number(feeRate),
         slippage_bps: slippage === '' ? undefined : Number(slippage),
         spread_bps: spread === '' ? undefined : Number(spread),
+        funding_rate: funding === '' ? undefined : Number(funding),
       }))
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
     finally { setBusy(false) }
@@ -1127,6 +1130,7 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
           <label>Fee rate (optional)<input type="number" min="0" step="any" placeholder="Use market default" value={feeRate} onChange={e => setFeeRate(e.target.value)} /></label>
           <label>Slippage (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={slippage} onChange={e => setSlippage(e.target.value)} /></label>
           <label>Spread (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={spread} onChange={e => setSpread(e.target.value)} /></label>
+          <label>Funding rate per 8h (optional)<input type="number" step="any" placeholder="Futures assumption only" value={funding} onChange={e => setFunding(e.target.value)} /></label>
         </div>
         <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Running backtest…' : 'Run historical backtest'}</button>
         <button className="table-action" type="button" disabled={busy} onClick={() => void compare()}>Compare all strategies</button>
@@ -1150,7 +1154,7 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
         </div>
         <p className="workspace-note">Execution assumptions: next-bar open entry, conservative stop-first intrabar exit, taker fees, spread and slippage. Funding is omitted unless a rate is explicitly supplied. Research results do not guarantee future performance.</p>
         <Table>
-          <TableHead columns={['Trade','Side','Entry','Exit','Net P&L','Exit reason']} />
+          <TableHead labels={['Trade','Side','Entry','Exit','Net P&L','Exit reason']} />
           <tbody>{(result.trades ?? []).map((trade: any) => <tr key={trade.trade_id} onClick={() => setSelectedTrade(trade)}><td>{trade.trade_id}</td><td>{trade.side}</td><td>{price(num(trade.entry_fill))}</td><td>{price(num(trade.exit_fill))}</td><td>{money(num(trade.net_pnl))}</td><td>{trade.close_reason}</td></tr>)}</tbody>
         </Table>
         {selectedTrade && <DetailCard label="Selected trade details" value={JSON.stringify(selectedTrade, null, 2)} />}
