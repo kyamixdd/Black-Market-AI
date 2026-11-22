@@ -1,41 +1,4 @@
-import { NextRequest } from "next/server";
-
-const windows = new Map<string, number[]>();
-const WINDOW_MS = 60_000;
-const MAX_BUCKETS = 5_000;
-
-export function requestClientKey(request: NextRequest): string {
-  // The last address is the nearest proxy-added hop; do not trust a caller-
-  // controlled first X-Forwarded-For value as the rate-limit identity.
-  const forwarded = request.headers.get("x-forwarded-for");
-  const nearest = forwarded?.split(",").map((value) => value.trim()).filter(Boolean).at(-1);
-  const address = request.headers.get("x-real-ip")?.trim() || nearest || "unknown";
-  return address.slice(0, 128);
-}
-
-export function rateLimited(key: string, limit: number): boolean {
-  const now = Date.now();
-  const recent = (windows.get(key) ?? []).filter((stamp) => stamp > now - WINDOW_MS);
-  if (recent.length >= limit) {
-    windows.set(key, recent);
-    return true;
-  }
-  recent.push(now);
-  windows.set(key, recent);
-
-  // Bound attacker-controlled key growth in a long-lived Node process.
-  if (windows.size > MAX_BUCKETS) {
-    for (const [bucketKey, stamps] of windows) {
-      if (stamps.every((stamp) => stamp <= now - WINDOW_MS)) windows.delete(bucketKey);
-      if (windows.size <= MAX_BUCKETS) break;
-    }
-    if (windows.size > MAX_BUCKETS) {
-      const oldestKey = windows.keys().next().value;
-      if (oldestKey !== undefined) windows.delete(oldestKey);
-    }
-  }
-  return false;
-}
+import { NextRequest } from "next/server";\nimport { rateLimited, requestClientKey } from "./rate-limit-core.mjs";\nexport { rateLimited, requestClientKey };
 
 export async function readLimitedBody(request: NextRequest, maxBytes: number): Promise<string> {
   const declaredLength = request.headers.get("content-length");
