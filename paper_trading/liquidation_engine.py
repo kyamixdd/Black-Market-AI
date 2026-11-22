@@ -1,6 +1,8 @@
 """Liquidation simulation for futures positions."""
 from __future__ import annotations
 
+import math
+
 
 class LiquidationEngine:
     # Binance maintenance margin rates (varies by position size, simplified)
@@ -11,26 +13,40 @@ class LiquidationEngine:
         if position["market"] != "FUTURES":
             return 0.0
 
-        leverage = position.get("leverage", 1.0)
+        try:
+            entry = float(position.get("entry_price", 0.0))
+            leverage = float(position.get("leverage", 0.0))
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        if not math.isfinite(entry) or not math.isfinite(leverage) or entry <= 0 or leverage < 1.0:
+            return 0.0
         mmr = self.DEFAULT_MMR
 
         if position["side"] == "LONG":
             # Long liquidation: mark_price <= entry * (1 - 1/leverage + mmr)
-            return position["entry_price"] * (1 - (1 / leverage) + mmr)
+            return entry * (1 - (1 / leverage) + mmr)
         else:
             # Short liquidation: mark_price >= entry * (1 + 1/leverage - mmr)
-            return position["entry_price"] * (1 + (1 / leverage) - mmr)
+            return entry * (1 + (1 / leverage) - mmr)
 
     def check_liquidation(self, position: dict, mark_price: float) -> bool:
         """Check if position should be liquidated at current mark price."""
         if position["market"] != "FUTURES":
             return False
 
+        try:
+            price = float(mark_price)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if not math.isfinite(price) or price <= 0:
+            return False
         liq_price = self.calculate_liquidation_price(position)
+        if liq_price <= 0:
+            return False
         if position["side"] == "LONG":
-            return mark_price <= liq_price
+            return price <= liq_price
         else:
-            return mark_price >= liq_price
+            return price >= liq_price
 
     def get_margin_ratio(self, position: dict, mark_price: float) -> float:
         """Calculate current margin ratio (maintenance margin / position value)."""
