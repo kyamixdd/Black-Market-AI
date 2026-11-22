@@ -51,6 +51,30 @@ async def get_heatmap():
     return MarketHeatmapResponse(heatmap=heatmap)
 
 
+@router.get("/analytics/{symbol}")
+async def get_symbol_analytics(
+    symbol: str,
+    market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
+    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|4h|1d|1w)$"),
+):
+    """Return supported interval changes and indicator completeness."""
+    return await get_bridge().get_symbol_analytics(symbol.upper(), market, timeframe)
+
+
+@router.get("/correlation")
+async def get_asset_correlation(
+    symbol_a: str = Query(..., min_length=2, max_length=32),
+    symbol_b: str = Query(..., min_length=2, max_length=32),
+    market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
+    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|4h|1d|1w)$"),
+    limit: int = Query(200, ge=21, le=1000),
+):
+    """Return Pearson correlation of aligned asset returns."""
+    return await get_bridge().get_asset_correlation(
+        symbol_a.upper(), symbol_b.upper(), market, timeframe, limit
+)
+
+
 @router.get("/scanner-status")
 async def get_scanner_status():
     """Return configured scan coverage and last per-market scan outcome."""
