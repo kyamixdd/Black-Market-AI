@@ -299,6 +299,7 @@ class BacktestReportModel(Base):
     status = Column(String(32), nullable=False)
     config_json = Column(Text, nullable=False)
     report_json = Column(Text, nullable=False)
+    origin = Column(String(32), nullable=False, default="USER_SUBMITTED")
     created_at = Column(DateTime, default=now_utc, nullable=False, index=True)
 
 
@@ -333,6 +334,7 @@ class PublicStrategyModel(Base):
     limitations_json = Column(Text, nullable=False, default="[]")
     report_json = Column(Text, nullable=False, default="{}")
     report_sha256 = Column(String(64), nullable=False, default="")
+    source_report_id = Column(String(64), nullable=True)
     report_provenance = Column(String(32), nullable=False, default="USER_SUBMITTED")
     version = Column(Integer, nullable=False, default=1)
     visibility = Column(String(16), nullable=False, default="PUBLIC")
