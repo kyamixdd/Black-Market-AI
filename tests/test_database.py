@@ -39,7 +39,7 @@ def test_database_initialization_and_additive_migration_are_idempotent(tmp_path)
     with db.engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version FROM schema_migrations"
-        ).scalar_one() == 1
+        ).scalar_one() == 2
     db.close()
 
 
