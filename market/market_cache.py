@@ -114,6 +114,24 @@ class MarketCache:
                 for symbol, price in self._prices.get(market, {}).items()
             ]
 
+
+    def get_data_status(self, market: str, stale_after_seconds: float = 120.0) -> dict:
+        """Return aggregate ticker freshness and source metadata."""
+        with self._lock:
+            timestamps = self._ticker_updated_at.get(market, {})
+            if not timestamps:
+                return {"market": market, "state": MarketDataState.UNAVAILABLE.value,
+                        "last_success": None, "last_exchange_event": None,
+                        "data_source": "NONE", "age_seconds": None}
+            symbol, timestamp = max(timestamps.items(), key=lambda item: item[1])
+            age = max(0.0, (datetime.now(timezone.utc) - timestamp).total_seconds())
+            state = (MarketDataState.STALE if age >= stale_after_seconds else
+                     MarketDataState.DELAYED if age >= 30 else MarketDataState.LIVE)
+            return {"market": market, "state": state.value,
+                    "last_success": timestamp.isoformat(), "last_exchange_event": None,
+                    "data_source": self._sources.get(market, {}).get(symbol, "UNKNOWN"),
+                    "latest_symbol": symbol, "age_seconds": age}
+
     def top_movers(self, market: str, n: int = 20) -> list[tuple[str, float]]:
         with self._lock:
             items = list(self._changes.get(market, {}).items())
