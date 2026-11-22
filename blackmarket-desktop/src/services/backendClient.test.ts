@@ -51,3 +51,15 @@ test('rejected paper order retains backend rejection reason', async () => {
   })
   await assert.rejects(client.post('/trades', { symbol: 'BTCUSDT', quantity: 100000 }), /Insufficient available balance/)
 })
+
+test('API authentication failures are surfaced to the frontend', async () => {
+  const client = createBackendClient({
+    baseUrl: '/api/backend',
+    authorization: () => undefined,
+    fetcher: async (_url, init) => {
+      const authorization = (init?.headers as Record<string, string> | undefined)?.Authorization
+      return authorization ? response(200, { authenticated: true }) : response(401, { detail: 'Not authenticated' })
+    },
+  })
+  await assert.rejects(client.get('/portfolio/balance'), /Not authenticated/)
+})
