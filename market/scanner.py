@@ -114,7 +114,7 @@ class Scanner:
         except (TypeError, ValueError):
             return
         if price > 0 and volume >= 0:
-            self.cache.update_ticker(market, str(symbol), price, volume, change)
+            self.cache.update_ticker(market, str(symbol), price, volume, change, source="WEBSOCKET")
 
     async def _refresh_stream_subscriptions(self, market: str) -> None:
         if self.websocket_manager is None:
