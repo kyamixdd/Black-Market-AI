@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -33,7 +32,7 @@ class JsonLogFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact_sensitive_text(record.getMessage()),
         }
-        for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation"):
+        for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation", "symbol", "market", "order_type", "reason", "scanner_state", "symbols_selected", "refresh_successes", "refresh_failures"):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value
@@ -60,6 +59,6 @@ def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> 
     """Write a structured event; fields should be bounded and non-sensitive."""
     safe_fields = {
         key: value for key, value in fields.items()
-        if key not in {"token", "password", "secret", "authorization", "api_key"}
+        if key.lower() not in {"token", "password", "secret", "authorization", "api_key", "access_token", "refresh_token", "credential"}
     }
     logger.log(level, event, extra={"event": event, **safe_fields})
