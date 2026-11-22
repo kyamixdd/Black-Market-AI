@@ -1366,6 +1366,7 @@ function App() {
           preferences={preferences}
           onPreferencesChange={changePreferences}
           onStrategyLabRun={async (payload) => mutateJson('/learning/strategy-lab', 'POST', payload)}
+          onStrategyLabCompare={async (payload) => mutateJson('/learning/strategy-lab/compare', 'POST', { ...payload, strategies: ['momentum', 'breakout', 'trend_following', 'mean_reversion', 'reversal'] })}
           onSettingsSave={async (payload) => {
             await mutateJson('/settings', 'POST', payload)
             refreshScreenDataRef.current?.()
