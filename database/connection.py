@@ -112,6 +112,10 @@ class Database:
                 "INSERT OR IGNORE INTO schema_migrations (version, applied_at) "
                 "VALUES (1, CURRENT_TIMESTAMP)"
             )
+            connection.exec_driver_sql(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) "
+                "VALUES (2, CURRENT_TIMESTAMP)"
+            )
 
 
     def integrity_check(self) -> str:
