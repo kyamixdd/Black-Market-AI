@@ -39,7 +39,7 @@ def performance_by_regime(
             exit_time = int(trade["exit_time"])
             net = float(trade["net_pnl"])
             quantity = float(trade["quantity"])
-            entry = float(trade.get("entry_fill", trade["entry_price"]))
+            entry = float(trade["entry_fill"] if "entry_fill" in trade else trade["entry_price"])
             if not all(math.isfinite(value) for value in (net, quantity, entry)):
                 continue
             if quantity <= 0 or entry <= 0 or exit_time < entry_time:
