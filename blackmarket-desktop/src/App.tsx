@@ -163,6 +163,7 @@ const NAV_ITEMS: { label: ScreenName; shortLabel: string; icon: ReactNode }[] = 
   { label: 'Intelligence', shortLabel: 'Intelligence', icon: <Network size={12} /> },
   { label: 'Learning', shortLabel: 'Learning', icon: <GraduationCap size={12} /> },
   { label: 'Strategy Lab', shortLabel: 'Strategy Lab', icon: <CandlestickChart size={12} /> },
+  { label: 'Community Library', shortLabel: 'Community', icon: <Network size={12} /> },
   { label: 'Risk Management', shortLabel: 'Risk', icon: <ShieldAlert size={12} /> },
   { label: 'Activity', shortLabel: 'Activity', icon: <Activity size={12} /> },
   { label: 'Settings', shortLabel: 'Settings', icon: <Settings2 size={12} /> },
@@ -1409,7 +1410,7 @@ function App() {
               setSearchValue(payload.symbol.toUpperCase())
             }
             if (payload.marketType === 'SPOT' || payload.marketType === 'FUTURES') setMarketType(payload.marketType)
-            if (typeof payload.screen === 'string' && ['Overview','Markets','AI Signals','Market Analysis','Portfolio','Positions','Trade History','Intelligence','Learning','Strategy Lab','Risk Management','Activity','Settings'].includes(payload.screen)) {
+            if (typeof payload.screen === 'string' && ['Overview','Markets','AI Signals','Market Analysis','Portfolio','Positions','Trade History','Intelligence','Learning','Strategy Lab','Community Library','Risk Management','Activity','Settings'].includes(payload.screen)) {
               setActiveScreen(payload.screen as ScreenName)
             }
           }}
