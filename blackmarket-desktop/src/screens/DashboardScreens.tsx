@@ -1275,12 +1275,19 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
 }) {
   const [dna, setDna] = useState<any>(null)
   const [dnaError, setDnaError] = useState('')
+  const localDateValue = (date: Date) => {
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return date.getFullYear() + '-' + month + '-' + day
+  }
+  const defaultEndDate = localDateValue(new Date())
+  const defaultStartDate = localDateValue(new Date(Date.now() - 60 * 86400000))
   const [strategy, setStrategy] = useState('momentum')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
   const [timeframe, setTimeframe] = useState('1h')
-  const [start, setStart] = useState('2026-09-15')
-  const [end, setEnd] = useState('2026-11-21')
+  const [start, setStart] = useState(defaultStartDate)
+  const [end, setEnd] = useState(defaultEndDate)
   const [capital, setCapital] = useState('1000')
   const [risk, setRisk] = useState('1')
   const [mode, setMode] = useState('risk_pct')
@@ -1442,8 +1449,25 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
       setPersistenceMessage(reason instanceof Error ? reason.message : String(reason))
     }
   }
+  const validateBacktestInputs = () => {
+    const startTime = Date.parse(start + 'T00:00:00Z')
+    const endTime = Date.parse(end + 'T00:00:00Z')
+    if (!/^[A-Z0-9]{2,30}$/.test(symbol.trim().toUpperCase())) return 'Enter a valid market symbol using letters and numbers.'
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) return 'Choose valid start and end dates.'
+    if (startTime >= endTime) return 'The start date must be earlier than the end date.'
+    const values = [capital, risk, notional, maxPosition, minScore]
+    if (values.some(value => value.trim() === '' || !Number.isFinite(Number(value)) || Number(value) <= 0)) return 'Capital, risk, notional, position limit, and minimum score must be valid positive numbers.'
+    if (Number(risk) > 100 || Number(maxPosition) > 100) return 'Risk and maximum position percentages cannot exceed 100%.'
+    const optionalValues = [feeRate, slippage, spread]
+    if (optionalValues.some(value => value !== '' && (!Number.isFinite(Number(value)) || Number(value) < 0))) return 'Fee, slippage, and spread must be non-negative numbers.'
+    if (funding !== '' && (!Number.isFinite(Number(funding)) || Number(funding) < -100 || Number(funding) > 100)) return 'Funding rate must be between -100 and 100.'
+    return ''
+  }
   const run = async (event: FormEvent) => {
     event.preventDefault()
+    if (busy) return
+    const validationError = validateBacktestInputs()
+    if (validationError) { setError(validationError); return }
     setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
     try {
       const data = await onRun({
@@ -1464,6 +1488,9 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     finally { setBusy(false) }
   }
   const compare = async () => {
+    if (busy) return
+    const validationError = validateBacktestInputs()
+    if (validationError) { setError(validationError); return }
     setBusy(true); setError(''); setComparison(null)
     try {
       const compared = await onCompare({
