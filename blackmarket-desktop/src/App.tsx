@@ -1178,7 +1178,15 @@ function App() {
               <div className="chart-controls">
                 <span className="control-label">INTERVAL</span>
                 {TIMEFRAMES.map((item) => (
-                  <button key={item} className={`timeframe-button ${timeframe === item ? 'selected' : ''}`} onClick={() => setTimeframe(item)}>{item}</button>
+                  <button
+                    key={item}
+                    type="button"
+                    className={`timeframe-button ${timeframe === item ? 'selected' : ''}`}
+                    aria-pressed={timeframe === item}
+                    onClick={() => setTimeframe(item)}
+                  >
+                    {item}
+                  </button>
                 ))}
                 <button className="icon-button chart-tools" aria-label="Chart options" onClick={() => setPopup((current) => current === 'chart' ? null : 'chart')}><SlidersHorizontal size={13} /></button>
               </div>
