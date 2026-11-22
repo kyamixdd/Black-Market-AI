@@ -1047,12 +1047,17 @@ type CommunityStrategy = {
   version: number
   favorite_count: number
   is_favorite: boolean
+  is_owner: boolean
+  version_history?: { version: number; created_at: string | null; snapshot: Record<string, unknown> }[]
 }
 
 function CommunityLibraryScreen() {
   const [items, setItems] = useState<CommunityStrategy[]>([])
   const [query, setQuery] = useState('')
   const [strategyKey, setStrategyKey] = useState('')
+  const [assetFilter, setAssetFilter] = useState('')
+  const [timeframeFilter, setTimeframeFilter] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [sort, setSort] = useState('recent')
   const [selected, setSelected] = useState<CommunityStrategy | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1070,6 +1075,8 @@ function CommunityLibraryScreen() {
   const load = async () => {
     const params = new URLSearchParams({ q: query, sort, limit: '50' })
     if (strategyKey) params.set('strategy_key', strategyKey)
+    if (assetFilter) params.set('asset', assetFilter.toUpperCase())
+    if (timeframeFilter) params.set('timeframe', timeframeFilter)
     const result = await requestJson<{ strategies: CommunityStrategy[] }>(`/community/strategies?${params.toString()}`)
     if (result) setItems(result.strategies ?? [])
   }
@@ -1088,8 +1095,9 @@ function CommunityLibraryScreen() {
         known_limitations: limitations.split('\n').map(value => value.trim()).filter(Boolean),
         backtest_report: JSON.parse(report),
       }
-      await mutateJson('/community/strategies', 'POST', payload)
-      setNotice('Strategy published. Shared performance is labelled user-submitted.')
+      await mutateJson(editingId ? `/community/strategies/${editingId}` : '/community/strategies', editingId ? 'PUT' : 'POST', payload)
+      setNotice(editingId ? 'Published strategy version updated.' : 'Strategy published. Shared performance is labelled user-submitted.')
+      setEditingId(null)
       setName('')
       await load()
     } catch (error) {
@@ -1097,6 +1105,25 @@ function CommunityLibraryScreen() {
     } finally {
       setBusy(false)
     }
+  }
+
+  const openDetails = async (item: CommunityStrategy) => {
+    const detail = await requestJson<CommunityStrategy>(`/community/strategies/${item.public_id}`)
+    if (detail) setSelected(detail)
+  }
+
+  const editStrategy = (item: CommunityStrategy) => {
+    setEditingId(item.public_id)
+    setName(item.name)
+    setDescription(item.description)
+    setKey(item.strategy_key)
+    setAssets(item.supported_assets.join(', '))
+    setTimeframes(item.supported_timeframes.join(', '))
+    setRules(JSON.stringify(item.rules, null, 2))
+    setRisk(JSON.stringify(item.risk_configuration, null, 2))
+    setLimitations(item.known_limitations.join('\n'))
+    setReport(JSON.stringify(item.backtest_report, null, 2))
+    setNotice(`Editing your published strategy. Saving creates version ${item.version + 1}.`)
   }
 
   const toggleFavorite = async (item: CommunityStrategy) => {
@@ -1127,6 +1154,8 @@ function CommunityLibraryScreen() {
           <option value="">All strategy types</option>
           {['momentum','breakout','trend_following','mean_reversion','reversal'].map(value => <option key={value} value={value}>{value.replaceAll('_',' ')}</option>)}
         </select>
+        <input className="workspace-search" aria-label="Filter by asset" placeholder="Asset (BTCUSDT)" value={assetFilter} onChange={event => setAssetFilter(event.target.value)} />
+        <input className="workspace-search" aria-label="Filter by timeframe" placeholder="Timeframe (15m)" value={timeframeFilter} onChange={event => setTimeframeFilter(event.target.value)} />
         <select className="workspace-search" aria-label="Sort strategies" value={sort} onChange={event => setSort(event.target.value)}>
           <option value="recent">Recently published</option><option value="updated">Recently updated</option><option value="name">Name</option>
         </select>
@@ -1139,7 +1168,8 @@ function CommunityLibraryScreen() {
           <p className="workspace-note">{item.strategy_key.replaceAll('_',' ')} · v{item.version} · {item.supported_timeframes.join(', ')}</p>
           <p className="workspace-note">Report provenance: <b>USER SUBMITTED</b> · {item.backtest_report?.total_trades ?? '—'} reported trades</p>
           <div className="workspace-actions">
-            <button className="table-action" onClick={() => setSelected(item)}>Details</button>
+            <button className="table-action" onClick={() => void openDetails(item)}>Details</button>
+            {item.is_owner && <button className="table-action" onClick={() => editStrategy(item)}>Edit / new version</button>}
             <button className="table-action" onClick={() => void toggleFavorite(item)}>{item.is_favorite ? '★ Saved' : '☆ Save'} · {item.favorite_count}</button>
             <button className="table-action" onClick={() => void reportItem(item)}>Report</button>
           </div>
@@ -1154,10 +1184,12 @@ function CommunityLibraryScreen() {
       <h3>Rules</h3><pre className="workspace-code">{JSON.stringify(selected.rules, null, 2)}</pre>
       <h3>Risk configuration</h3><pre className="workspace-code">{JSON.stringify(selected.risk_configuration, null, 2)}</pre>
       <h3>Known limitations</h3><ul>{selected.known_limitations.map((item, i) => <li key={i}>{item}</li>)}</ul>
-      <h3>Version history</h3><p className="workspace-note">Version history is available from the strategy details API; updates preserve prior publication snapshots.</p>
+      <h3>Version history</h3><ol>{(selected.version_history ?? []).map(version => <li key={version.version}>v{version.version} · {version.created_at ? new Date(version.created_at).toLocaleString() : 'timestamp unavailable'} · {String(version.snapshot.name ?? selected.name)}</li>)}</ol>
+      {selected.is_owner && <button className="table-action" onClick={() => editStrategy(selected)}>Edit / publish next version</button>}
     </section>}
     <section className="workspace-panel">
-      <h2>Publish a strategy</h2>
+      <h2>{editingId ? 'Update published strategy' : 'Publish a strategy'}</h2>
+      {editingId && <button className="table-action" type="button" onClick={() => { setEditingId(null); setName(''); setNotice('Editing cancelled.') }}>Cancel version update</button>}
       <p className="workspace-note">Only the fields below are published. Account balances, credentials, private trades, and personal settings are not sent. Backtest metrics are marked user-submitted, not verified.</p>
       <form className="workspace-form" onSubmit={publish}>
         <label>Strategy name<input className="workspace-search" required minLength={2} maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
