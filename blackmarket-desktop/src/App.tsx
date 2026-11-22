@@ -547,14 +547,18 @@ function App() {
     historyGenerationRef.current += 1
     historyKeyRef.current = marketKey
     lastHistoryRequestAtRef.current = 0
+    let marketRequestGeneration = 0
     const refreshMarket = async () => {
+      const requestGeneration = ++marketRequestGeneration
       const marketQuery = `?market=${marketType}`
       const candleQuery = `?market=${marketType}&timeframe=${timeframe}&limit=1000`
       const [snapshotPayload, candlePayload] = await Promise.all([
         requestJson<MarketSnapshot>(`/markets/${encodeURIComponent(symbol)}${marketQuery}`),
         requestJson<unknown>(`/markets/${encodeURIComponent(symbol)}/candles${candleQuery}`),
       ])
-      if (!active) return
+      // Polling and websocket-triggered refreshes can overlap. Only the newest
+      // request for this market key may update the visible quote and candles.
+      if (!active || requestGeneration !== marketRequestGeneration) return
       const emptyCandleSeries = typeof candlePayload === 'object'
         && candlePayload !== null
         && 'candles' in candlePayload
