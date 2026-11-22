@@ -133,3 +133,19 @@ async def test_pending_limit_orders_cannot_overreserve_futures_margin():
     second_id = await sim.place_limit_order(second, quantity_override=0.9)
     assert second_id is None
     assert len(sim.open_orders) == 1
+
+@pytest.mark.asyncio
+async def test_market_order_cannot_consume_collateral_reserved_by_limit_order():
+    sim = Simulator(EventBus())
+    sim.futures_balance = 100.0
+    sim.risk_manager.max_risk_pct = 10.0
+    sim.risk_manager.max_open_risk_pct = 20.0
+    sim.risk_manager.max_position_size_pct = 100.0
+    sim.risk_manager.max_asset_exposure_pct = 100.0
+
+    pending = signal("RESERVEDUSDT", "FUTURES", "LONG", 100, 90, 1, "RESERVED-LIMIT")
+    assert await sim.place_limit_order(pending, quantity_override=0.9) is not None
+    market = signal("MARKETUSDT", "FUTURES", "LONG", 100, 90, 1, "RESERVED-MARKET")
+    assert await sim.execute_signal(market, quantity_override=0.2) is None
+    assert not sim.futures_positions
+    assert len(sim.open_orders) == 1
