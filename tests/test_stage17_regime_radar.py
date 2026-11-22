@@ -72,5 +72,5 @@ def test_classification_does_not_return_probability_confidence():
         candles_from_closes(closes), symbol="BTCUSDT",
         market="SPOT", timeframe="4h",
     )
-    assert result["classification_confidence"] is None or 0 <= result["classification_confidence"] <= 1
-    assert result["confidence_type"] == "rule_strength_not_probability"
+    assert result["classification_confidence"] is None
+    assert result["confidence_type"] == "not_statistically_calibrated"
