@@ -126,8 +126,8 @@ async def test_pending_limit_orders_cannot_overreserve_futures_margin():
     sim.risk_manager.max_position_size_pct = 100.0
     sim.risk_manager.max_asset_exposure_pct = 100.0
 
-    first = signal("PENDING1USDT", "FUTURES", "LONG", 100, 90, 1, "PENDING-1")
-    second = signal("PENDING2USDT", "FUTURES", "LONG", 100, 90, 1, "PENDING-2")
+    first = signal("PENDING1USDT", "FUTURES", "LONG", 100, 99.9, 1, "PENDING-1")
+    second = signal("PENDING2USDT", "FUTURES", "LONG", 100, 99.9, 1, "PENDING-2")
     first_id = await sim.place_limit_order(first, quantity_override=0.9)
     assert first_id is not None
     second_id = await sim.place_limit_order(second, quantity_override=0.9)
@@ -143,9 +143,9 @@ async def test_market_order_cannot_consume_collateral_reserved_by_limit_order():
     sim.risk_manager.max_position_size_pct = 100.0
     sim.risk_manager.max_asset_exposure_pct = 100.0
 
-    pending = signal("RESERVEDUSDT", "FUTURES", "LONG", 100, 90, 1, "RESERVED-LIMIT")
+    pending = signal("RESERVEDUSDT", "FUTURES", "LONG", 100, 99.9, 1, "RESERVED-LIMIT")
     assert await sim.place_limit_order(pending, quantity_override=0.9) is not None
-    market = signal("MARKETUSDT", "FUTURES", "LONG", 100, 90, 1, "RESERVED-MARKET")
+    market = signal("MARKETUSDT", "FUTURES", "LONG", 100, 99.9, 1, "RESERVED-MARKET")
     assert await sim.execute_signal(market, quantity_override=0.2) is None
     assert not sim.futures_positions
     assert len(sim.open_orders) == 1
