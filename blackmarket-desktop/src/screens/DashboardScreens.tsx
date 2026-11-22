@@ -1044,6 +1044,7 @@ type CommunityStrategy = {
   known_limitations: string[]
   backtest_report: Record<string, unknown>
   report_provenance: string
+  report_sha256: string
   version: number
   favorite_count: number
   is_favorite: boolean
@@ -1182,7 +1183,7 @@ function CommunityLibraryScreen() {
     {selected && <section className="workspace-panel">
       <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => setSelected(null)}>Close</button></div>
       <p>{selected.description}</p>
-      <p className="workspace-note">Shared report: USER_SUBMITTED · SHA-256 {selected.report_provenance === 'USER_SUBMITTED' ? 'integrity digest stored' : 'provenance unavailable'}. User-submitted metrics are not independently verified.</p>
+      <p className="workspace-note">Shared report: USER_SUBMITTED · SHA-256 {selected.report_sha256 || 'not available'}. Digest confirms stored content integrity only; user-submitted metrics are not independently verified.</p>
       <h3>Submitted backtest summary</h3><pre className="workspace-code">{JSON.stringify(selected.backtest_report, null, 2)}</pre>
       <h3>Rules</h3><pre className="workspace-code">{JSON.stringify(selected.rules, null, 2)}</pre>
       <h3>Risk configuration</h3><pre className="workspace-code">{JSON.stringify(selected.risk_configuration, null, 2)}</pre>
