@@ -104,7 +104,7 @@ class MomentumAnalyzer:
             last_plus = 100.0 * smooth_plus / smooth_tr
             last_minus = 100.0 * smooth_minus / smooth_tr
             denominator = last_plus + last_minus
-            dx_values.append(100.0 * abs(last_plus - last_minus) / denominator if denominator > 0 else 0.0
+            dx_values.append(100.0 * abs(last_plus - last_minus) / denominator if denominator > 0 else 0.0)
         if len(dx_values) < period:
             return {"adx": 0.0, "plus_di": float(last_plus), "minus_di": float(last_minus)}
         adx = float(np.mean(dx_values[:period]))
