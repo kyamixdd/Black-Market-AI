@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import sys
 import time
 import uuid
@@ -237,6 +238,17 @@ async def require_local_api_auth(request: Request, call_next):
     client_host = request.client.host if request.client else None
     if not _is_loopback(client_host) and not _REMOTE_API_ENABLED:
         return JSONResponse(status_code=403, content={"detail": "Remote API access is disabled"})
+
+    public_read = (
+        request.method == "GET"
+        and (
+            request.url.path == "/api/community/challenges"
+            or request.url.path.startswith("/api/community/challenges/")
+            or re.fullmatch(r"/api/community/share/analysis/[a-f0-9]{32}", request.url.path)
+        )
+    )
+    if public_read:
+        return await call_next(request)
 
     if request.url.path == "/api" or request.url.path.startswith("/api/"):
         if request.method != "OPTIONS":
