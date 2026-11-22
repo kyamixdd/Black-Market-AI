@@ -376,7 +376,7 @@ class ModelManager:
                     .order_by(ModelRegistryModel.trained_at.desc())
                     .limit(1)
                 ).scalar()
-            if not target or target.model_type != model_type or not target.file_path:
+            if not target or target.version == current.version or target.model_type != model_type or not target.file_path:
                 logger.error("Rollback blocked: compatible target missing for %s", model_type)
                 return False
             try:
