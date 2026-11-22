@@ -28,6 +28,18 @@ try {
   const widths = [320, 375, 430, 768, 1024, 1280, 1440, 1920]
   await page.goto(url, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#root > *', { timeout: 15000 })
+  await page.waitForLoadState('load')
+  const performanceBaseline = await page.evaluate(() => {
+    const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
+    const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[]
+    return {
+      domContentLoadedMs: Math.round(navigation?.domContentLoadedEventEnd ?? 0),
+      loadEventMs: Math.round(navigation?.loadEventEnd ?? 0),
+      resourceCount: resources.length,
+      transferredBytes: resources.reduce((total, resource) => total + resource.transferSize, 0),
+    }
+  })
+  console.log(`frontend cold-load baseline: ${JSON.stringify(performanceBaseline)}`)
   const connectionNoticeClose = page.locator('.startup-toast-dismiss')
   if (await connectionNoticeClose.count()) {
     await connectionNoticeClose.click({ force: true })
