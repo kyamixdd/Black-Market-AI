@@ -14,6 +14,7 @@ from . import (
     settings,
     assistant,
     backup,
+    research,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "settings",
     "assistant",
     "backup",
+    "research",
 ]
