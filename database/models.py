@@ -270,6 +270,51 @@ class SystemEventModel(Base):
     payload = Column(Text, nullable=False)
 
 
+
+class SavedStrategyModel(Base):
+    """Versioned user-authored strategy definitions."""
+    __tablename__ = "saved_strategies"
+
+    strategy_id = Column(String(64), primary_key=True)
+    name = Column(String(120), nullable=False)
+    strategy_key = Column(String(64), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    definition_json = Column(Text, nullable=False)
+    tags_json = Column(Text, nullable=False, default="[]")
+    version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class BacktestReportModel(Base):
+    """Immutable saved research report and its full configuration/results."""
+    __tablename__ = "backtest_reports"
+
+    report_id = Column(String(64), primary_key=True)
+    strategy_id = Column(String(64), nullable=True, index=True)
+    strategy_name = Column(String(120), nullable=False)
+    symbol = Column(String(32), nullable=False, index=True)
+    market = Column(String(16), nullable=False)
+    timeframe = Column(String(8), nullable=False)
+    status = Column(String(32), nullable=False)
+    config_json = Column(Text, nullable=False)
+    report_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=now_utc, nullable=False, index=True)
+
+
+class WorkspaceModel(Base):
+    """User-saved dashboard/workspace state with schema versioning."""
+    __tablename__ = "workspaces"
+
+    workspace_id = Column(String(64), primary_key=True)
+    name = Column(String(120), nullable=False)
+    owner_key = Column(String(64), nullable=False, default="local", index=True)
+    schema_version = Column(Integer, nullable=False, default=1)
+    payload_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
 def create_all(db_path: str) -> None:
     engine = create_engine(db_path, future=True)
     Base.metadata.create_all(engine)
