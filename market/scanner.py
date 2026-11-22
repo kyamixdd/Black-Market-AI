@@ -82,6 +82,7 @@ class Scanner:
         ]
         candidates.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
         if not candidates:
+            self._scan_status[market].update({"state": "NO_ELIGIBLE_DATA", "completed_at": datetime.now(timezone.utc).isoformat(), "last_error": "No eligible ticker snapshot available"})
             return
 
         # Rotate through the full eligible universe in bounded batches. This avoids
