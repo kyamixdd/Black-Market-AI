@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
+import time
 from collections import defaultdict
 
 import numpy as np
@@ -21,6 +24,7 @@ class CandleManager:
     def __init__(self):
         self._candles: dict[tuple, list[dict]] = defaultdict(list)
         self._max_per_series = 500
+        self._collection_status: dict[tuple[str, str, str], dict] = {}
 
     @staticmethod
     def _find_candle_index(series: list[dict], open_time: int) -> int:
@@ -39,8 +43,23 @@ class CandleManager:
                    open_time: int, open_: float, high: float, low: float,
                    close: float, volume: float, close_time: int | None = None) -> bool:
         """Add a candle, deduplicate by open_time. Returns True if added, False if duplicate."""
+        if (market not in {"SPOT", "FUTURES"} or timeframe not in TIMEFRAME_SECONDS:
+            return False
+        if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9]{2,32}", symbol):
+            return False
+        try:
+            values = [float(value) for value in (open_, high, low, close, volume)]
+            open_time = int(open_time)
+            effective_close = int(close_time) if close_time is not None else open_time + TIMEFRAME_SECONDS[timeframe] * 1000 - 1
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if (not all(math.isfinite(value) for value in values) or min(values[:4]) <= 0 or values[4] < 0
+                or high < max(open_, close, low) or low > min(open_, close)
+                or open_time <= 0 or effective_close < open_time
+                or open_time > int(time.time() * 1000) + 300_000):
+            return False
+        close_time = effective_close
         key = (market, symbol, timeframe)
-
         series = self._candles[key]
         index = self._find_candle_index(series, open_time)
         if index < len(series) and series[index]["open_time"] == open_time:
@@ -49,7 +68,7 @@ class CandleManager:
         candle = {
             "open_time": open_time, "open": open_, "high": high,
             "low": low, "close": close, "volume": volume,
-            "close_time": close_time or open_time + TIMEFRAME_SECONDS.get(timeframe, 60) * 1000 - 1,
+            "close_time": close_time,
         }
         series.insert(index, candle)
 
@@ -61,10 +80,22 @@ class CandleManager:
                               open_time: int, open_: float, high: float, low: float,
                               close: float, volume: float, close_time: int | None = None) -> bool:
         """Replace the current unclosed candle when a REST refresh has newer values."""
+        if market not in {"SPOT", "FUTURES"} or timeframe not in TIMEFRAME_SECONDS:
+            return False
+        try:
+            values = [float(value) for value in (open_, high, low, close, volume)]
+            effective_close = int(close_time) if close_time is not None else open_time + TIMEFRAME_SECONDS[timeframe] * 1000 - 1
+        except (TypeError, ValueError, OverflowError):
+            return False
+        if (not all(math.isfinite(value) for value in values) or min(values[:4]) <= 0 or values[4] < 0
+                or high < max(open_, close, low) or low > min(open_, close) or effective_close < open_time):
+            return False
         key = (market, symbol, timeframe)
         series = self._candles.get(key, [])
         index = self._find_candle_index(series, open_time)
         if index >= len(series) or series[index]["open_time"] != open_time:
+            return False
+        if effective_close < series[index]["close_time"]:
             return False
         series[index] = {
             "open_time": open_time,
@@ -73,7 +104,7 @@ class CandleManager:
             "low": low,
             "close": close,
             "volume": volume,
-            "close_time": close_time or open_time + TIMEFRAME_SECONDS.get(timeframe, 60) * 1000 - 1,
+            "close_time": effective_close,
         }
         return True
 
