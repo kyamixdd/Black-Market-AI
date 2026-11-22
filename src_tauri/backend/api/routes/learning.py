@@ -196,9 +196,24 @@ async def run_strategy_lab(payload: dict):
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid backtest configuration: {exc}") from exc
     bridge = get_bridge()
-    candles = await bridge.get_candles(symbol, market, timeframe, limit=1500, end_time=config.end_time)
+    candles = []
+    cursor = config.end_time
+    page_limit = 1000 if market == "SPOT" else 1500
+    # Walk backward so user-selected ranges longer than one exchange page are supported.
+    # Bound requests to 20 pages (20k Spot / 30k Futures candles) to prevent unbounded work.
+    for _ in range(20):
+        page = await bridge.get_candles(symbol, market, timeframe, limit=page_limit, end_time=cursor)
+        page = [row for row in page if int(row.get("close_time", 0)) <= cursor]
+        if not page:
+            break
+        candles.extend(page)
+        earliest = min(int(row["open_time"]) for row in page)
+        if earliest <= config.start_time:
+            break
+        cursor = earliest - 1
     candles = [row for row in candles if config.start_time <= int(row.get("open_time", 0))
                and int(row.get("close_time", row.get("open_time", 0))) <= config.end_time]
+    candles.sort(key=lambda row: int(row["open_time"]))
     try:
         return run_strategy_lab(candles, config, strategy)
     except ValueError as exc:
