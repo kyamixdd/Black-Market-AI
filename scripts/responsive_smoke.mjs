@@ -28,6 +28,11 @@ try {
   const widths = [320, 375, 430, 768, 1024, 1280, 1440, 1920]
   await page.goto(url, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#root > *', { timeout: 15000 })
+  const connectionNoticeClose = page.locator('.startup-toast-dismiss')
+  if (await connectionNoticeClose.count()) {
+    await connectionNoticeClose.click({ force: true })
+    await page.waitForFunction(() => !document.querySelector('.startup-toast'))
+  }
   assert.ok(await page.locator('#application-navigation').count(), 'Application navigation should be rendered')
   await page.locator('#market-chart').waitFor({ state: 'attached' })
   for (const width of widths) {
