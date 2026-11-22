@@ -1314,19 +1314,24 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   const [loadedWorkspace, setLoadedWorkspace] = useState<any>(null)
   const [persistenceMessage, setPersistenceMessage] = useState('')
   const reloadSaved = async () => {
-    const [strategies, reports, workspaces] = await Promise.all([
-      requestJson<{ strategies?: any[] }>('/research/strategies'),
-      requestJson<{ reports?: any[] }>('/research/reports'),
-      requestJson<{ workspaces?: any[] }>('/research/workspaces'),
-    ])
-    setSavedStrategies(strategies?.strategies ?? [])
-    setSavedReports(reports?.reports ?? [])
-    setSavedWorkspaces(workspaces?.workspaces ?? [])
-    if (!strategies || !reports || !workspaces) {
-      setPersistenceMessage('Saved research could not be loaded. Check the backend connection and try again.')
+    try {
+      const [strategies, reports, workspaces] = await Promise.all([
+        requestJson<{ strategies?: any[] }>('/research/strategies'),
+        requestJson<{ reports?: any[] }>('/research/reports'),
+        requestJson<{ workspaces?: any[] }>('/research/workspaces'),
+      ])
+      if (!strategies || !reports || !workspaces || !Array.isArray(strategies.strategies) || !Array.isArray(reports.reports) || !Array.isArray(workspaces.workspaces)) {
+        setPersistenceMessage('Saved research response was incomplete or invalid. Existing selections were kept.')
+        return false
+      }
+      setSavedStrategies(strategies.strategies)
+      setSavedReports(reports.reports)
+      setSavedWorkspaces(workspaces.workspaces)
+      return true
+    } catch (reason) {
+      setPersistenceMessage(reason instanceof Error ? reason.message : 'Saved research could not be loaded.')
       return false
     }
-    return true
   }
   useEffect(() => { void reloadSaved() }, [])
   useEffect(() => {
@@ -1335,6 +1340,9 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     return () => { active = false }
   }, [])
   const saveCurrentStrategy = async () => {
+    const validationError = validateBacktestInputs()
+    if (validationError) { setPersistenceMessage(validationError); return }
+    if (strategyName.trim().length > 120) { setPersistenceMessage('Strategy name must be 120 characters or fewer.'); return }
     try {
       const saved = await mutateJson<any>('/research/strategies', 'POST', {
         name: strategyName.trim() || strategy,
@@ -1361,22 +1369,45 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   }
   const loadChosenStrategy = () => {
     const saved = savedStrategies.find(item => item.strategy_id === chosenStrategyId)
-    if (!saved) return
-    const definition = saved.definition ?? {}
+    if (!saved) { setPersistenceMessage('Choose a saved strategy first.'); return }
+    const allowedStrategies = ['momentum','breakout','trend_following','mean_reversion','reversal']
+    const definition = saved.definition
+    if (!allowedStrategies.includes(saved.strategy_key) || !definition || typeof definition !== 'object' || Array.isArray(definition)) {
+      setPersistenceMessage('This saved strategy has an unsupported key or invalid definition. Nothing was loaded.')
+      return
+    }
+    if (typeof definition.symbol !== 'string' || !/^[A-Za-z0-9]{2,20}$/.test(definition.symbol) ||
+        !['SPOT','FUTURES'].includes(definition.market) ||
+        !['1m','3m','5m','15m','30m','1h','4h','1d','1w'].includes(definition.timeframe) ||
+        !['risk_pct','fixed_notional'].includes(definition.sizing_mode)) {
+      setPersistenceMessage('Saved strategy contains invalid market, symbol, timeframe, or sizing settings. Nothing was loaded.')
+      return
+    }
+    const requiredNumbers = [definition.initial_capital, definition.risk_per_trade_pct, definition.fixed_notional, definition.max_position_pct, definition.strategy_parameters?.min_score]
+    if (requiredNumbers.some(value => value == null || !Number.isFinite(Number(value)) || Number(value) <= 0) ||
+        Number(definition.risk_per_trade_pct) > 100 || Number(definition.max_position_pct) > 100) {
+      setPersistenceMessage('Saved strategy contains invalid numeric settings. Nothing was loaded.')
+      return
+    }
+    const optionalNumbers = [definition.fee_rate, definition.slippage_bps, definition.spread_bps, definition.funding_rate]
+    if (optionalNumbers.some(value => value != null && !Number.isFinite(Number(value)))) {
+      setPersistenceMessage('Saved strategy contains invalid optional cost assumptions. Nothing was loaded.')
+      return
+    }
     setStrategy(saved.strategy_key)
-    if (definition.symbol) setSymbol(String(definition.symbol))
-    if (definition.market === 'SPOT' || definition.market === 'FUTURES') setMarket(definition.market)
-    if (definition.timeframe) setTimeframe(String(definition.timeframe))
-    if (definition.sizing_mode) setMode(String(definition.sizing_mode))
-    if (definition.initial_capital != null) setCapital(String(definition.initial_capital))
-    if (definition.risk_per_trade_pct != null) setRisk(String(definition.risk_per_trade_pct))
-    if (definition.fixed_notional != null) setNotional(String(definition.fixed_notional))
-    if (definition.max_position_pct != null) setMaxPosition(String(definition.max_position_pct))
-    if (definition.strategy_parameters?.min_score != null) setMinScore(String(definition.strategy_parameters.min_score))
-    if (definition.fee_rate != null) setFeeRate(String(definition.fee_rate))
-    if (definition.slippage_bps != null) setSlippage(String(definition.slippage_bps))
-    if (definition.spread_bps != null) setSpread(String(definition.spread_bps))
-    if (definition.funding_rate != null) setFunding(String(definition.funding_rate))
+    setSymbol(definition.symbol)
+    setMarket(definition.market)
+    setTimeframe(definition.timeframe)
+    setMode(definition.sizing_mode)
+    setCapital(String(definition.initial_capital))
+    setRisk(String(definition.risk_per_trade_pct))
+    setNotional(String(definition.fixed_notional))
+    setMaxPosition(String(definition.max_position_pct))
+    setMinScore(String(definition.strategy_parameters.min_score))
+    setFeeRate(definition.fee_rate == null ? '' : String(definition.fee_rate))
+    setSlippage(definition.slippage_bps == null ? '' : String(definition.slippage_bps))
+    setSpread(definition.spread_bps == null ? '' : String(definition.spread_bps))
+    setFunding(definition.funding_rate == null ? '' : String(definition.funding_rate))
     setPersistenceMessage('Saved strategy configuration loaded into the form.')
   }
   const loadChosenReport = async () => {
@@ -1388,6 +1419,10 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
       const report = await requestJson<any>(`/research/reports/${encodeURIComponent(chosenReportId)}`)
       if (!report) {
         setPersistenceMessage('Unable to open this report. Check the backend connection and try again.')
+        return
+      }
+      if (typeof report !== 'object' || report.report_id !== chosenReportId || !report.backtest_report || typeof report.backtest_report !== 'object' || Array.isArray(report.backtest_report)) {
+        setPersistenceMessage('The saved report response is invalid or incomplete. The report was not opened.')
         return
       }
       setLoadedReport(report)
