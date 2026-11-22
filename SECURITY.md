@@ -132,3 +132,20 @@ No response-time SLA or security certification is implied.
 ## Release notes
 
 This policy describes the intended current architecture and its known limitations. Review the actual release commit and deployment configuration before relying on any statement for a specific release.
+
+
+## Stage 3 hosted authentication hardening
+
+The private-preview login now requires a server-side scrypt password hash (`BLACKMARKET_WEB_PASSWORD_HASH`); plaintext `BLACKMARKET_WEB_PASSWORD` is no longer accepted by the updated login code. Password hashing uses Node's built-in scrypt with a random salt and fixed reviewed parameters. The session secret must contain at least 32 bytes.
+
+Hosted session cookies are signed, HttpOnly, SameSite=Strict, Secure in production, host-only, and expire after 30 minutes. Logout revokes the session in the current Node process and clears the cookie. Session revocation state is bounded and process-local; it is not a durable/shared revocation store. Rotating the session secret invalidates all outstanding sessions.
+
+Hosted login and proxy requests reject cross-origin state-changing requests. Login bodies are capped at 8 KiB; proxied mutation bodies are capped at 1 MiB; non-stream backend responses are capped at 2 MiB. Upstream requests have a 15-second timeout. Upstream 5xx response bodies are not forwarded to the browser. Rate-limit identity uses the nearest proxy-provided client address where available, and the in-memory limiter is bounded to avoid unbounded key growth.
+
+### Explicit hosted limitations
+
+- The website remains a **single shared-password private preview**, not multi-user authentication. It has no per-user identity, roles, or authorization ownership model.
+- Hosted paper-trading data is currently shared by the configured backend instance. User-owned portfolio, positions, trade history, settings, strategies, and workspaces are not isolated by account. Do not expose the hosted preview as a multi-user service or store multiple users' private data there.
+- Session revocation and rate limits are process-local. Multi-instance/serverless deployments need shared persistent session/revocation and rate-limit storage or a suitable upstream identity/gateway.
+- The hosted backend must use HTTPS, a high-entropy server-only API token, restrictive ingress, and durable protected storage. A public health endpoint reveals only service readiness, not authentication material.
+- Desktop local bearer-token and WebSocket authentication remain separate and unchanged by the website password/session implementation.
