@@ -197,7 +197,7 @@ CHALLENGES = [
         "trading_rules": "Spot-only, no leverage; use built-in strategies and disclose configuration.",
         "fees_and_slippage": {"fee_per_side_pct": 0.1, "slippage_per_side_pct": 0.05},
         "risk_limits": {"max_position_pct": 10, "max_drawdown_pct": 10},
-        "ranking": "Research completeness and rule adherence first; risk-adjusted metrics second.",
+        "ranking": "Research completeness and rule adherence first; risk-adjusted net return and risk metrics second; raw profit alone is not the ranking metric.",
     },
 ]
 
