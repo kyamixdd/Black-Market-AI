@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
-from ..assistant_intelligence import execute_tool, optional_provider_interpretation, select_tool, summarize_result, validate_market, validate_symbol
+from ...assistant_intelligence import execute_tool, optional_provider_interpretation, select_tool, summarize_result, validate_market, validate_symbol
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
