@@ -116,3 +116,20 @@ async def test_extreme_futures_gap_cannot_drive_simulated_account_below_zero():
     assert sim.futures_balance >= -1e-8
     assert sim.closed_trades[-1]["close_reason"] == "LIQUIDATION"
     assert sim.closed_trades[-1]["pnl"] >= -reserved_margin - position["fees_paid"] - 1e-6
+
+@pytest.mark.asyncio
+async def test_pending_limit_orders_cannot_overreserve_futures_margin():
+    sim = Simulator(EventBus())
+    sim.futures_balance = 100.0
+    sim.risk_manager.max_risk_pct = 10.0
+    sim.risk_manager.max_open_risk_pct = 20.0
+    sim.risk_manager.max_position_size_pct = 100.0
+    sim.risk_manager.max_asset_exposure_pct = 100.0
+
+    first = signal("PENDING1USDT", "FUTURES", "LONG", 100, 90, 1, "PENDING-1")
+    second = signal("PENDING2USDT", "FUTURES", "LONG", 100, 90, 1, "PENDING-2")
+    first_id = await sim.place_limit_order(first, quantity_override=0.9)
+    assert first_id is not None
+    second_id = await sim.place_limit_order(second, quantity_override=0.9)
+    assert second_id is None
+    assert len(sim.open_orders) == 1
