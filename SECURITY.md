@@ -125,7 +125,7 @@ If database corruption or unexpected behavior occurs:
 
 ## Reporting a vulnerability
 
-Please do not publish exploit details or secrets in a public issue. Use GitHub's private vulnerability reporting feature if it is enabled for this repository. Otherwise, contact the repository maintainer through a private channel listed on the maintainer's GitHub profile. Include the affected commit/version, impact, and a minimal reproduction, but do not include live credentials or private user data.
+Exploit details and secrets must not be included in public issues. Submit vulnerability reports through GitHub private vulnerability reporting when enabled. Otherwise, use a private contact channel listed in the repository maintainer's GitHub profile. Reports should include the affected commit/version, impact, and minimal reproduction. Live credentials and private user data must be excluded.
 
 No response-time SLA or security certification is implied.
 
