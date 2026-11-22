@@ -1,5 +1,5 @@
 // Portfolio panel component.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../../services/api';
 
 interface PortfolioData {
@@ -14,134 +14,132 @@ interface PortfolioData {
   total_return_pct: number;
 }
 
+const formatAmount = (value: number) =>
+  Number.isFinite(value)
+    ? value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : 'Unavailable';
+
+const formatSigned = (value: number) =>
+  Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(2)}` : 'Unavailable';
+
+const pnlClass = (value: number) =>
+  Number.isFinite(value) ? (value >= 0 ? 'text-green-400' : 'text-red-400') : 'text-muted';
+
 export const PortfolioPanel: React.FC = () => {
   const [data, setData] = useState<PortfolioData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestInFlight = useRef(false);
+  const mounted = useRef(true);
 
   const fetchData = async () => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
     try {
-      const response = await fetch('/api/portfolio/balance');
-      const data = await response.json();
-      setData(data);
+      // Use the shared authenticated API client. Relative fetch('/api/...') can
+      // target the frontend origin rather than the local backend in desktop.
+      const response = await api.getPortfolioBalance() as PortfolioData;
+      if (!response || typeof response !== 'object') {
+        throw new Error('Portfolio service returned an invalid response');
+      }
+      if (mounted.current) {
+        setData(response);
+        setError(null);
+      }
     } catch (e) {
-      setError('Failed to load portfolio');
+      if (mounted.current) {
+        setError(e instanceof Error ? e.message : 'Portfolio data unavailable');
+      }
     } finally {
-      setLoading(false);
+      requestInFlight.current = false;
+      if (mounted.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    mounted.current = true;
+    void fetchData();
+    const interval = setInterval(() => void fetchData(), 5000);
+    return () => {
+      mounted.current = false;
+      clearInterval(interval);
+    };
   }, []);
-
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USDT',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(value);
-  };
-
-  const formatPct = (value: number) => {
-    const color = value >= 0 ? 'text-green-400' : 'text-red-400';
-    const prefix = value >= 0 ? '+' : '';
-    return (
-      <span className={`font-mono ${value >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-        {prefix}{value.toFixed(2)}%
-      </span>
-    );
-  };
 
   if (loading) {
     return (
-      <div className="panel h-64 flex items-center justify-center">
-        <div className="spinner"></div>
+      <div className="panel h-64 flex items-center justify-center" role="status" aria-label="Loading portfolio">
+        <div className="spinner" />
       </div>
     );
   }
 
-  if (error) {
+  if (!data) {
     return (
-      <div className="panel h-64 flex items-center justify-center text-red-400">
-        {error}
+      <div className="panel h-64 flex flex-col items-center justify-center gap-3 p-4">
+        <div className="panel-header w-full">Portfolio</div>
+        <p className="text-sm text-red-400 text-center" role="alert">{error || 'Portfolio data unavailable'}</p>
+        <button type="button" className="btn-ghost text-sm" onClick={() => { setLoading(true); void fetchData(); }}>
+          Retry
+        </button>
       </div>
     );
   }
-
-  if (!data) return null;
 
   return (
-    <div className="panel h-full">
+    <div className="panel h-full min-w-0">
       <div className="panel-header">Portfolio</div>
-      <div className="p-4 space-y-4">
-        {/* Total Balance */}
-        <div className="metric-card">
+      <div className="p-3 sm:p-4 space-y-3">
+        {error && <p className="text-xs text-amber-400" role="status">Refresh failed: {error}. Showing last successful data.</p>}
+        <div className="metric-card min-w-0">
           <div className="metric-label">Total Equity</div>
-          <div className="metric-value text-2xl">${data.total_balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT</div>
-          <div className="flex items-center gap-2 mt-2">
-            <span className="metric-label text-sm">24h P&L:</span>
-            <span className={`font-mono ${data.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {data.total_pnl >= 0 ? '+' : ''}{data.total_pnl.toFixed(2)} USDT ({data.total_return_pct >= 0 ? '+' : ''}{data.total_return_pct.toFixed(2)}%)
+          <div className="metric-value text-xl sm:text-2xl tabular-nums break-words">${formatAmount(data.total_balance)} USDT</div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2 min-w-0">
+            <span className="metric-label text-sm">24h P&amp;L:</span>
+            <span className={`font-mono text-xs sm:text-sm tabular-nums ${pnlClass(data.total_pnl)}`}>
+              {formatSigned(data.total_pnl)} USDT ({formatSigned(data.total_return_pct)}%)
             </span>
           </div>
         </div>
 
-        {/* Spot & Futures Balances */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="metric-card">
-            <div className="flex items-center justify-between">
-              <span className="metric-label">Spot</span>
-              <span className="status-indicator">
-                <span className="status-dot healthy"></span>
-                <span>Active</span>
-              </span>
-            </div>
-            <div className="metric-value mt-2">${data.spot_balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT</div>
-            <div className="flex items-center justify-between mt-2 text-sm">
-              <span className="text-muted">P&L:</span>
-              <span className={`font-mono ${data.spot_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {data.spot_pnl >= 0 ? '+' : ''}{data.spot_pnl.toFixed(2)} USDT ({data.spot_return_pct >= 0 ? '+' : ''}{data.spot_return_pct.toFixed(2)}%)
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
+          <div className="metric-card min-w-0">
+            <div className="metric-label">Spot Balance</div>
+            <div className="metric-value mt-2 text-base sm:text-lg tabular-nums break-words">${formatAmount(data.spot_balance)} USDT</div>
+            <div className="flex flex-wrap items-center gap-x-1 mt-2 text-xs sm:text-sm">
+              <span className="text-muted">P&amp;L:</span>
+              <span className={`font-mono tabular-nums ${pnlClass(data.spot_pnl)}`}>
+                {formatSigned(data.spot_pnl)} ({formatSigned(data.spot_return_pct)}%)
               </span>
             </div>
           </div>
 
-          <div className="metric-card">
-            <div className="flex items-center justify-between">
-              <span className="metric-label">Futures</span>
-              <span className="status-indicator">
-                <span className="status-dot healthy"></span>
-                <span>Active</span>
-              </span>
-            </div>
-            <div className="metric-value mt-2">${data.futures_balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT</div>
-            <div className="flex items-center justify-between mt-2 text-sm">
-              <span className="text-muted">P&L:</span>
-              <span className={`font-mono ${data.futures_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {data.futures_pnl >= 0 ? '+' : ''}{data.futures_pnl.toFixed(2)} USDT ({data.futures_return_pct >= 0 ? '+' : ''}{data.futures_return_pct.toFixed(2)}%)
+          <div className="metric-card min-w-0">
+            <div className="metric-label">Futures Balance</div>
+            <div className="metric-value mt-2 text-base sm:text-lg tabular-nums break-words">${formatAmount(data.futures_balance)} USDT</div>
+            <div className="flex flex-wrap items-center gap-x-1 mt-2 text-xs sm:text-sm">
+              <span className="text-muted">P&amp;L:</span>
+              <span className={`font-mono tabular-nums ${pnlClass(data.futures_pnl)}`}>
+                {formatSigned(data.futures_pnl)} ({formatSigned(data.futures_return_pct)}%)
               </span>
             </div>
           </div>
         </div>
 
-        {/* Quick Stats */}
-        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-700">
-          <div className="text-center">
-            <div className="text-xs text-muted">Total P&L</div>
-            <div className={`font-mono ${data.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {data.total_pnl >= 0 ? '+' : ''}{data.total_pnl.toFixed(2)} USDT
+        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-gray-700 min-w-0">
+          <div className="text-center min-w-0">
+            <div className="text-xs text-muted">Total P&amp;L</div>
+            <div className={`font-mono text-xs sm:text-sm tabular-nums break-words ${pnlClass(data.total_pnl)}`}>
+              {formatSigned(data.total_pnl)} USDT
             </div>
           </div>
-          <div className="text-center border-x border-gray-700">
+          <div className="text-center border-x border-gray-700 min-w-0">
             <div className="text-xs text-muted">Win Rate</div>
-            <div className="font-mono text-yellow-400">—</div>
+            <div className="font-mono text-muted">Unavailable</div>
           </div>
-          <div className="text-center">
+          <div className="text-center min-w-0">
             <div className="text-xs text-muted">Max DD</div>
-            <div className="font-mono text-red-400">—</div>
+            <div className="font-mono text-muted">Unavailable</div>
           </div>
         </div>
       </div>
