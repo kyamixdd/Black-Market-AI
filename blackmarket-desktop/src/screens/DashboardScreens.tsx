@@ -1110,6 +1110,15 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
     finally { setBusy(false) }
   }
   const metrics = result?.metrics
+  const curve = result?.equity_curve ?? []
+  const curveValues = curve.map((point: { equity: number }) => point.equity).filter((value: number) => Number.isFinite(value))
+  const curveMin = curveValues.length ? Math.min(...curveValues) : 0
+  const curveMax = curveValues.length ? Math.max(...curveValues) : 1
+  const curvePoints = curve.map((point: { equity: number }, index: number) => {
+    const x = 8 + (index / Math.max(1, curve.length - 1)) * 584
+    const y = 8 + ((curveMax - point.equity) / Math.max(1e-9, curveMax - curveMin)) * 164
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
   return (
     <div className="workspace-content strategy-lab">
       <ScreenHeader title="Strategy Lab" description="Historical research · simulated execution · paper-trading compatible" />
@@ -1150,9 +1159,13 @@ function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRu
             ['Trades', String(metrics.trade_count ?? 0)],
             ['Exposure', pct(metrics.exposure_pct)],
             ['Buy & hold', metrics.benchmark_buy_hold_return_pct == null ? '—' : pct(metrics.benchmark_buy_hold_return_pct)],
+            ['Average winner', money(num(metrics.average_winning_trade))],
+            ['Average loser', money(num(metrics.average_losing_trade))],
+            ['Average reward / risk', metrics.average_reward_risk == null ? '—' : `${num(metrics.average_reward_risk)?.toFixed(2) ?? '—'}R`],
           ].map(([label,value]) => <SummaryCard key={label} label={label} value={String(value)} />)}
         </div>
         <p className="workspace-note">Execution assumptions: next-bar open entry, conservative stop-first intrabar exit, taker fees, spread and slippage. Funding is omitted unless a rate is explicitly supplied. Research results do not guarantee future performance.</p>
+        <section className="workspace-panel"><h2>Equity curve</h2><svg viewBox="0 0 600 180" role="img" aria-label="Backtest marked-to-market equity curve" className="strategy-equity-chart"><polyline points={curvePoints} fill="none" stroke="currentColor" strokeWidth="2" /></svg><p className="workspace-note">Costs · fees {money(num(metrics.costs?.fees))} · spread {money(num(metrics.costs?.spread))} · slippage {money(num(metrics.costs?.slippage))} · funding {money(num(metrics.costs?.funding))}</p></section>
         <Table>
           <TableHead labels={['Trade','Side','Entry','Exit','Net P&L','Exit reason']} />
           <tbody>{(result.trades ?? []).map((trade: any) => <tr key={trade.trade_id} onClick={() => setSelectedTrade(trade)}><td>{trade.trade_id}</td><td>{trade.side}</td><td>{price(num(trade.entry_fill))}</td><td>{price(num(trade.exit_fill))}</td><td>{money(num(trade.net_pnl))}</td><td>{trade.close_reason}</td></tr>)}</tbody>
