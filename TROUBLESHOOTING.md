@@ -1,94 +1,88 @@
-# BlackMarket AI — Troubleshooting
+# Troubleshooting
 
-Last reviewed: 22 November 2026
+## Runtime modes
 
-## Choose the correct run mode
+| Mode | Backend behavior |
+|---|---|
+| Tauri desktop | Desktop supervisor starts and manages the local backend |
+| Vite browser preview | Frontend only; does not supervise the Python backend |
+| Next.js website | Private-preview session and remote-backend configuration required |
+| Python/terminal | Local development and legacy CLI path |
 
-- **Tauri desktop:** primary product path; the desktop supervisor starts and manages the local backend.
-- **Vite browser preview:** frontend-only; it does not supervise the Python backend.
-- **Next.js website:** private-preview path; requires server-side session and remote-backend configuration.
-- **Python/terminal mode:** legacy/local development entry point.
+Frontend availability does not indicate backend readiness or current market-data availability.
 
-A successful frontend page load does not prove the backend or market data is ready.
+## Desktop startup / backend unavailable
 
-## Desktop startup or backend unavailable
+1. Check the startup readiness state and application logs.
+2. Verify access to the per-user application-data directory.
+3. Check whether another instance is using `127.0.0.1:8765`.
+4. Verify bundled backend resources are present in the installed package.
+5. Record the application version and backend log if startup fails.
 
-1. Launch the desktop app normally and wait for the readiness checks.
-2. Use the startup screen's diagnostic/log location.
-3. Confirm the app has permission to use its per-user application-data directory.
-4. Check that another BlackMarket AI instance is not already using port `127.0.0.1:8765`.
-5. Confirm the bundled backend resources exist in the installed application.
-6. If startup still fails, preserve the backend log and exact app version before reinstalling.
+The current Windows installer pipeline packages a backend executable. Older development builds may depend on a configured Python environment.
 
-The current Windows installer pipeline packages a backend executable. Older development builds may require a configured Python environment; follow the instructions for the exact build rather than assuming all releases have identical packaging.
+## API authentication
 
-## API authentication errors
+- `401 Unauthorized`: bearer token is missing or invalid.
+- `403 Remote API access is disabled`: request originated outside the permitted local interface while remote mode is disabled.
 
-- A `401 Unauthorized` response means the local API bearer token is missing or invalid.
-- A `403 Remote API access is disabled` response means the request is not loopback and remote mode is off.
-- Do not paste or send the bearer token in screenshots, issues, or logs.
-- Do not enable remote mode merely to fix a local desktop connection.
+Do not include bearer tokens in logs, screenshots or issue reports. Remote mode should not be enabled to resolve a local desktop authentication problem.
 
-## Market data missing, delayed, or stale
+## Missing or stale market data
 
-- Check the backend/database/WebSocket readiness indicators.
-- Check internet connectivity and whether Binance public endpoints are reachable.
-- Check the selected market (Spot/Futures), symbol, and timeframe.
-- Historical analytics may show unavailable until sufficient candles have been collected.
-- Binance rate limits or service interruptions can delay updates. Wait for retries and inspect logs.
-- Do not treat stale snapshots or missing metrics as valid live values.
+- Check backend, database and WebSocket readiness.
+- Verify internet connectivity and Binance public endpoint availability.
+- Confirm market, symbol and timeframe selection.
+- Analytics requiring historical candles may remain unavailable until sufficient data is collected.
+- Exchange rate limits and service interruptions can delay updates.
+- Stale or incomplete data must not be treated as a current signal.
 
 ## Website private-preview connection
 
-The website uses a server-side proxy. Verify the deployment has the correct server-only values for backend URL, session secret, preview password, and backend API token. Confirm the backend has remote API mode enabled only when intended, TLS is configured, the bearer token matches, and the host's ingress permits the website service.
+Verify server-side configuration for backend URL, session secret, preview password and backend API token. Confirm remote API mode is enabled only when required, TLS is active, tokens match, and ingress permits the website service.
 
-Never put the backend token in client-side JavaScript or public build variables. The website's single-password gate is for private preview, not a multi-user account system.
+Backend credentials must not be exposed in client-side code or public build variables. The current website authentication model is a single-password private-preview gate.
 
-## Paper orders rejected
+## Paper order rejection
 
-Read the backend rejection reason. Common causes include invalid symbol/market/side, invalid price or quantity, insufficient simulated balance, position count/exposure limits, leverage limits, stale market data, or daily loss protection.
+Inspect the API rejection reason. Common causes include invalid symbol/market/side, invalid price or quantity, insufficient simulated balance, exposure/position limits, leverage limits, stale market data or daily-loss protection.
 
-Use smaller valid paper quantities and verify the active risk settings. Do not weaken risk controls simply to make a test order pass.
+Order rejections caused by risk limits are expected control behavior.
 
-## Database locked, corrupted, or recovery failed
+## Database lock, corruption or recovery failure
 
-1. Close the app normally and ensure its managed backend stopped.
+1. Close the application normally and confirm backend shutdown.
 2. Preserve the database and SQLite sidecar files.
-3. Check the log and configured database path.
-4. Verify a backup on a copy using `PRAGMA integrity_check;`.
-5. Restore only after the copy passes integrity validation.
+3. Identify the configured database path and inspect logs.
+4. Validate a backup copy using `PRAGMA integrity_check;`.
+5. Restore only from a verified backup.
 
-Do not delete the database, drop tables, or force-kill all Python processes as a routine fix. A forced kill can affect unrelated applications and may leave data in an uncertain state.
+Deleting the database, dropping tables or terminating unrelated Python processes is not a routine recovery procedure.
 
-## Windows installer or update issues
+## Installer or update issues
 
-- Confirm the installer is from the intended release and check its version/hash.
-- Install on a supported Windows version with required WebView2/system components.
-- If startup fails, collect the app version and backend log before uninstalling.
-- Back up user data before reinstalling or changing versions.
-- After uninstall, verify the app process/backend has stopped. User data may intentionally remain to protect paper-trading history.
+- Verify installer version and artifact hash.
+- Confirm supported Windows version and required WebView2/system components.
+- Preserve application logs and version information before reinstalling.
+- Back up user data before upgrade/reinstall.
+- Verify backend shutdown after uninstall. User data may remain intentionally to preserve trading history.
 
-## Python/terminal development issues
+## Python/terminal environment
 
-For the Python CLI path, use Python 3.10+, activate the intended virtual environment, and install the requirements for the backend. Run tests with:
+Use Python 3.10+ and the virtual environment associated with the installed backend dependencies.
 
 ```bash
 python -m pytest -q -m "not live"
 ```
 
-Do not use a different interpreter than the one where dependencies were installed.
+The command must run under the intended Python interpreter.
 
-## Learning/model promotion issues
+## Model training or promotion blocked
 
-Model training or promotion may be blocked when the dataset is too small, timestamps are invalid, chronological/purged validation is insufficient, confidence calibration lacks samples, or economic/champion evidence is incomplete. This fail-closed behavior is intentional. Do not reduce promotion thresholds to bypass release or safety checks.
+Promotion may be rejected because of insufficient samples, invalid timestamps, inadequate chronological/purged validation, insufficient calibration samples, or incomplete economic/champion evidence. These conditions are validation gates; reducing thresholds to bypass them invalidates the evidence.
 
-## Reporting a bug
+## Bug report contents
 
-Include:
-- app version and commit/branch,
-- Windows/OS version and run mode,
-- relevant redacted logs,
-- exact steps and expected/actual behavior,
-- whether the issue is reproducible.
+Include application version/commit, OS version, runtime mode, redacted logs, reproduction steps, expected behavior and actual behavior.
 
-Remove bearer tokens, website secrets, Telegram tokens, private database content, and personal paths before sharing.
+Exclude bearer tokens, website secrets, Telegram tokens, private database contents and personal filesystem paths.
