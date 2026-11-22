@@ -1108,10 +1108,18 @@ function CommunityLibraryScreen() {
   const load = async () => {
     const params = new URLSearchParams({ q: query, sort, limit: '50' })
     if (strategyKey) params.set('strategy_key', strategyKey)
-    if (assetFilter) params.set('asset', assetFilter.toUpperCase())
-    if (timeframeFilter) params.set('timeframe', timeframeFilter)
-    const result = await requestJson<{ strategies: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
-    if (result) setItems(result.strategies ?? [])
+    if (assetFilter) params.set('asset', assetFilter.trim().toUpperCase())
+    if (timeframeFilter) params.set('timeframe', timeframeFilter.trim())
+    try {
+      const result = await requestJson<{ strategies?: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
+      if (!result || !Array.isArray(result.strategies)) {
+        setNotice('Community library returned an invalid response. Please refresh and try again.')
+        return
+      }
+      setItems(result.strategies.filter(item => item && typeof item.public_id === 'string' && typeof item.name === 'string'))
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to load community strategies.')
+    }
   }
   useEffect(() => { void load() }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
 
@@ -1120,13 +1128,32 @@ function CommunityLibraryScreen() {
     setBusy(true)
     setNotice('')
     try {
+      const parsedRules: unknown = JSON.parse(rules)
+      const parsedRisk: unknown = JSON.parse(risk)
+      const parsedReport: unknown = JSON.parse(report)
+      const supportedAssets = assets.split(',').map(value => value.trim().toUpperCase()).filter(Boolean)
+      const supportedTimeframes = timeframes.split(',').map(value => value.trim()).filter(Boolean)
+      const validTimeframes = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d','1w']
+      if (name.trim().length < 2 || name.trim().length > 120) throw new Error('Strategy name must be between 2 and 120 characters.')
+      if (description.length > 2000) throw new Error('Description must be 2,000 characters or fewer.')
+      if (!supportedAssets.length || supportedAssets.some(value => !/^[A-Z0-9]{2,20}$/.test(value))) throw new Error('Enter valid comma-separated market symbols.')
+      if (!supportedTimeframes.length || supportedTimeframes.some(value => !validTimeframes.includes(value))) throw new Error('Enter supported comma-separated timeframes.')
+      if (new Set(supportedAssets).size !== supportedAssets.length || new Set(supportedTimeframes).size !== supportedTimeframes.length) throw new Error('Remove duplicate assets or timeframes.')
+      if (!parsedRules || typeof parsedRules !== 'object' || Array.isArray(parsedRules)) throw new Error('Rules JSON must be an object.')
+      if (!parsedRisk || typeof parsedRisk !== 'object' || Array.isArray(parsedRisk)) throw new Error('Risk configuration JSON must be an object.')
+      if (!parsedReport || typeof parsedReport !== 'object' || Array.isArray(parsedReport)) throw new Error('Backtest report JSON must be an object.')
+      const riskConfig = parsedRisk as Record<string, unknown>
+      for (const field of ['risk_per_trade_pct','max_position_pct']) {
+        const value = Number(riskConfig[field])
+        if (!Number.isFinite(value) || value <= 0 || value > 100) throw new Error(`${field} must be greater than 0 and at most 100.`)
+      }
       const payload = {
-        name, description, strategy_key: key,
-        supported_assets: assets.split(',').map(value => value.trim()).filter(Boolean),
-        supported_timeframes: timeframes.split(',').map(value => value.trim()).filter(Boolean),
-        rules: JSON.parse(rules), risk_configuration: JSON.parse(risk),
+        name: name.trim(), description: description.trim(), strategy_key: key,
+        supported_assets: supportedAssets,
+        supported_timeframes: supportedTimeframes,
+        rules: parsedRules, risk_configuration: parsedRisk,
         known_limitations: limitations.split('\n').map(value => value.trim()).filter(Boolean),
-        backtest_report: JSON.parse(report),
+        backtest_report: parsedReport,
         ...(sourceReportId.trim() ? { source_report_id: sourceReportId.trim() } : {}),
       }
       await mutateJson(editingId ? `/community/strategies/${editingId}` : '/community/strategies', editingId ? 'PUT' : 'POST', payload)
@@ -1142,8 +1169,16 @@ function CommunityLibraryScreen() {
   }
 
   const openDetails = async (item: CommunityStrategy) => {
-    const detail = await requestJson<CommunityStrategy>(`/community/strategies/${item.public_id}`)
-    if (detail) setSelected(detail)
+    try {
+      const detail = await requestJson<CommunityStrategy>(`/community/strategies/${item.public_id}`)
+      if (!detail || detail.public_id !== item.public_id || typeof detail.name !== 'string' || !detail.backtest_report || typeof detail.backtest_report !== 'object') {
+        setNotice('Strategy details are incomplete or invalid. The details panel was not opened.')
+        return
+      }
+      setSelected(detail)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to load strategy details.')
+    }
   }
 
   const editStrategy = (item: CommunityStrategy) => {
