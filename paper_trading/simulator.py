@@ -836,6 +836,27 @@ class Simulator:
         if qty <= 0:
             return None
 
+        # Pending limit orders reserve available cash/margin as well as risk and slots.
+        pending_collateral = 0.0
+        for pending in self.open_orders.values():
+            if pending.get("status") != "OPEN" or pending.get("market") != market:
+                continue
+            pending_notional = float(pending["entry_price"]) * float(pending["amount"])
+            pending_leverage = max(float(pending.get("leverage", 1.0)), 1.0)
+            pending_fee = self.fee_calc.calculate(
+                market, pending["side"], float(pending["amount"]),
+                float(pending["entry_price"]), pending_leverage
+            )
+            pending_collateral += (
+                pending_notional if market == "SPOT" else pending_notional / pending_leverage
+            ) + pending_fee
+        notional = float(signal["entry"]) * qty
+        fee = self.fee_calc.calculate(market, signal["direction"], qty, float(signal["entry"]), leverage)
+        required_collateral = (notional if market == "SPOT" else notional / max(leverage, 1.0)) + fee
+        if pending_collateral + required_collateral > balance + 1e-9:
+            logger.warning("Limit order %s rejected: pending orders exceed available balance", signal["signal_id"])
+            return None
+
         # Limit orders don't fill immediately - they go to open_orders
         order_id = f"ORD-{uuid.uuid4().hex[:8].upper()}"
         order = {
