@@ -58,6 +58,7 @@ def _fake_orchestrator():
     risk = SimpleNamespace(
         max_risk_pct=0.5, max_daily_loss_pct=2.0, max_open_risk_pct=3.0,
         max_leverage=3.0, max_spot_positions=5, max_futures_positions=5,
+        max_position_size_pct=50.0, max_asset_exposure_pct=30.0,
     )
     simulator = SimpleNamespace(
         risk_manager=risk, initial_spot_balance=500.0, initial_futures_balance=500.0,
@@ -84,12 +85,18 @@ def test_apply_runtime_settings_updates_live_components(monkeypatch):
     Orchestrator.apply_runtime_settings(orchestrator, {
         "risk_per_trade_pct": 0.75,
         "risk_max_total_open_pct": 4.0,
+        "risk_max_position_size_pct": 40.0,
+        "risk_max_asset_exposure_pct": 25.0,
         "timeframes": ["5m", "15m", "1h"],
         "spot_enabled": True,
         "futures_enabled": False,
         "scan_all_eligible_symbols": True,
     })
     assert orchestrator.simulator.risk_manager.max_risk_pct == 0.75
+    assert orchestrator.simulator.risk_manager.max_position_size_pct == 40.0
+    assert orchestrator.simulator.risk_manager.max_asset_exposure_pct == 25.0
+    assert saved["risk_max_position_size_pct"] == 40.0
+    assert saved["risk_max_asset_exposure_pct"] == 25.0
     assert orchestrator.scanner.analysis_timeframes == ("5m", "15m", "1h")
     assert orchestrator.scanner.analysis_symbol_limit == 50
     assert orchestrator.scanner.enabled_markets == {"SPOT"}
