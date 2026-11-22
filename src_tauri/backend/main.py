@@ -265,6 +265,7 @@ for router in (
     assistant.router,
     backup.router,
     research.router,
+    community.router,
 ):
     app.include_router(router, prefix="/api")
 
