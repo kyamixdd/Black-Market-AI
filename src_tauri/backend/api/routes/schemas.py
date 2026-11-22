@@ -412,6 +412,8 @@ class RiskMetricsResponse(BaseModel):
     risk_per_trade_pct: float
     max_daily_loss_pct: float
     max_total_open_pct: float
+    max_position_size_pct: float
+    max_asset_exposure_pct: float
     unmeasured_positions: int = 0
 
 
@@ -567,6 +569,8 @@ class SettingsRequest(BaseModel):
     risk_max_daily_loss_pct: float | None = Field(default=None, gt=0, le=25, allow_inf_nan=False)
     risk_max_total_open_pct: float | None = Field(default=None, gt=0, le=50, allow_inf_nan=False)
     risk_max_leverage: float | None = Field(default=None, ge=1, le=125, allow_inf_nan=False)
+    risk_max_position_size_pct: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
+    risk_max_asset_exposure_pct: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
     max_spot_positions: int | None = Field(default=None, ge=1, le=100)
     max_futures_positions: int | None = Field(default=None, ge=1, le=100)
     telegram_enabled: bool | None = None
@@ -603,6 +607,8 @@ class SettingsResponse(BaseModel):
     risk_max_daily_loss_pct: float
     risk_max_total_open_pct: float
     risk_max_leverage: float
+    risk_max_position_size_pct: float
+    risk_max_asset_exposure_pct: float
     max_spot_positions: int
     max_futures_positions: int
     telegram_enabled: bool
