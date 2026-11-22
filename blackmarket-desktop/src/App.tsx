@@ -914,7 +914,7 @@ function App() {
         timeframe,
       })
       const answer = payload?.answer
-        ? `${payload.answer}${payload.sources?.length ? `\\n\\nSource: ${payload.sources.join(', ')}` : ''}${payload.disclaimer ? `\\n\\n${payload.disclaimer}` : ''}`
+        ? `${payload.answer}${payload.sources?.length ? `\n\nSource: ${payload.sources.join(', ')}` : ''}${payload.disclaimer ? `\n\n${payload.disclaimer}` : ''}`
         : 'The local assistant endpoint returned no answer. Check the backend connection and try again.'
       setMessages((current) => current.map((message) =>
         message.id === assistantId ? { ...message, text: answer } : message,
