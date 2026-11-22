@@ -1488,3 +1488,27 @@ async def test_order_id_makes_execution_idempotent_and_blocks_reexecution_after_
     assert simulator.spot_positions == {}
     assert len(simulator.closed_trades) == 1
     assert simulator.spot_balance == pytest.approx(balance_after_close)
+
+
+@pytest.mark.asyncio
+async def test_order_cancellation_emits_trade_cancelled_event():
+    bus = EventBus()
+    simulator = Simulator(bus)
+    signal = {
+        "signal_id": "SIG-CANCEL-EVENT",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    await simulator.cancel_limit_order(order_id)
+
+    events = []
+    while bus.pending:
+        events.append(bus._queue.get_nowait())
+    assert any(event.event_type == "TRADE_CANCELLED" for event in events)
