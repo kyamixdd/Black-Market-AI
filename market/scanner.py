@@ -200,9 +200,12 @@ class Scanner:
                     symbol = ticker.get("symbol")
                     if not self.registry.is_eligible(symbol, market):
                         continue
-                    price = float(ticker.get("lastPrice", 0))
-                    volume = float(ticker.get("quoteVolume", 0))
-                    change = float(ticker.get("priceChangePercent", 0))
+                    try:
+                        price = float(ticker.get("lastPrice", 0))
+                        volume = float(ticker.get("quoteVolume", 0))
+                        change = float(ticker.get("priceChangePercent", 0))
+                    except (TypeError, ValueError, OverflowError):
+                        continue
                     if not valid_price(price) or not valid_volume(volume) or not math.isfinite(change):
                         continue
                     self.cache.update_ticker(market, symbol, price, volume, change, source="REST")
