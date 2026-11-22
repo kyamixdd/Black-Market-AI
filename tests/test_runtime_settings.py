@@ -118,6 +118,13 @@ def test_settings_persistence_failure_does_not_mutate_live_engine(monkeypatch):
     assert orchestrator.scanner.analysis_timeframes == ("15m", "1h")
 
 
+def test_settings_reject_invalid_exposure_caps():
+    with pytest.raises(ValidationError):
+        SettingsRequest(risk_max_position_size_pct=0)
+    with pytest.raises(ValidationError):
+        SettingsRequest(risk_max_asset_exposure_pct=101)
+
+
 def test_settings_reject_non_finite_values():
     with pytest.raises(ValidationError):
         SettingsRequest(risk_per_trade_pct=float("nan"))
