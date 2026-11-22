@@ -11,6 +11,7 @@ export type ScreenName =
   | 'Trade History'
   | 'Intelligence'
   | 'Learning'
+  | 'Strategy Lab'
   | 'Risk Management'
   | 'Activity'
   | 'Settings'
@@ -324,6 +325,7 @@ type Props = {
   onCancelOrder: (orderId: string) => Promise<void>
   onManualTrade: (payload: { symbol: string; market: 'SPOT' | 'FUTURES'; side: 'BUY' | 'SELL' | 'LONG' | 'SHORT'; order_type: 'MARKET' | 'LIMIT'; quantity: number; price?: number; stop_loss: number; take_profit?: number; leverage: number }) => Promise<void>
   onSettingsSave: (settings: Record<string, unknown>) => Promise<void>
+  onStrategyLabRun: (payload: Record<string, unknown>) => Promise<any>
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -1036,9 +1038,91 @@ export function DashboardScreen(props: Props) {
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
+      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
       {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
     </section>
+  )
+}
+
+
+function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
+  const [strategy, setStrategy] = useState('momentum')
+  const [symbol, setSymbol] = useState('BTCUSDT')
+  const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
+  const [timeframe, setTimeframe] = useState('1h')
+  const [start, setStart] = useState('2026-01-01')
+  const [end, setEnd] = useState('2026-11-01')
+  const [capital, setCapital] = useState('1000')
+  const [risk, setRisk] = useState('1')
+  const [mode, setMode] = useState('risk_pct')
+  const [notional, setNotional] = useState('100')
+  const [maxPosition, setMaxPosition] = useState('50')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<any>(null)
+  const [selectedTrade, setSelectedTrade] = useState<any>(null)
+  const run = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
+    try {
+      const data = await onRun({
+        strategy, symbol: symbol.toUpperCase(), market, timeframe,
+        start_date: new Date(start + 'T00:00:00Z').toISOString(),
+        end_date: new Date(end + 'T23:59:59Z').toISOString(),
+        initial_capital: Number(capital), sizing_mode: mode,
+        risk_per_trade_pct: Number(risk), fixed_notional: Number(notional),
+        max_position_pct: Number(maxPosition),
+      })
+      setResult(data)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  const metrics = result?.metrics
+  return (
+    <div className="workspace-content strategy-lab">
+      <ScreenHeader title="Strategy Lab" subtitle="Historical research · simulated execution · paper-trading compatible" />
+      <form className="workspace-form" onSubmit={run}>
+        <div className="workspace-form-grid">
+          <label>Strategy<select value={strategy} onChange={e => setStrategy(e.target.value)}>{['momentum','breakout','trend_following','mean_reversion','reversal'].map(v => <option key={v}>{v}</option>)}</select></label>
+          <label>Asset<input value={symbol} onChange={e => setSymbol(e.target.value)} maxLength={20} required /></label>
+          <label>Market<select value={market} onChange={e => setMarket(e.target.value as 'SPOT'|'FUTURES')}><option>SPOT</option><option>FUTURES</option></select></label>
+          <label>Timeframe<select value={timeframe} onChange={e => setTimeframe(e.target.value)}>{['1m','3m','5m','15m','30m','1h','4h','1d','1w'].map(v => <option key={v}>{v}</option>)}</select></label>
+          <label>Start date<input type="date" value={start} onChange={e => setStart(e.target.value)} required /></label>
+          <label>End date<input type="date" value={end} onChange={e => setEnd(e.target.value)} required /></label>
+          <label>Starting capital<input type="number" min="1" step="any" value={capital} onChange={e => setCapital(e.target.value)} required /></label>
+          <label>Position sizing<select value={mode} onChange={e => setMode(e.target.value)}><option value="risk_pct">Risk % per trade</option><option value="fixed_notional">Fixed notional</option></select></label>
+          <label>Risk per trade (%)<input type="number" min="0.01" max="100" step="any" value={risk} onChange={e => setRisk(e.target.value} /></label>
+          <label>Fixed notional<input type="number" min="0.01" step="any" value={notional} onChange={e => setNotional(e.target.value)} /></label>
+          <label>Max position (% equity)<input type="number" min="0.01" max="100" step="any" value={maxPosition} onChange={e => setMaxPosition(e.target.value)} /></label>
+        </div>
+        <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Running backtest…' : 'Run historical backtest'}</button>
+      </form>
+      {error && <div role="alert" className="workspace-error">{error}</div>}
+      {result?.status === 'insufficient_data' && <EmptyState title="Insufficient historical candles" description={`Available: ${result.available_candles}; required: ${result.required_candles}. Try a wider range or another timeframe.`} />}
+      {metrics && <>
+        <div className="workspace-summary-grid">
+          {[
+            ['Net return', metrics.net_return_pct == null ? '—' : pct(metrics.net_return_pct)],
+            ['Gross return', metrics.gross_return_pct == null ? '—' : pct(metrics.gross_return_pct)],
+            ['Max drawdown', pct(metrics.max_drawdown_pct)],
+            ['Profit factor', metrics.profit_factor ?? '—'],
+            ['Win rate', pct(metrics.win_rate_pct)],
+            ['Sharpe', metrics.sharpe_ratio == null ? '—' : num(metrics.sharpe_ratio)?.toFixed(2) ?? '—'],
+            ['Trades', String(metrics.trade_count ?? 0)],
+            ['Exposure', pct(metrics.exposure_pct)],
+            ['Buy & hold', metrics.benchmark_buy_hold_return_pct == null ? '—' : pct(metrics.benchmark_buy_hold_return_pct)],
+          ].map(([label,value]) => <SummaryCard key={label} label={label} value={String(value)} />)}
+        </div>
+        <p className="workspace-note">Execution assumptions: next-bar open entry, conservative stop-first intrabar exit, taker fees, spread and slippage. Funding is omitted unless a rate is explicitly supplied. Research results do not guarantee future performance.</p>
+        <Table>
+          <TableHead columns={['Trade','Side','Entry','Exit','Net P&L','Exit reason']} />
+          <tbody>{(result.trades ?? []).map((trade: any) => <tr key={trade.trade_id} onClick={() => setSelectedTrade(trade)}><td>{trade.trade_id}</td><td>{trade.side}</td><td>{price(num(trade.entry_fill))}</td><td>{price(num(trade.exit_fill))}</td><td>{money(num(trade.net_pnl))}</td><td>{trade.close_reason}</td></tr>)}</tbody>
+        </Table>
+        {selectedTrade && <DetailCard label="Selected trade details" value={JSON.stringify(selectedTrade, null, 2)} />}
+        <details><summary>Equity curve data ({result.equity_curve?.length ?? 0} points)</summary><pre>{JSON.stringify(result.equity_curve, null, 2)}</pre></details>
+      </>}
+    </div>
   )
 }
