@@ -278,7 +278,27 @@ class Simulator:
             return await self._execute_signal_locked(signal, quantity_override)
 
     async def _execute_signal_locked(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
-        """Execute a signal while holding the account allocation lock."""
+        """Execute a signal while holding the account allocation lock.
+
+        An order ID is the simulator's idempotency key. If recovery or a retry
+        submits the same order again, return its existing open position and
+        refuse to execute an already completed order a second time.
+        """
+        order_id = signal.get("order_id")
+        if order_id:
+            existing_position = next(
+                (
+                    position for position in (*self.spot_positions.values(), *self.futures_positions.values())
+                    if position.get("order_id") == order_id and position.get("status") == "OPEN"
+                ),
+                None,
+            )
+            if existing_position is not None:
+                return existing_position["position_id"]
+            if any(trade.get("order_id") == order_id for trade in self.closed_trades):
+                logger.warning("Order %s has already executed; duplicate execution blocked", order_id)
+                return None
+
         ok, reason = self.validate_new_position(signal, quantity_override)
         if not ok:
             logger.warning("Signal %s risk check failed: %s", signal["signal_id"], reason)
