@@ -198,6 +198,8 @@ async def request_observability(request: Request, call_next):
         request_id = uuid.uuid4().hex
     request.state.request_id = request_id
     started = time.perf_counter()
+    route = request.scope.get("route")
+    safe_path = getattr(route, "path", None) or ("/api/unmatched" if request.url.path.startswith("/api") else request.url.path)
     status_code = 500
     try:
         response = await call_next(request)
@@ -208,7 +210,7 @@ async def request_observability(request: Request, call_next):
         log_event(
             logger, logging.ERROR, "api_request_failed",
             request_id=request_id, method=request.method,
-            path=request.url.path, status_code=500,
+            path=safe_path, status_code=500,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
         )
         raise
@@ -217,7 +219,7 @@ async def request_observability(request: Request, call_next):
             logger, logging.INFO if status_code < 500 else logging.WARNING,
             "api_request",
             request_id=request_id, method=request.method,
-            path=request.url.path, status_code=status_code,
+            path=safe_path, status_code=status_code,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
         )
 
