@@ -15,7 +15,7 @@ from core.event_bus import EventBus
 from core.event_models import EventType
 from database.repositories import Repository
 from market.candle_manager import CandleManager
-from market.analytics import breadth_summary, historical_volatility, volume_comparison
+from market.analytics import breadth_summary, historical_volatility, volume_comparison, price_change, return_correlation
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +186,86 @@ class OrchestratorBridge:
                 limit=max(500, limit),
             )
         return self.candles.get_series(market, symbol, timeframe, limit=limit)
+
+    async def get_symbol_analytics(self, symbol: str, market: str, timeframe: str = "1h") -> dict:
+        """Return interval changes and indicators with explicit candle requirements."""
+        candles = await self.get_candles(symbol, market, timeframe, limit=200)
+        closes, volumes = [], []
+        highs, lows = [], []
+        now_ms = int(time.time() * 1000)
+        for row in candles:
+            try:
+                if int(row["close_time"]) >= now_ms:
+                    continue
+                close, volume = float(row["close"]), float(row["volume"])
+                high, low = float(row["high"]), float(row["low"])
+                if not all(math.isfinite(value) for value in (close, volume, high, low)) or min(close, high, low) <= 0 or volume < 0:
+                    continue
+                closes.append(close); volumes.append(volume); highs.append(high); lows.append(low)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+        changes = {
+            "1h": price_change(closes, 1),
+            "24h": price_change(closes, 24),
+            "7d": price_change(closes, 168),
+        }
+        vol = historical_volatility(closes, 24)
+        volume_stats = volume_comparison(volumes, 20)
+        atr_pct = None
+        if len(closes) >= 15:
+            tr = [max(highs[index] - lows[index],
+                       abs(highs[index] - closes[index - 1]),
+                       abs(lows[index] - closes[index - 1]))
+                  for index in range(1, len(closes))]
+            atr_pct = sum(tr[-14:]) / 14 / closes[-1] * 100
+        return {
+            "symbol": symbol, "market": market, "timeframe": timeframe,
+            "price_change_pct": changes,
+            "historical_volatility_24h_pct": vol,
+            "atr_14_pct": atr_pct,
+            "volume_vs_prior_20_candles": volume_stats,
+            "completed_candle_count": len(closes),
+            "required_candles": {"1h_change": 2, "24h_change": 25, "7d_change": 169,
+                                 "historical_volatility_24h": 25, "atr_14": 15,
+                                 "volume_comparison": 21},
+            "data_completeness": {
+                key: "READY" if value is not None else "INSUFFICIENT_DATA"
+                for key, value in changes.items()
+            },
+        }
+
+    async def get_asset_correlation(self, left_symbol: str, right_symbol: str,
+                                    market: str, timeframe: str = "1h",
+                                    limit: int = 200) -> dict:
+        """Calculate aligned close-return correlation for two selected assets."""
+        left_rows, right_rows = await asyncio.gather(
+            self.get_candles(left_symbol, market, timeframe, limit=limit),
+            self.get_candles(right_symbol, market, timeframe, limit=limit),
+        )
+        now_ms = int(time.time() * 1000)
+        def completed_closes(rows):
+            result = {}
+            for row in rows:
+                try:
+                    if int(row["close_time"]) >= now_ms:
+                        continue
+                    value = float(row["close"])
+                    if value > 0 and math.isfinite(value):
+                        result[int(row["open_time"])] = value
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    continue
+            return result
+        left, right = completed_closes(left_rows), completed_closes(right_rows)
+        common = sorted(set(left) & set(right))
+        value = return_correlation([left[key] for key in common],
+                                   [right[key] for key in common], minimum_returns=20)
+        return {
+            "symbol_a": left_symbol, "symbol_b": right_symbol, "market": market,
+            "timeframe": timeframe, "correlation": value,
+            "aligned_candle_count": len(common), "return_sample_count": max(0, len(common) - 1),
+            "status": "READY" if value is not None else "INSUFFICIENT_DATA",
+            "method": "Pearson correlation of aligned close-to-close logarithmic returns",
+        }
 
     # ===== Signals =====
 
