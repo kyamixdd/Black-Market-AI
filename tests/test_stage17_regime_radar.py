@@ -40,7 +40,7 @@ def test_uptrend_classification_contains_rule_evidence():
     assert result["status"] == "READY"
     assert result["supporting_indicators"]["sma20"] > result["supporting_indicators"]["sma50"]
     assert result["evidence"]
-    assert result["confidence_type"] == "rule_strength_not_probability"
+    assert result["confidence_type"] == "not_statistically_calibrated"
     assert "not a prediction" in result["limitations"][0].lower()
 
 
