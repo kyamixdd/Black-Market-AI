@@ -1,6 +1,7 @@
 """Deterministic regression tests for Stage 5 analytics."""
 import math
 
+import pytest
 
 from market.analytics import (
     breadth_summary, historical_volatility, price_change,
@@ -47,8 +48,6 @@ def test_breadth_sample_counts_only_advancing_declining_neutral():
     assert result["advance_decline_ratio"] == 1
     assert breadth_summary([])["status"] == "UNAVAILABLE"
 
-
-import pytest
 
 def test_candle_manager_rejects_bad_ohlcv_and_reports_missing_intervals():
     from market.candle_manager import CandleManager
