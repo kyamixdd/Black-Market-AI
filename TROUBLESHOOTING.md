@@ -1,328 +1,88 @@
-# BlackMarket AI - Troubleshooting Guide
+# Troubleshooting
 
-This guide helps you resolve common issues when running BlackMarket AI.
+## Runtime modes
 
-## Installation Issues
+| Mode | Backend behavior |
+|---|---|
+| Tauri desktop | Desktop supervisor starts and manages the local backend |
+| Vite browser preview | Frontend only; does not supervise the Python backend |
+| Next.js website | Private-preview session and remote-backend configuration required |
+| Python/terminal | Local development and legacy CLI path |
 
-### Python Version Error
+Frontend availability does not indicate backend readiness or current market-data availability.
 
-**Problem**: "Python 3.10 or higher is required"
+## Desktop startup / backend unavailable
 
-**Solution**:
-1. Download Python 3.10+ from https://python.org
-2. During installation, check "Add Python to PATH"
-3. Restart your terminal after installation
+1. Check the startup readiness state and application logs.
+2. Verify access to the per-user application-data directory.
+3. Check whether another instance is using `127.0.0.1:8765`.
+4. Verify bundled backend resources are present in the installed package.
+5. Record the application version and backend log if startup fails.
 
-### Virtual Environment Creation Failed
+The current Windows installer pipeline packages a backend executable. Older development builds may depend on a configured Python environment.
 
-**Problem**: "Failed to create virtual environment"
+## API authentication
 
-**Solution**:
+- `401 Unauthorized`: bearer token is missing or invalid.
+- `403 Remote API access is disabled`: request originated outside the permitted local interface while remote mode is disabled.
+
+Do not include bearer tokens in logs, screenshots or issue reports. Remote mode should not be enabled to resolve a local desktop authentication problem.
+
+## Missing or stale market data
+
+- Check backend, database and WebSocket readiness.
+- Verify internet connectivity and Binance public endpoint availability.
+- Confirm market, symbol and timeframe selection.
+- Analytics requiring historical candles may remain unavailable until sufficient data is collected.
+- Exchange rate limits and service interruptions can delay updates.
+- Stale or incomplete data must not be treated as a current signal.
+
+## Website private-preview connection
+
+Verify server-side configuration for backend URL, session secret, preview password and backend API token. Confirm remote API mode is enabled only when required, TLS is active, tokens match, and ingress permits the website service.
+
+Backend credentials must not be exposed in client-side code or public build variables. The current website authentication model is a single-password private-preview gate.
+
+## Paper order rejection
+
+Inspect the API rejection reason. Common causes include invalid symbol/market/side, invalid price or quantity, insufficient simulated balance, exposure/position limits, leverage limits, stale market data or daily-loss protection.
+
+Order rejections caused by risk limits are expected control behavior.
+
+## Database lock, corruption or recovery failure
+
+1. Close the application normally and confirm backend shutdown.
+2. Preserve the database and SQLite sidecar files.
+3. Identify the configured database path and inspect logs.
+4. Validate a backup copy using `PRAGMA integrity_check;`.
+5. Restore only from a verified backup.
+
+Deleting the database, dropping tables or terminating unrelated Python processes is not a routine recovery procedure.
+
+## Installer or update issues
+
+- Verify installer version and artifact hash.
+- Confirm supported Windows version and required WebView2/system components.
+- Preserve application logs and version information before reinstalling.
+- Back up user data before upgrade/reinstall.
+- Verify backend shutdown after uninstall. User data may remain intentionally to preserve trading history.
+
+## Python/terminal environment
+
+Use Python 3.10+ and the virtual environment associated with the installed backend dependencies.
+
 ```bash
-# Windows
-python -m ensurepip --upgrade
-python -m venv venv
-
-# macOS/Linux
-python3 -m pip install --upgrade pip
-python3 -m venv venv
+python -m pytest -q -m "not live"
 ```
 
-### Dependency Installation Failed
+The command must run under the intended Python interpreter.
 
-**Problem**: "Failed to install dependencies"
+## Model training or promotion blocked
 
-**Solution**:
-1. Update pip: `python -m pip install --upgrade pip`
-2. Try installing specific packages:
-   ```bash
-   pip install numpy pandas scikit-learn
-   pip install aiohttp websockets textual
-   ```
-3. For Windows, try with `--user` flag:
-   ```bash
-   pip install --user -r requirements.txt
-   ```
+Promotion may be rejected because of insufficient samples, invalid timestamps, inadequate chronological/purged validation, insufficient calibration samples, or incomplete economic/champion evidence. These conditions are validation gates; reducing thresholds to bypass them invalidates the evidence.
 
-## Runtime Issues
+## Bug report contents
 
-### Module Import Errors
+Include application version/commit, OS version, runtime mode, redacted logs, reproduction steps, expected behavior and actual behavior.
 
-**Problem**: `ModuleNotFoundError: No module named '...'`
-
-**Solution**:
-1. Ensure virtual environment is activated:
-   ```bash
-   # Windows
-   venv\Scripts\activate
-   
-   # macOS/Linux
-   source venv/bin/activate
-   ```
-2. Check if all dependencies are installed:
-   ```bash
-   pip list
-   ```
-3. Reinstall requirements:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-### Database Issues
-
-**Problem**: `sqlite3.OperationalError: no such table: symbols`
-
-**Solution**:
-1. Delete the database file:
-   ```bash
-   # Windows
-   del data\blackmarket.db
-   
-   # macOS/Linux
-   rm data/blackmarket.db
-   ```
-2. Reinitialize the database:
-   ```bash
-   python -c "from database.connection import Database; Database('sqlite:///data/blackmarket.db').init_db()"
-   ```
-
-**Problem**: Database is locked
-
-**Solution**:
-1. Make sure no other instances are running
-2. On Windows, try:
-   ```powershell
-   taskkill /F /IM python.exe
-   ```
-3. Wait a few seconds and try again
-
-### WebSocket Connection Issues
-
-**Problem**: WebSocket connection fails or keeps reconnecting
-
-**Solution**:
-1. Check internet connection
-2. Firewall may be blocking connections:
-   - Windows: Allow Python through Windows Firewall
-   - macOS: Check System Preferences > Security & Privacy > Firewall
-3. Try running with debug logging:
-   ```env
-   LOG_LEVEL=DEBUG
-   ```
-
-### Memory Issues
-
-**Problem**: Application crashes with memory error
-
-**Solution**:
-1. Reduce concurrent scans in config.py:
-   ```python
-   MAX_CONCURRENT_SCANS = 4  # Reduce from 8
-   ```
-2. Close other applications using memory
-3. On Windows, check Task Manager for memory usage
-
-## Telegram Issues
-
-### Telegram Not Sending Messages
-
-**Problem**: Telegram notifications not working
-
-**Solution**:
-1. Verify bot token and chat ID in `.env` file
-2. Test connection:
-   ```bash
-   # Windows
-   python -c "from notifications.telegram_client import TelegramClient; t = TelegramClient('your_token', 'your_chat_id'); t.test_connection()"
-   
-   # macOS/Linux
-   python3 -c "from notifications.telegram_client import TelegramClient; t = TelegramClient('your_token', 'your_chat_id'); t.test_connection()"
-   ```
-3. Check bot permissions:
-   - Open your bot in Telegram
-   - Click on the bot name
-   - Scroll to "Permissions" and ensure all permissions are enabled
-
-### Rate Limit Errors
-
-**Problem**: "429 Too Many Requests" from Telegram
-
-**Solution**:
-1. Telegram allows 30 messages per second
-2. The system has built-in deduplication, but if you still get errors:
-   - Increase `SIGNAL_DEDUP_WINDOW_SECONDS` in config.py
-   - Reduce notification frequency in dashboard
-
-## Performance Issues
-
-### Slow Startup
-
-**Problem**: Application takes a long time to start
-
-**Solution**:
-1. Set `SCAN_ALL_ELIGIBLE_SYMBOLS=false` in `.env`
-2. Reduce timeframes in `.env`:
-   ```
-   TIMEFRAMES=1m,5m,15m,1h,4h
-   ```
-3. Disable unused features:
-   ```
-   ML_ENABLED=false
-   TELEGRAM_ENABLED=false
-   ```
-
-### High CPU Usage
-
-**Problem**: CPU usage is very high
-
-**Solution**:
-1. Reduce `MAX_CONCURRENT_SCANS`
-2. Close unnecessary applications
-3. On Windows, check Task Manager for CPU usage
-
-## Dashboard Issues
-
-### Terminal Not Displaying Properly
-
-**Problem**: Dashboard shows garbled text or doesn't update
-
-**Solution**:
-1. Use a terminal that supports Unicode:
-   - Windows: Windows Terminal (from Microsoft Store)
-   - macOS: Terminal.app
-   - Linux: GNOME Terminal, Konsole
-2. Ensure terminal supports 24-bit color
-3. Try running with:
-   ```bash
-   export TERM=xterm-256color
-   ```
-
-### Keyboard Shortcuts Not Working
-
-**Problem**: Dashboard keyboard shortcuts (1-0, q, r) don't work
-
-**Solution**:
-1. Ensure terminal is in raw mode
-2. Try different terminal emulator
-3. Some terminals require special configuration for arrow keys
-
-## Data Issues
-
-### Missing Historical Data
-
-**Problem**: Strategies need more historical data
-
-**Solution**:
-1. Run the application for longer periods
-2. Manually download historical data (future enhancement)
-3. Reduce strategy complexity temporarily
-
-### Stale Signals
-
-**Problem**: Signals are not updating
-
-**Solution**:
-1. Check `SIGNAL_STALE_SECONDS` in config.py (default: 30 seconds)
-2. Verify WebSocket connections are active
-3. Check scanner status in dashboard
-
-## Backup and Recovery
-
-### Corrupted Database
-
-**Problem**: Database file is corrupted
-
-**Solution**:
-1. Find the latest backup:
-   ```bash
-   # Windows
-   dir data\backups\blackmarket_*.db /B /O:-D
-   
-   # macOS/Linux
-   ls -t data/backups/blackmarket_*.db | head -1
-   ```
-2. Restore from backup:
-   ```bash
-   # Windows
-   copy "data\backups\blackmarket_20240101.db" "data\blackmarket.db"
-   
-   # macOS/Linux
-   cp "data/backups/blackmarket_20240101.db" "data/blackmarket.db"
-   ```
-
-### Model Issues
-
-**Problem**: ML models not training or promoting
-
-**Solution**:
-1. Check if enough predictions exist:
-   ```sql
-   SELECT COUNT(*) FROM predictions WHERE resolved = 1;
-   ```
-2. Reduce validation thresholds temporarily:
-   ```env
-   MIN_VALIDATION_F1=0.45
-   MIN_VALIDATION_ACCURACY=0.50
-   ```
-3. Ensure `AUTO_MODEL_TRAINING=true` in `.env`
-
-## Debug Mode
-
-### Enable Debug Logging
-
-Add to `.env`:
-```env
-LOG_LEVEL=DEBUG
-```
-
-### Specific Component Debugging
-
-Set component-specific logging:
-```python
-# In main.py before running
-import logging
-logging.getLogger('market.scanner').setLevel(logging.DEBUG)
-logging.getLogger('intelligence.intelligence_core').setLevel(logging.DEBUG)
-```
-
-### Database Query Debugging
-
-Add to config.py:
-```python
-DATABASE_URL = "sqlite:///data/blackmarket.db?echo=true"
-```
-
-## Common Error Messages
-
-### "Event bus not initialized"
-
-**Cause**: Trying to use event bus before initialization
-**Solution**: Ensure orchestrator is properly initialized before using event bus
-
-### "Rate limit exceeded"
-
-**Cause**: Too many requests to Binance API
-**Solution**: The system has built-in rate limiting, but if it still happens:
-- Wait for the token bucket to refill
-- Check `MAX_WEBSOCKET_CONNECTIONS` setting
-
-### "Position not found"
-
-**Cause**: Trying to close a position that doesn't exist
-**Solution**: Check if position_id is valid and position still exists
-
-### "Insufficient balance"
-
-**Cause**: Not enough balance to open position
-**Solution**: Check balance in dashboard or use smaller position size
-
-## Getting Help
-
-1. Check the logs in `logs/blackmarket.log`
-2. Run with debug logging enabled
-3. Check GitHub issues for similar problems
-4. Create a new issue with:
-   - Operating system and Python version
-   - Full error message
-   - Steps to reproduce
-   - Expected vs actual behavior
+Exclude bearer tokens, website secrets, Telegram tokens, private database contents and personal filesystem paths.

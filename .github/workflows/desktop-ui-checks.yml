@@ -4,13 +4,11 @@ on:
   pull_request:
     branches:
       - black-market-ai-beta
+      - main
   push:
     branches:
       - black-market-ai-beta
-      - implementation/complete-system-roadmap
-      - implementation/persistent-runtime-settings
-      - implementation/market-analytics-completion
-      - implementation/security-recovery-hardening
+      - main
 
 permissions:
   contents: read
@@ -76,7 +74,7 @@ jobs:
         run: npm run lint
         working-directory: blackmarket-desktop
 
-      - name: Market-data unit tests
+      - name: API and market-data integration tests
         run: npm test
         working-directory: blackmarket-desktop
 

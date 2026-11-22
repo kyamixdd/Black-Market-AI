@@ -30,6 +30,7 @@ import {
 import { LiveMarketChart } from './components/charts/LiveMarketChart'
 import { DashboardScreen } from './screens/DashboardScreens'
 import { getApiAuthorization, setApiToken } from './services/localAuth'
+import { mutateJson, requestJson } from './services/backendClient'
 import {
   assessMarketData,
   marketChartKey,
@@ -142,10 +143,6 @@ async function invoke<T>(command: string): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
   return tauriInvoke<T>(command)
 }
-
-function apiBaseUrl(): string {
-  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? `${API_ORIGIN}/api` : '/api/backend'
-}
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
 const WEBSOCKET_CHANNELS: WebSocketChannel[] = [
   'market_updates',
@@ -193,6 +190,7 @@ const EMPTY_DATA: DashboardData = {
   events: [],
   markets: [],
   positions: [],
+  openOrders: [],
   trades: [],
   tradeStats: null,
   strategies: [],
@@ -230,39 +228,6 @@ function readPreferences(): DashboardPreferences {
     console.warn('Unable to read dashboard preferences', error)
     return DEFAULT_PREFERENCES
   }
-}
-
-async function requestJson<T>(path: string, api = true): Promise<T | null> {
-  const url = api ? `${apiBaseUrl()}${path}` : `${API_ORIGIN}${path}`
-  try {
-    const response = await fetch(url, {
-      headers: api && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? getApiAuthorization() : undefined,
-      cache: 'no-store',
-    })
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
-    return (await response.json()) as T
-  } catch (error) {
-    console.error(`Unable to load ${path}`, error)
-    return null
-  }
-}
-
-async function mutateJson<T>(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): Promise<T> {
-  const response = await fetch(`${apiBaseUrl()}${path}`, {
-    method,
-    headers: {
-      ...(typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? getApiAuthorization() : {}),
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    cache: 'no-store',
-  })
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    const detail = typeof payload.detail === 'string' ? payload.detail : `${response.status} ${response.statusText}`
-    throw new Error(detail)
-  }
-  return payload as T
 }
 
 function numberValue(value: unknown): number | undefined {
@@ -710,7 +675,7 @@ function App() {
       }
 
       if (activeScreen === 'Portfolio' || activeScreen === 'Positions' || activeScreen === 'Trade History') {
-        const [positionsPayload, tradesPayload] = await Promise.all([
+        const [positionsPayload, tradesPayload, ordersPayload] = await Promise.all([
           requestJson<{ positions?: WorkspaceData['positions'] }>('/positions'),
           requestJson<{
             trades?: WorkspaceData['trades']
@@ -720,11 +685,13 @@ function App() {
             profit_factor?: number
             max_drawdown_pct?: number
           }>('/trades?limit=1000'),
+          activeScreen === 'Positions' ? requestJson<{ orders?: WorkspaceData['openOrders'] }>('/trades/orders') : Promise.resolve(null),
         ])
         if (!active) return
         setData((current) => ({
           ...current,
           positions: positionsPayload?.positions ?? current.positions,
+          openOrders: ordersPayload?.orders ?? current.openOrders,
           trades: tradesPayload?.trades ?? current.trades,
           tradeStats: tradesPayload ? {
             total: tradesPayload.total,
@@ -1411,9 +1378,15 @@ function App() {
             if (!positionId) throw new Error('Missing position identifier.')
             if (action === 'close') {
               await mutateJson(`/positions/${encodeURIComponent(positionId)}/close`, 'POST')
+            } else if (action === 'partial-close') {
+              await mutateJson(`/positions/${encodeURIComponent(positionId)}/partial-close`, 'POST', { quantity: values?.quantity })
             } else {
               await mutateJson(`/positions/${encodeURIComponent(positionId)}`, 'PATCH', values ?? {})
             }
+            refreshScreenDataRef.current?.()
+          }}
+          onCancelOrder={async (orderId) => {
+            await mutateJson(`/trades/orders/${encodeURIComponent(orderId)}`, 'DELETE')
             refreshScreenDataRef.current?.()
           }}
           onSelectMarket={(selectedSymbol, selectedMarket) => {

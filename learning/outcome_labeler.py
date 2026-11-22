@@ -61,38 +61,63 @@ class OutcomeLabeler:
         if current_ms - created_ms < horizon_ms:
             return None  # Horizon not yet complete
 
-        # Get market data at evaluation time
+        # Resolve both prices using candles that had fully closed at each
+        # target timestamp. The entry is the last close available when the
+        # prediction was created; the exit is the last close available at the
+        # end of its forecast horizon.
         timeframe = pred.timeframe if pred.timeframe in {"1m", "1h"} else "1m"
-        entry_price = self._get_price_at_time(pred.symbol, pred.market, created_ms, timeframe)
-        exit_price = self._get_price_at_time(pred.symbol, pred.market, created_ms + horizon_ms, timeframe)
-
-        if entry_price is None or exit_price is None:
-            return None
-
-        # Calculate return with transaction costs
-        costs = self._calculate_costs(pred.market, pred.predicted_class, entry_price, exit_price)
-        actual_return_pct = self._calculate_return_with_costs(
-            pred.market, pred.predicted_class, entry_price, exit_price, costs
+        entry_timestamp_ms = created_ms
+        exit_timestamp_ms = created_ms + horizon_ms
+        entry_price = self._get_price_at_time(
+            pred.symbol, pred.market, entry_timestamp_ms, timeframe
+        )
+        exit_price = self._get_price_at_time(
+            pred.symbol, pred.market, exit_timestamp_ms, timeframe
         )
 
-        # Determine actual outcome class
+        if entry_price is None or exit_price is None or entry_price <= 0:
+            return None
+
+        # Actual market direction must be derived from price movement only,
+        # never from the model's predicted class or prediction-side PnL.
+        gross_market_return = (exit_price - entry_price) / entry_price
         threshold = 0.002  # 0.2% threshold for UP/DOWN
-        if actual_return_pct > threshold:
+        if gross_market_return > threshold:
             actual_outcome = "UP"
-        elif actual_return_pct < -threshold:
+        elif gross_market_return < -threshold:
             actual_outcome = "DOWN"
         else:
             actual_outcome = "FLAT"
 
-        is_correct = (actual_outcome == pred.predicted_class)
-        eval_notes = f"Entry: {entry_price:.4f}, Exit: {exit_price:.4f}, Net Return: {actual_return_pct:.4%}"
+        is_correct = actual_outcome == pred.predicted_class
+
+        # Transaction costs and simulated PnL describe the predicted trade,
+        # separately from the actual market-direction label.
+        predicted_direction = pred.predicted_class
+        costs = self._calculate_costs(
+            pred.market, predicted_direction, entry_price, exit_price
+        )
+        predicted_gross_return = (
+            gross_market_return if predicted_direction == "UP"
+            else -gross_market_return if predicted_direction == "DOWN"
+            else 0.0
+        )
+        simulated_pnl = predicted_gross_return - (
+            costs / entry_price if entry_price > 0 else 0.0
+        )
+        actual_return_pct = gross_market_return
+        eval_notes = (
+            f"Entry: {entry_price:.4f}, Exit: {exit_price:.4f}, "
+            f"Market Return: {gross_market_return:.4%}, "
+            f"Predicted Trade PnL: {simulated_pnl:.4%}"
+        )
 
         return {
             "actual_outcome": actual_outcome,
             "actual_return_pct": actual_return_pct,
             "is_correct": is_correct,
             "transaction_costs": costs / entry_price if entry_price > 0 else 0,
-            "simulated_pnl": actual_return_pct,
+            "simulated_pnl": simulated_pnl,
             "evaluation_notes": eval_notes
         }
 
@@ -113,9 +138,11 @@ class OutcomeLabeler:
                     CandleModel.symbol == symbol,
                     CandleModel.market == market,
                     CandleModel.timeframe == timeframe,
-                    CandleModel.open_time <= timestamp_ms,
+                    # open_time <= target is insufficient: the candle may
+                    # still be forming. Only use candles closed by target.
+                    CandleModel.close_time <= timestamp_ms,
                 )
-                .order_by(CandleModel.open_time.desc())
+                .order_by(CandleModel.close_time.desc())
                 .limit(1)
             )
             result = session.execute(stmt).scalar()

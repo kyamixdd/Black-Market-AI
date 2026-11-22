@@ -86,3 +86,91 @@ def test_river_model_requires_chronological_holdout_thresholds():
     assert "metrics" in result
     assert result["metrics"]["holdout_samples"] > 0
     assert result["metrics"]["validation_method"] == "chronological_80_20_prequential_holdout"
+
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_live_signal_cannot_open_paper_position(monkeypatch):
+    from core.orchestrator import Orchestrator
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("core.orchestrator.PAPER_TRADING_ENABLED", True)
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.simulator = SimpleNamespace(execute_signal=AsyncMock())
+    orchestrator.strategy_selector = SimpleNamespace(get_weight=lambda *_: 1.0)
+    orchestrator.telegram = None
+    orchestrator._live_paper_confidence_gate = lambda _signal: (False, "below_historical_confidence_threshold")
+    event = SimpleNamespace(payload={
+        "signal_id": "low-confidence-signal",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "strategy": "momentum",
+        "regime": "TRENDING",
+        "confidence": 0.62,
+    })
+
+    await orchestrator._on_signal_validated(event)
+
+    orchestrator.simulator.execute_signal.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+async def test_live_model_low_confidence_is_blocked_before_simulator_execution(monkeypatch):
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+    from core.orchestrator import Orchestrator
+
+    monkeypatch.setattr("core.orchestrator.PAPER_TRADING_ENABLED", True)
+    model_version = "20260101_000000"
+    active_models = [
+        SimpleNamespace(is_active=True, model_type="random_forest", version=f"random_forest_{model_version}"),
+        SimpleNamespace(is_active=True, model_type="xgboost", version=f"xgboost_{model_version}"),
+    ]
+    historical = [
+        SimpleNamespace(
+            model_version=model_version, predicted_class="UP",
+            confidence=0.90, actual_return_pct=1.0,
+        )
+        for _ in range(25)
+    ]
+    predictor = SimpleNamespace(
+        is_trained=True, version=model_version,
+        predict=lambda _features: {
+            "predicted_class": "UP", "confidence": 0.49,
+            "prob_up": 0.49, "prob_down": 0.30, "prob_flat": 0.21,
+        },
+    )
+    orchestrator = object.__new__(Orchestrator)
+    orchestrator.intelligence = SimpleNamespace(predictor=predictor)
+    orchestrator.repo = SimpleNamespace(
+        get_model_registry=lambda: active_models,
+        get_predictions_history=lambda _limit: historical,
+    )
+    closed_candles = [
+        {"close_time": 1, **{name: 1.0 for name in ("open", "high", "low", "close", "volume")}}
+        for _ in range(50)
+    ]
+    orchestrator.candle_manager = SimpleNamespace(
+        get_series=lambda *_args, **_kwargs: closed_candles,
+    )
+    orchestrator.feature_engine = SimpleNamespace(
+        build_features=lambda *_args, **_kwargs: np.zeros(36, dtype=np.float32),
+    )
+    orchestrator._confidence_threshold_cache = {}
+    orchestrator.simulator = SimpleNamespace(execute_signal=AsyncMock())
+    orchestrator.strategy_selector = SimpleNamespace(get_weight=lambda *_: 1.0)
+    orchestrator.telegram = None
+    event = SimpleNamespace(payload={
+        "signal_id": "model-low-confidence",
+        "symbol": "BTCUSDT", "market": "SPOT",
+        "strategy": "momentum", "regime": "TRENDING",
+        "confidence": 0.9,
+    })
+
+    allowed, reason = orchestrator._live_paper_confidence_gate(event.payload)
+    assert not allowed
+    assert reason == "below_historical_confidence_threshold"
+
+    await orchestrator._on_signal_validated(event)
+    orchestrator.simulator.execute_signal.assert_not_awaited()

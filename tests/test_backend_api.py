@@ -507,3 +507,131 @@ async def test_historical_candles_are_bounded_closed_sorted_and_deduplicated():
     assert spot_client.request == ("BTCUSDT", "1m", end_time, 500)
     assert [candle["open_time"] for candle in candles] == [1000, 3000]
     assert candles[0]["close"] == 101
+
+
+
+def test_tauri_webview_preflight_allows_authenticated_patch_and_delete(monkeypatch):
+    from fastapi.testclient import TestClient
+    from src_tauri.backend import main
+
+    monkeypatch.setattr(main, "_api_token", "desktop-test-token")
+    client = TestClient(LoopbackTestClient(main.app))
+    origin = "http://tauri.localhost"
+    try:
+        for method in ("PATCH", "DELETE"):
+            response = client.options(
+                "/api/positions/test-position",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": method,
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+            assert response.status_code == 200
+            assert response.headers["access-control-allow-origin"] == origin
+            assert method in response.headers["access-control-allow-methods"]
+            assert "authorization" in response.headers["access-control-allow-headers"].lower()
+    finally:
+        client.close()
+
+
+def test_tauri_origin_can_update_position_risk_over_authenticated_patch(monkeypatch):
+    from fastapi.testclient import TestClient
+    from src_tauri.backend import main
+    from src_tauri.backend.api.routes import positions
+
+    position = {
+        "position_id": "paper-1", "symbol": "BTCUSDT", "market": "SPOT",
+        "side": "LONG", "entry_price": 100.0, "current_price": 100.0,
+        "amount": 1.0, "status": "OPEN", "stop_loss": 95.0,
+        "take_profit": 110.0,
+    }
+    persisted = []
+    simulator = SimpleNamespace(
+        spot_positions={"paper-1": position}, futures_positions={},
+        persist_position_callback=lambda value: persisted.append(dict(value)),
+    )
+    monkeypatch.setattr(positions, "get_bridge", lambda: SimpleNamespace(simulator=simulator))
+    monkeypatch.setattr(main, "_api_token", "desktop-test-token")
+    client = TestClient(LoopbackTestClient(main.app))
+    origin = "http://tauri.localhost"
+    try:
+        preflight = client.options(
+            "/api/positions/paper-1",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "PATCH",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert preflight.status_code == 200
+        response = client.patch(
+            "/api/positions/paper-1",
+            json={"stop_loss": 97.0, "take_profit": 108.0},
+            headers={"Origin": origin, "Authorization": "Bearer desktop-test-token"},
+        )
+    finally:
+        client.close()
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert position["stop_loss"] == 97.0
+    assert position["take_profit"] == 108.0
+    assert persisted[-1]["stop_loss"] == 97.0
+    assert response.headers["access-control-allow-origin"] == origin
+
+def test_partial_close_route_validates_and_dispatches_to_simulator(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src_tauri.backend.api.routes import positions
+
+    calls = []
+    position = {"position_id": "paper-2", "symbol": "BTCUSDT", "market": "SPOT", "status": "OPEN", "amount": 2.0}
+    async def partial_close(pos, price, quantity):
+        calls.append((pos, price, quantity))
+        return True
+
+    simulator = SimpleNamespace(
+        spot_positions={"paper-2": position}, futures_positions={},
+        _partial_close_position=partial_close,
+    )
+    bridge = SimpleNamespace(
+        simulator=simulator,
+        get_market_snapshot=lambda *_: {"price": 101.0, "data_age_seconds": 1, "data_freshness": "LIVE"},
+    )
+    monkeypatch.setattr(positions, "get_bridge", lambda: bridge)
+    app = FastAPI()
+    app.include_router(positions.router, prefix="/api")
+    with TestClient(app) as client:
+        response = client.post("/api/positions/paper-2/partial-close", json={"quantity": 0.5})
+        too_large = client.post("/api/positions/paper-2/partial-close", json={"quantity": 2.0})
+    assert response.status_code == 200
+    assert calls == [(position, 101.0, 0.5)]
+    assert too_large.status_code == 422
+
+
+def test_limit_order_cancel_route_dispatches_and_handles_non_open_orders(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src_tauri.backend.api.routes import trades
+
+    calls = []
+    open_order = {"order_id": "limit-1", "status": "OPEN"}
+    async def cancel_order(order_id):
+        calls.append(order_id)
+        return {"status": "CANCELLED"}
+
+    simulator = SimpleNamespace(
+        open_orders={"limit-1": open_order},
+        cancel_limit_order=cancel_order,
+    )
+    monkeypatch.setattr(trades, "get_bridge", lambda: SimpleNamespace(simulator=simulator))
+    app = FastAPI()
+    app.include_router(trades.router, prefix="/api")
+    with TestClient(app) as client:
+        response = client.delete("/api/trades/orders/limit-1")
+        open_order["status"] = "FILLING"
+        filling = client.delete("/api/trades/orders/limit-1")
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert calls == ["limit-1"]
+    assert filling.status_code == 409

@@ -17,6 +17,7 @@ from config import (
 from database.models import ModelRegistryModel
 from database.repositories import Repository
 from learning.walkforward_validator import WalkForwardValidator
+from learning.confidence_gate import ModelPromotionGate, PromotionGateCriteria
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +58,14 @@ class EvaluationResult:
     max_drawdown_pct: float
     calibration_score: float
     stability_score: float
-    regime_performance: dict[str, float]
+    regime_performance: dict[str, Any]
     total_samples: int
     primary_metric: str
     primary_value: float
     passes_criteria: bool
     failure_reasons: list[str] = field(default_factory=list)
     evaluated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    promotion_evidence: dict[str, Any] = field(default_factory=dict)
 
 
 class ModelManager:
@@ -154,74 +156,80 @@ class ModelManager:
         X: Any,
         y: Any,
         regime_labels: Any | None = None,
-        cost_per_trade: float = 0.001
+        cost_per_trade: float = 0.001,
+        economic_metadata: dict[str, Any] | None = None,
+        timestamps: Any = None,
     ) -> EvaluationResult:
-        """
-        Evaluate a challenger model against promotion criteria.
+        """Evaluate challenger with the same fail-closed promotion gate used by training.
 
-        Uses walk-forward validation on identical data for fair comparison.
+        Economic metadata must contain aligned realized returns, round-trip fees/
+        slippage, market, timestamp, horizon and regime. Missing evidence blocks
+        automated promotion instead of substituting F1-based return estimates.
         """
-        # Run walk-forward validation
+        if timestamps is None or len(timestamps) != len(y):
+            result = EvaluationResult(
+                model_version=challenger.version, model_type=challenger.model_type,
+                net_expectancy=0.0, max_drawdown_pct=0.0, calibration_score=0.0,
+                stability_score=0.0, regime_performance={}, total_samples=len(y),
+                primary_metric="f1", primary_value=0.0, passes_criteria=False,
+                failure_reasons=["chronological timestamps required for promotion evaluation"],
+                promotion_evidence={"passes": False, "failure_reasons": ["timestamps missing"]},
+            )
+            self._store_evaluation(challenger, result)
+            return result
+
         def model_factory():
-            # Load the actual model from file_path
             import joblib
             return joblib.load(challenger.file_path)
 
-        wf_result = self.validator.validate(X, y, model_factory, metric="f1")
+        wf_result = self.validator.validate(X, y, model_factory, metric="f1", timestamps=timestamps, purge_gap_ms=60 * 60 * 1000)
+        champion = self.get_champion(challenger.model_type)
+        champion_result: dict[str, Any] = {}
+        if champion and champion.file_path:
+            def champion_factory():
+                import joblib
+                return joblib.load(champion.file_path)
+            champion_result = self.validator.validate(X, y, champion_factory, metric="f1", timestamps=timestamps, purge_gap_ms=60 * 60 * 1000)
 
-        # Calculate net expectancy (includes costs)
-        net_expectancy = self._calculate_net_expectancy(wf_result, cost_per_trade)
-
-        # Calculate drawdown from walk-forward equity
-        max_dd_pct = self._calculate_walkforward_drawdown(wf_result)
-
-        # Calibration score (reliability of predicted probabilities)
-        calibration = self._calculate_calibration(wf_result)
-
-        # Stability across folds
-        stability = self._calculate_stability(wf_result)
-
-        # Regime-specific performance
-        regime_perf = {}
-        if regime_labels is not None:
-            regime_perf = self._evaluate_by_regime(X, y, regime_labels, model_factory)
-
-        # Check all criteria
-        failure_reasons = []
-        if net_expectancy < self.criteria.min_net_expectancy:
-            failure_reasons.append(f"Net expectancy {net_expectancy:.4f} < {self.criteria.min_net_expectancy}")
-        if max_dd_pct > self.criteria.max_drawdown_pct:
-            failure_reasons.append(f"Max drawdown {max_dd_pct:.2f}% > {self.criteria.max_drawdown_pct}%")
-        if calibration < self.criteria.min_calibration_score:
-            failure_reasons.append(f"Calibration {calibration:.2f} < {self.criteria.min_calibration_score}")
-        if stability < self.criteria.min_stability_score:
-            failure_reasons.append(f"Stability {stability:.2f} < {self.criteria.min_stability_score}")
-        if len([r for r in regime_perf.values() if r > 0.5]) < self.criteria.min_regime_coverage:
-            failure_reasons.append(f"Regime coverage insufficient: {len(regime_perf)} regimes")
-        if wf_result.get("aggregated", {}).get("mean_f1", 0) < self.criteria.min_samples / 1000:  # Approximate
-            failure_reasons.append(f"Sample size too small")
-
-        passes = len(failure_reasons) == 0
-
+        # The shared gate's RF/XGB slots represent this single model family
+        # here; both entries use the identical folds and evidence.
+        validation_payload = {
+            "rf": wf_result, "xgb": wf_result,
+            "ensemble_passes": bool(wf_result.get("valid") and wf_result.get("passes_threshold")),
+        }
+        champion_payload = {"rf": champion_result, "xgb": champion_result} if champion_result else {}
+        gate_criteria = PromotionGateCriteria(
+            min_samples=self.criteria.min_samples,
+            min_net_expectancy=self.criteria.min_net_expectancy,
+            max_drawdown_pct=self.criteria.max_drawdown_pct,
+            min_calibration_score=self.criteria.min_calibration_score,
+            min_stability_score=self.criteria.min_stability_score,
+            min_regime_coverage=self.criteria.min_regime_coverage,
+            min_improvement_over_champion=self.criteria.min_improvement_over_champion,
+        )
+        gate = ModelPromotionGate(gate_criteria).evaluate(
+            validation_payload, sample_count=len(y),
+            economic_metadata=economic_metadata,
+            champion_validation=champion_payload,
+        )
+        evidence = gate.get("economic_evidence", {}).get("rf", {})
         result = EvaluationResult(
             model_version=challenger.version,
             model_type=challenger.model_type,
-            net_expectancy=net_expectancy,
-            max_drawdown_pct=max_dd_pct,
-            calibration_score=calibration,
-            stability_score=stability,
-            regime_performance=regime_perf,
+            net_expectancy=float(evidence.get("net_expectancy") or 0.0),
+            max_drawdown_pct=float(evidence.get("max_drawdown_pct") or 0.0),
+            calibration_score=float((gate.get("models", {}).get("rf") or {}).get("calibration_score") or 0.0),
+            stability_score=float(evidence.get("stability_score") or 0.0),
+            regime_performance=evidence.get("regime_performance") or {},
             total_samples=len(y),
             primary_metric="f1",
-            primary_value=wf_result.get("aggregated", {}).get("mean_f1", 0),
-            passes_criteria=passes,
-            failure_reasons=failure_reasons
+            primary_value=float((wf_result.get("aggregated") or {}).get("mean_f1") or 0.0),
+            passes_criteria=bool(gate.get("passes")),
+            failure_reasons=list(gate.get("failure_reasons") or []),
+            promotion_evidence=gate,
         )
-
-        # Store evaluation in model record
         self._store_evaluation(challenger, result)
-
-        logger.info(f"Evaluated {challenger.version}: passes={passes}, reasons={failure_reasons}")
+        logger.info("Evaluated %s: passes=%s, reasons=%s", challenger.version, result.passes_criteria, result.failure_reasons)
         return result
 
     def compare_with_champion(
@@ -266,8 +274,31 @@ class ModelManager:
 
     def promote_challenger(self, challenger_version: str, evaluation: EvaluationResult) -> bool:
         """Promote challenger to champion if all criteria pass."""
-        if not evaluation.passes_criteria:
-            logger.warning(f"Cannot promote {challenger_version}: criteria not met - {evaluation.failure_reasons}")
+        evidence = evaluation.promotion_evidence or {}
+        provenance = evidence.get("validation_provenance") or {}
+        models = evidence.get("models") or {}
+        economics = evidence.get("economic_evidence") or {}
+        champions = evidence.get("champion_evidence") or {}
+        evidence_complete = (
+            evidence.get("passes") is True
+            and provenance.get("method") == "purged_timestamp_walk_forward"
+            and provenance.get("out_of_sample") is True
+            and provenance.get("timestamps_required") is True
+            and int(provenance.get("purge_gap_ms", 0)) >= int(provenance.get("target_horizon_ms", 1))
+            and int(provenance.get("target_horizon_ms", 0)) > 0
+            and int(provenance.get("rf_oof_count", 0)) > 0
+            and int(provenance.get("xgb_oof_count", 0)) > 0
+            and models.get("rf", {}).get("passes") is True
+            and models.get("xgb", {}).get("passes") is True
+            and economics.get("rf", {}).get("status") == "ok"
+            and economics.get("xgb", {}).get("status") == "ok"
+            and champions.get("rf", {}).get("status") == "ok"
+            and champions.get("xgb", {}).get("status") == "ok"
+        )
+        if (not evaluation.passes_criteria
+                or evaluation.model_version != challenger_version
+                or not evidence_complete):
+            logger.warning(f"Cannot promote {challenger_version}: complete out-of-sample evidence missing or failed - {evaluation.failure_reasons}")
             return False
 
         # Get champion for comparison
@@ -300,6 +331,7 @@ class ModelManager:
                 "regime_performance": evaluation.regime_performance,
                 "primary_metric": evaluation.primary_metric,
                 "primary_value": evaluation.primary_value,
+                "promotion_evidence": evaluation.promotion_evidence,
                 "evaluated_at": evaluation.evaluated_at.isoformat()
             })
             challenger.promotion_criteria = json.dumps(self.criteria.to_dict())
@@ -453,6 +485,7 @@ class ModelManager:
                     "primary_value": evaluation.primary_value,
                     "passes_criteria": evaluation.passes_criteria,
                     "failure_reasons": evaluation.failure_reasons,
+                    "promotion_evidence": evaluation.promotion_evidence,
                     "evaluated_at": evaluation.evaluated_at.isoformat()
                 })
                 session.commit()

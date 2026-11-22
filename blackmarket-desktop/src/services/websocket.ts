@@ -1,4 +1,4 @@
-import { getApiToken } from './localAuth'
+import { getApiToken } from './localAuth.js'
 
 type EventCallback = (data: unknown) => void
 
@@ -21,7 +21,7 @@ interface WebSocketMessage {
   detail?: string
 }
 
-class WebSocketService {
+export class WebSocketService {
   private ws: WebSocket | null = null
   private eventSource: EventSource | null = null
   private readonly url: string

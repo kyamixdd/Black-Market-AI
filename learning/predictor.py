@@ -52,16 +52,9 @@ class Predictor:
             except Exception as exc:
                 logger.warning("Failed to load models: %s", exc)
 
-        river_files = sorted(self.model_dir.glob("river_*.pkl"), key=lambda p: p.stat().st_mtime)
-        if river_files:
-            try:
-                self.river_model = joblib.load(river_files[-1])
-                self.is_trained = True
-                if not self.rf_model or not self.xgb_model:
-                    self.version = river_files[-1].stem
-                logger.info("Loaded online River model %s", river_files[-1].name)
-            except Exception as exc:
-                logger.warning("Failed to load River model: %s", exc)
+        # River candidates are not loaded from disk automatically. Only a model
+        # promoted through the repository's complete out-of-sample gate may
+        # become part of the active prediction ensemble.
 
     def predict(self, features: np.ndarray) -> dict[str, Any]:
         if not self.is_trained:

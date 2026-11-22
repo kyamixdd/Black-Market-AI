@@ -43,6 +43,7 @@ class WalkForwardValidator:
         metric: str | None = None, timestamps: Any = None,
         gap: int | None = None, label_horizon: int = 0,
         test_size: int | None = None,
+        purge_gap_ms: int = 0,
     ) -> dict[str, Any]:
         """
         Perform walk-forward validation.
@@ -61,8 +62,8 @@ class WalkForwardValidator:
         y = np.asarray(y)
         if X.ndim != 2 or y.ndim != 1 or len(X) != len(y):
             raise ValueError("X must be 2D and y must be a 1D aligned target")
-        if label_horizon < 0:
-            raise ValueError("label_horizon cannot be negative")
+        if label_horizon < 0 or purge_gap_ms < 0:
+            raise ValueError("label_horizon and purge_gap_ms cannot be negative")
         effective_gap = max(self.gap if gap is None else gap, label_horizon)
         if effective_gap < 0:
             raise ValueError("gap cannot be negative")
@@ -78,8 +79,11 @@ class WalkForwardValidator:
                         raise ValueError("timestamps cannot contain NaT")
                     value = value.astype("datetime64[ns]").astype(np.int64)
                 elif hasattr(value, "timestamp") and callable(value.timestamp):
-                    value = value.timestamp()
+                    value = int(value.timestamp() * 1000)
+                elif isinstance(value, (int, float, np.integer, np.floating)):
+                    value = value.item() if hasattr(value, "item") else value
                 normalized.append(value)
+            time_values = np.asarray(normalized)
             try:
                 if any(normalized[i] >= normalized[i + 1] for i in range(len(normalized)-1)):
                     raise ValueError("timestamps must be strictly increasing")
@@ -98,8 +102,25 @@ class WalkForwardValidator:
             gap=effective_gap,
         )
         fold_metrics = []
+        out_of_fold = []
 
-        for fold, (train_idx, test_idx) in enumerate(tscv.split(X)):
+        split_source = np.unique(time_values) if time_values is not None else X
+        for fold, (candidate_train_idx, candidate_test_idx) in enumerate(tscv.split(split_source)):
+            if time_values is not None:
+                test_times = split_source[candidate_test_idx]
+                test_start_time, test_end_time = test_times[0], test_times[-1]
+                test_idx = np.flatnonzero((time_values >= test_start_time) & (time_values <= test_end_time))
+                train_idx = np.flatnonzero(time_values < test_start_time)
+                # Preserve the row-based label horizon in addition to the
+                # elapsed-time purge. Target windows of the final training
+                # rows must not overlap the test fold.
+                if effective_gap > 0:
+                    train_idx = train_idx[:-effective_gap] if len(train_idx) > effective_gap else np.array([], dtype=int)
+                if purge_gap_ms > 0:
+                    cutoff = test_start_time - purge_gap_ms
+                    train_idx = train_idx[time_values[train_idx] < cutoff]
+            else:
+                train_idx, test_idx = candidate_train_idx, candidate_test_idx
             if len(train_idx) < self.min_train_size:
                 continue
 
@@ -114,6 +135,26 @@ class WalkForwardValidator:
 
             # Predict
             y_pred = model.predict(X_test)
+            if hasattr(model, "predict_proba"):
+                try:
+                    raw_probabilities = np.asarray(model.predict_proba(X_test), dtype=float)
+                    model_classes = np.asarray(getattr(model, "classes_", np.unique(y_train)))
+                    probabilities = np.zeros((len(X_test), 3), dtype=float)
+                    for class_index, class_value in enumerate(model_classes):
+                        class_id = int(class_value)
+                        if class_id in (0, 1, 2) and class_index < raw_probabilities.shape[1]:
+                            probabilities[:, class_id] = raw_probabilities[:, class_index]
+                    row_sums = probabilities.sum(axis=1, keepdims=True)
+                    probabilities = np.divide(probabilities, row_sums, out=np.zeros_like(probabilities), where=row_sums > 0)
+                except Exception:
+                    probabilities = np.eye(3, dtype=float)[np.clip(np.asarray(y_pred, dtype=int), 0, 2)]
+            else:
+                probabilities = np.eye(3, dtype=float)[np.clip(np.asarray(y_pred, dtype=int), 0, 2)]
+            for row_index, truth, prediction, probability in zip(test_idx, y_test, y_pred, probabilities):
+                out_of_fold.append({
+                    "index": int(row_index), "y_true": int(truth), "y_pred": int(prediction),
+                    "probabilities": probability.tolist(),
+                })
 
             # Calculate metrics
             fold_result = {
@@ -125,6 +166,7 @@ class WalkForwardValidator:
                 "test_start_index": int(test_idx[0]),
                 "test_end_index": int(test_idx[-1]),
                 "purged_samples": int(test_idx[0] - train_idx[-1] - 1),
+                "purge_gap_ms": int(purge_gap_ms),
                 "accuracy": float(accuracy_score(y_test, y_pred)),
                 "precision_macro": float(precision_score(y_test, y_pred, average="macro", zero_division=0)),
                 "recall_macro": float(recall_score(y_test, y_pred, average="macro", zero_division=0)),
@@ -132,10 +174,10 @@ class WalkForwardValidator:
             }
             if time_values is not None:
                 fold_result.update({
-                    "train_start_time": str(time_values[train_idx[0]]),
-                    "train_end_time": str(time_values[train_idx[-1]]),
-                    "test_start_time": str(time_values[test_idx[0]]),
-                    "test_end_time": str(time_values[test_idx[-1]]),
+                    "train_start_time": time_values[train_idx[0]].item() if hasattr(time_values[train_idx[0]], "item") else time_values[train_idx[0]],
+                    "train_end_time": time_values[train_idx[-1]].item() if hasattr(time_values[train_idx[-1]], "item") else time_values[train_idx[-1]],
+                    "test_start_time": time_values[test_idx[0]].item() if hasattr(time_values[test_idx[0]], "item") else time_values[test_idx[0]],
+                    "test_end_time": time_values[test_idx[-1]].item() if hasattr(time_values[test_idx[-1]], "item") else time_values[test_idx[-1]],
                 })
             fold_metrics.append(fold_result)
             logger.debug("Fold %d: acc=%.4f, f1=%.4f", fold, fold_result["accuracy"], fold_result["f1_macro"])
@@ -161,6 +203,7 @@ class WalkForwardValidator:
             "valid": True,
             "folds": fold_metrics,
             "aggregated": avg_metrics,
+            "out_of_fold": sorted(out_of_fold, key=lambda item: item["index"]),
             "primary_metric": metric,
             "primary_value": primary_value,
             "passes_threshold": primary_value >= self._get_threshold(metric),
@@ -182,7 +225,8 @@ class WalkForwardValidator:
         return thresholds.get(metric, MIN_VALIDATION_ACCURACY)
 
     def validate_ensemble(self, X: np.ndarray, y: np.ndarray,
-                          rf_params: dict | None = None, xgb_params: dict | None = None) -> dict[str, Any]:
+                          rf_params: dict | None = None, xgb_params: dict | None = None,
+                          timestamps: Any = None, purge_gap_ms: int = 0) -> dict[str, Any]:
         """Validate both RF and XGBoost, return combined results."""
         rf_params = rf_params or {"n_estimators": 100, "max_depth": 10, "random_state": 42, "n_jobs": -1}
         xgb_params = xgb_params or {"n_estimators": 100, "max_depth": 6, "learning_rate": 0.05,
@@ -194,8 +238,8 @@ class WalkForwardValidator:
         def xgb_factory():
             return xgb.XGBClassifier(**xgb_params)
 
-        rf_result = self.validate(X, y, rf_factory, "f1")
-        xgb_result = self.validate(X, y, xgb_factory, "f1")
+        rf_result = self.validate(X, y, rf_factory, "f1", timestamps=timestamps, purge_gap_ms=purge_gap_ms)
+        xgb_result = self.validate(X, y, xgb_factory, "f1", timestamps=timestamps, purge_gap_ms=purge_gap_ms)
 
         return {
             "rf": rf_result,

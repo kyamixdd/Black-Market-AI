@@ -1,32 +1,57 @@
-# BlackMarket AI — shared frontend deployment
+# BlackMarket AI — Website / Private Preview
 
-The canonical React + TypeScript application lives in `../blackmarket-desktop/src`. Both deployment targets mount that exact source:
+The canonical React + TypeScript dashboard lives in `../blackmarket-desktop/src`. Both targets use that same UI:
 
-- **Desktop:** Vite + Tauri, using the supervised local Python API at `127.0.0.1:8765`.
-- **Website:** Next.js authentication/session and same-origin API proxy shell; it imports the canonical React application directly. Browser REST requests use `/api/backend`, and live updates use the authenticated SSE proxy.
+- **Desktop:** Vite + Tauri with a supervised local backend at `127.0.0.1:8765`.
+- **Website:** Next.js session/login and same-origin backend proxy; REST calls use `/api/backend` and live events use the authenticated SSE proxy.
 
-There is one dashboard implementation. Do not create a separate website dashboard.
+Dashboard changes are maintained in the canonical shared source tree.
 
-## Website setup
+## Status
 
-1. Use Node.js 20+.
-2. Copy `.env.example` to `.env.local`.
-3. Configure `BLACKMARKET_BACKEND_URL`, `BLACKMARKET_SESSION_SECRET` (32+ random characters), `BLACKMARKET_WEB_PASSWORD`, and `BLACKMARKET_API_TOKEN`.
-4. Run `npm install`, `npm run build`, then `npm start`.
-5. Deploy the Next.js app as a Node.js service. Ensure the deployment includes the repository's `blackmarket-desktop` directory because the website imports the canonical UI from there.
+The website is an **optional private-preview path**, not the supported public hosted product. The primary release path is the Tauri desktop application with its local backend.
 
-The backend host must run with:
+Audit snapshot: `db3fc448af100236efac42ee8ed8e2fbe6a162d7`. CI run #343 completed successfully for that snapshot. Deployment acceptance requires end-to-end checks for the remote API, database persistence, event stream, market-data freshness, and paper-trading workflows.
+
+## Website environment
+
+Copy `.env.example` to `.env.local` and configure these server-only variables:
+
+- `BLACKMARKET_BACKEND_URL` — HTTPS backend URL, no trailing slash.
+- `BLACKMARKET_SESSION_SECRET` — high-entropy random secret, at least 32 characters.
+- `BLACKMARKET_WEB_PASSWORD` — strong private-preview password.
+- `BLACKMARKET_API_TOKEN` — high-entropy bearer token shared with the backend.
+
+Session secrets, preview credentials, and backend tokens must remain server-side and must not be included in client bundles or public build variables.
+
+## Backend requirements for remote preview
+
+Set on the backend host:
+
 - `BLACKMARKET_REMOTE_API_ENABLED=1`
-- `BLACKMARKET_API_HOST=0.0.0.0`
-- `BLACKMARKET_API_TOKEN` set to the same high-entropy bearer token configured as `BLACKMARKET_API_TOKEN` on the website
-- `APP_ENV=production` and a durable database configuration appropriate to the host
+- `BLACKMARKET_API_HOST=0.0.0.0` (only if required by the platform)
+- `BLACKMARKET_API_TOKEN` to the same secret configured on the website
+- `APP_ENV=production`
+- A durable database path/volume and appropriate backup configuration
+- Allowed origins and ingress restrictions appropriate to the deployed website
 
-Remote API mode is disabled by default. When enabled, all `/api/*` requests still require the bearer token. Do not expose that token to browser JavaScript. Prefer restricting backend ingress to the website host where the platform supports it.
+Remote API mode is disabled by default. Use TLS and restrict backend ingress to the website host or gateway where possible. Do not expose the backend directly without reviewing its threat model.
 
-## Desktop setup
+## Setup and build
 
-Use the existing `blackmarket-desktop` Vite/Tauri instructions. Desktop startup and its loopback-only API remain the default when remote mode is disabled.
+Requirements: Node.js 20+ (use the repository's supported CI Node version when building).
 
-## Security and scope
+```bash
+cp .env.example .env.local
+npm install
+npm run build
+npm start
+```
 
-The website login is a single-password private-preview gate, not multi-user identity or role-based access. Use HTTPS, rotate secrets, and do not enable real-money order execution as part of this frontend consolidation. Paper trading remains the application scope.
+Deploy the Next.js app as a Node.js service. The deployment must include `blackmarket-desktop`, because the website imports the shared frontend source from that directory.
+
+## Authentication limitations
+
+The current website gate is a single-password private-preview session, not multi-user identity, roles, MFA, or account recovery. The current authentication model is limited to private preview use.
+
+See the root [SECURITY.md](../SECURITY.md) and [RELEASE_READINESS.md](../RELEASE_READINESS.md) for security and release requirements.

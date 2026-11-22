@@ -1462,3 +1462,66 @@ Use the official Tauri Windows prerequisites at https://v2.tauri.app/start/prere
 - Frontend `npm test` passed (4 tests); `npm run build` passed. Desktop accessibility tree confirmed BTCUSDT Spot 4h / 500 candles / READY. Desktop screenshot capture timed out, so visual appearance and Futures UI switching were not confirmed in this run.
 - The 200 full-suite warnings remain third-party FastAPI/Starlette `asyncio.iscoroutinefunction` deprecations and one Starlette TestClient AnyIO `BlockingPortal` deprecation; no warning suppression was added.
 - The runtime smoke test used a fresh temporary app-data database on this host. It did not modify the source project database, models, or the user's private `.env`.
+
+
+---
+
+## Current branch status and release assessment (2026-11-22)
+
+This dated snapshot supersedes earlier phase summaries wherever they describe work as not yet implemented or verified. Earlier entries are retained as historical records of the state at the time they were written; they are not a claim that the current branch is still at that phase.
+
+- Repository: `kyamixdd/Black-Market-AI`
+- Working branch: `black-market-ai-beta`
+- Audited branch head: `db3fc448af100236efac42ee8ed8e2fbe6a162d7`
+- Latest promotion to `main` observed: `07817c4881b563fff9bcdc4f933d2c0f2449728c` (PR #32)
+- Latest GitHub Actions run observed for the branch head: run #343, conclusion `success`
+
+### Current verified/implemented milestones
+
+- Windows build pipeline creates a bundled backend executable and NSIS installer.
+- CI installer smoke test installs the package, starts the app with Python removed from PATH, checks backend/database/WebSocket readiness, closes the app, and verifies backend shutdown/uninstall behavior.
+- The development host log records 282 passing Python tests, with third-party deprecation warnings; desktop frontend build/tests and native lifecycle checks were also recorded.
+- Manual paper order/position operations, runtime settings persistence, market analytics/freshness, scanner coverage/streaming integration, and stronger model confidence/promotion gates have been merged into the current development line.
+- API/session security and SQLite durability/recovery protections have been improved; SQLite and backup files remain unencrypted by the application.
+
+### Remaining release limitations
+
+- Windows clean-machine manual UI acceptance, release artifact verification/signing, and versioned release process remain required.
+- The Next.js website is a private-preview path. It uses a single-password session gate and is not a multi-user hosted service.
+- Hosted backend/database/SSE/market-data/trading lifecycle must be verified end to end before public web release.
+- A Vercel deployment status associated with the recent promotion reported failure; inspect the deployment logs and verify the intended deployment before treating the hosted site as release-ready.
+- Live Binance connectivity and future ML performance cannot be guaranteed by deterministic CI or historical validation.
+
+See `RELEASE_READINESS.md` for the current score, release decision, and P0/P1 checklist. The current engineering maturity assessment is 7.8/10; this is a qualitative audit score, not a profitability or security guarantee.
+
+
+---
+
+## Branch status snapshot — 2026-11-22
+
+### Revision and CI
+
+- Repository: `kyamixdd/Black-Market-AI`
+- Development branch: `black-market-ai-beta`
+- Audited revision: `db3fc448af100236efac42ee8ed8e2fbe6a162d7`
+- Promotion revision observed on `main`: `07817c4881b563fff9bcdc4f933d2c0f2449728c` (PR #32)
+- CI run #343 for the audited revision: success
+
+### Current implementation
+
+- Windows build pipeline produces a bundled backend executable and NSIS installer.
+- Installer CI smoke test covers installation, startup with Python removed from PATH, backend/database/WebSocket readiness, shutdown and uninstall.
+- Development host records 282 passing Python tests with third-party deprecation warnings.
+- Desktop frontend build/tests and native lifecycle checks are recorded.
+- Manual paper order/position operations, runtime settings persistence, market analytics/freshness, scanner coverage/streaming integration, and model confidence/promotion gates are present in the current development line.
+- API/session security and SQLite durability/recovery have been updated. SQLite database and backup files remain unencrypted by the application.
+
+### Open release work
+
+- Complete clean-machine manual UI acceptance and release artifact verification.
+- Verify installer signing, versioning, upgrade and uninstall behavior.
+- Keep the Next.js website classified as private preview until hosted backend, database, SSE, market-data and paper-trading E2E checks pass.
+- Resolve and verify the reported Vercel deployment failure before treating the hosted site as available.
+- Live exchange reliability and future model performance remain outside deterministic CI guarantees.
+
+See `RELEASE_READINESS.md` for the component assessment and release acceptance criteria.
