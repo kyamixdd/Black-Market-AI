@@ -106,9 +106,13 @@ The desktop API binds to loopback by default and requires bearer authentication.
 
 SQLite databases, model artifacts and backup archives are not application-encrypted. Protect local data using OS-level encryption and access controls. See [Backup and Recovery](BACKUP_GUIDE.md).
 
-## Public release requirements
+## License and distribution
 
-The repository does not currently contain a `LICENSE` file. A license must be selected and added before public distribution. Public release also requires the acceptance items in [RELEASE_READINESS.md](RELEASE_READINESS.md), including installer/source identity, Windows upgrade/uninstall checks, signing status disclosure, security review and release artifact verification.
+BlackMarket AI is proprietary software. All rights reserved. No permission is granted to copy, modify, redistribute, sublicense, or create derivative or competing products from this source code without prior written permission. See [LICENSE](LICENSE).
+
+The public GitHub repository is source-visible; repository access is not a commercial software license. The commercial product is intended to be distributed as an application, subject to a separate end-user license agreement (EULA). Third-party components remain subject to their own licenses.
+
+Public release also requires the acceptance items in [RELEASE_READINESS.md](RELEASE_READINESS.md), including installer/source identity, Windows upgrade/uninstall checks, signing status disclosure, security review and release artifact verification.
 
 ## Documentation
 
