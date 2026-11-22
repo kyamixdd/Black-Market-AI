@@ -1093,6 +1093,7 @@ function CommunityLibraryScreen() {
   const [sort, setSort] = useState('recent')
   const [selected, setSelected] = useState<CommunityStrategy | null>(null)
   const [busy, setBusy] = useState(false)
+  const publishLock = useRef(false)
   const [notice, setNotice] = useState('')
   const [pendingItemActions, setPendingItemActions] = useState<Set<string>>(() => new Set())
   const [name, setName] = useState('')
@@ -1126,6 +1127,8 @@ function CommunityLibraryScreen() {
 
   const publish = async (event: FormEvent) => {
     event.preventDefault()
+    if (publishLock.current) return
+    publishLock.current = true
     setBusy(true)
     setNotice('')
     try {
@@ -1165,6 +1168,7 @@ function CommunityLibraryScreen() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to publish strategy.')
     } finally {
+      publishLock.current = false
       setBusy(false)
     }
   }
@@ -1183,6 +1187,7 @@ function CommunityLibraryScreen() {
   }
 
   const editStrategy = (item: CommunityStrategy) => {
+    if (busy) { setNotice('Wait for the current publish operation to finish before editing.'); return }
     setEditingId(item.public_id)
     setName(item.name)
     setDescription(item.description)
@@ -1288,7 +1293,7 @@ function CommunityLibraryScreen() {
     </section>}
     <section className="workspace-panel">
       <h2>{editingId ? 'Update published strategy' : 'Publish a strategy'}</h2>
-      {editingId && <button className="table-action" type="button" onClick={() => { setEditingId(null); setName(''); setNotice('Editing cancelled.') }}>Cancel version update</button>}
+      {editingId && <button className="table-action" type="button" onClick={() => { if (busy) return; setEditingId(null); setName(''); setDescription(''); setNotice('Editing cancelled.') }}>Cancel version update</button>}
       <p className="workspace-note">Only the fields below are published. Account balances, credentials, private trades, and personal settings are not sent. Backtest metrics are marked user-submitted, not verified.</p>
       <form className="workspace-form" onSubmit={publish}>
         <label>Strategy name<input className="workspace-search" required minLength={2} maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
