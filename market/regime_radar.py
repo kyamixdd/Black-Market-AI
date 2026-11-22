@@ -44,7 +44,7 @@ def classify_market_regime(
         "symbol": symbol.upper(), "market": market.upper(), "timeframe": timeframe,
         "classified_at": timestamp, "data_completeness": round(completeness, 4),
         "sample_count": len(rows), "expected_sample_count": expected_candles,
-        "classification_confidence": None, "confidence_type": "rule_strength_not_probability",
+        "classification_confidence": None, "confidence_type": "not_statistically_calibrated",
         "supporting_indicators": {}, "evidence": [], "limitations": [
             "Rule-based descriptive classification; not a prediction or calibrated probability.",
             "Historical candles may be delayed or incomplete; verify freshness before acting.",
@@ -91,15 +91,10 @@ def classify_market_regime(
         regime = "MIXED"
         evidence.append("Trend alignment does not meet the defined uptrend, downtrend, or range-bound rules.")
 
-    # Strength is rule-margin based and intentionally not described as probability.
-    threshold = 2.5 if regime == "HIGH_VOLATILITY" else 0.45 if regime == "LOW_VOLATILITY" else 0.5
-    metric = realized_vol_pct if regime in {"HIGH_VOLATILITY", "LOW_VOLATILITY"} else abs(slope_pct)
-    margin = abs(metric - threshold) / max(threshold, 1e-9)
-    strength = max(0.0, min(1.0, margin / 2.0))
-    if volume_ratio is not None:
+    # No calibrated confidence model is available; avoid publishing a pseudo-probability.\n    if volume_ratio is not None:
         evidence.append(f"Latest volume is {volume_ratio:.2f}x the 20-candle average.")
     return {
         **base, "regime": regime, "status": "READY",
-        "classification_confidence": round(strength, 3),
+        "classification_confidence": None,
         "supporting_indicators": indicators, "evidence": evidence,
     }
