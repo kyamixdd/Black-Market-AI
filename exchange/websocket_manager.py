@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 
 import websockets
 
 from .rate_limiter import RateLimiter
+from market.data_reliability import MarketDataState
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,13 @@ class WebSocketManager:
                                base_url, exc, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2.0, 30.0)
+
+    def status_snapshot(self) -> dict:
+        active = any(not task.done() for task in self._tasks)
+        state = "RECONNECTING" if active and self._running else "OFFLINE" if not self._running else "UNAVAILABLE"
+        return {"state": state, "last_message_ms": None, "message_age_ms": None,
+                "reconnect_attempts": None,
+                "active_streams": len(self._spot_streams) + len(self._futures_streams)}
 
     async def start(self, spot_streams: list[str], futures_streams: list[str]) -> None:
         if self._running:
