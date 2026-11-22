@@ -57,7 +57,6 @@ from src_tauri.backend.api.websocket.manager import WebSocketManager
 from src_tauri.backend.bridge.orchestrator_bridge import get_bridge
 
 logger = logging.getLogger(__name__)
-configure_structured_logging(LOG_LEVEL)
 
 # Global instances
 orchestrator: Orchestrator | None = None
@@ -117,6 +116,7 @@ async def lifespan(app: FastAPI):
     event_task: asyncio.Task | None = None
     orchestrator_task: asyncio.Task | None = None
 
+    configure_structured_logging(LOG_LEVEL)
     log_event(logger, logging.INFO, "backend_starting", component="api")
 
     # Validate configuration
@@ -460,10 +460,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
 
-    logging.basicConfig(
-        level=getattr(logging, LOG_LEVEL),
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    )
+    configure_structured_logging(LOG_LEVEL)
 
     server = uvicorn.Server(
         uvicorn.Config(
@@ -472,6 +469,7 @@ if __name__ == "__main__":
             port=int(os.environ.get("BLACKMARKET_API_PORT", "8765")),
             reload=False,
             log_level=LOG_LEVEL.lower(),
+            log_config=None,
         )
     )
     _request_server_shutdown = lambda: setattr(server, "should_exit", True)
