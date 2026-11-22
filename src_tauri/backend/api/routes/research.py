@@ -88,7 +88,7 @@ def list_saved_strategies():
 @router.post("/strategies")
 def save_strategy(request: StrategyRequest):
     return _repo().save_strategy_definition({
-        "strategy_id": uuid.uuiduuid4().hex if False else uuid.uuid4().hex,
+        "strategy_id": uuid.uuid4().hex,
         **request.model_dump(),
     })
 
