@@ -1092,6 +1092,7 @@ function CommunityLibraryScreen() {
   const [showFavorites, setShowFavorites] = useState(false)
   const [sort, setSort] = useState('recent')
   const [selected, setSelected] = useState<CommunityStrategy | null>(null)
+  const detailRequestId = useRef(0)
   const [busy, setBusy] = useState(false)
   const publishLock = useRef(false)
   const [notice, setNotice] = useState('')
@@ -1174,14 +1175,31 @@ function CommunityLibraryScreen() {
   }
 
   const openDetails = async (item: CommunityStrategy) => {
+    const requestId = ++detailRequestId.current
     try {
       const detail = await requestJson<CommunityStrategy>(`/community/strategies/${item.public_id}`)
-      if (!detail || detail.public_id !== item.public_id || typeof detail.name !== 'string' || !detail.backtest_report || typeof detail.backtest_report !== 'object') {
-        setNotice('Strategy details are incomplete or invalid. The details panel was not opened.')
+      if (requestId !== detailRequestId.current) return
+      const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
+      const history = detail?.version_history
+      const validHistory = history == null || (Array.isArray(history) && history.every(version =>
+        version && Number.isInteger(version.version) && version.version > 0 &&
+        (version.created_at == null || typeof version.created_at === 'string') &&
+        isRecord(version.snapshot) &&
+        (version.snapshot.name == null || typeof version.snapshot.name === 'string')))
+      if (!detail || detail.public_id !== item.public_id || typeof detail.name !== 'string' ||
+          typeof detail.description !== 'string' ||
+          !Array.isArray(detail.supported_assets) || !detail.supported_assets.every(value => typeof value === 'string') ||
+          !Array.isArray(detail.supported_timeframes) || !detail.supported_timeframes.every(value => typeof value === 'string') ||
+          !Array.isArray(detail.known_limitations) || !detail.known_limitations.every(value => typeof value === 'string') ||
+          !isRecord(detail.backtest_report) || !isRecord(detail.rules) || !isRecord(detail.risk_configuration) ||
+          typeof detail.report_provenance !== 'string' || typeof detail.report_sha256 !== 'string' ||
+          !validHistory) {
+        setNotice('Strategy details or version history are incomplete or invalid. The details panel was not opened.')
         return
       }
-      setSelected(detail)
+      setSelected({ ...detail, version_history: history ?? [] })
     } catch (error) {
+      if (requestId !== detailRequestId.current) return
       setNotice(error instanceof Error ? error.message : 'Unable to load strategy details.')
     }
   }
@@ -1281,7 +1299,7 @@ function CommunityLibraryScreen() {
       {!items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
     </section>
     {selected && <section className="workspace-panel">
-      <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => setSelected(null)}>Close</button></div>
+      <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => { detailRequestId.current += 1; setSelected(null) }}>Close</button></div>
       <p>{selected.description}</p>
       <p className="workspace-note">Shared report: {selected.report_provenance.replaceAll('_',' ')} · SHA-256 {selected.report_sha256 || 'not available'}. Reproducibility: {selected.reproducibility_status ?? 'NOT_REPLAYED'} · Verification: {selected.verification_status ?? 'NOT_VERIFIED'}. The digest confirms stored content integrity only; locally generated reports have not been independently replayed or verified.</p>
       <h3>Submitted backtest summary</h3><pre className="workspace-code">{JSON.stringify(selected.backtest_report, null, 2)}</pre>
