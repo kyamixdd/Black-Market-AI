@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { rateLimited, requestClientKey } from "./rate-limit-core.mjs";
+import { rateLimited, requestClientKey, isSameOriginMutation } from "./rate-limit-core.mjs";
 export { rateLimited, requestClientKey };
 
 export async function readLimitedBody(request: NextRequest, maxBytes: number): Promise<string> {
