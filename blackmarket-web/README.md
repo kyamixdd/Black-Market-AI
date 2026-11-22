@@ -5,13 +5,13 @@ The canonical React + TypeScript dashboard lives in `../blackmarket-desktop/src`
 - **Desktop:** Vite + Tauri with a supervised local backend at `127.0.0.1:8765`.
 - **Website:** Next.js session/login and same-origin backend proxy; REST calls use `/api/backend` and live events use the authenticated SSE proxy.
 
-Do not fork the dashboard into a separate website implementation.
+Dashboard changes are maintained in the canonical shared source tree.
 
 ## Status
 
 The website is an **optional private-preview path**, not the supported public hosted product. The primary release path is the Tauri desktop application with its local backend.
 
-The latest audited branch head is `db3fc448af100236efac42ee8ed8e2fbe6a162d7`. CI run #343 reported success. Hosted website readiness still requires deployment-specific end-to-end verification; a successful frontend build does not prove the remote API, database, event stream, market-data freshness, or trading workflow is operational.
+Audit snapshot: `db3fc448af100236efac42ee8ed8e2fbe6a162d7`. CI run #343 completed successfully for that snapshot. Deployment acceptance requires end-to-end checks for the remote API, database persistence, event stream, market-data freshness, and paper-trading workflows.
 
 ## Website environment
 
@@ -22,7 +22,7 @@ Copy `.env.example` to `.env.local` and configure these server-only variables:
 - `BLACKMARKET_WEB_PASSWORD` — strong private-preview password.
 - `BLACKMARKET_API_TOKEN` — high-entropy bearer token shared with the backend.
 
-Never expose the session secret, preview password, or backend token to browser code or public build-time variables.
+Session secrets, preview credentials, and backend tokens must remain server-side and must not be included in client bundles or public build variables.
 
 ## Backend requirements for remote preview
 
@@ -52,6 +52,6 @@ Deploy the Next.js app as a Node.js service. The deployment must include `blackm
 
 ## Authentication limitations
 
-The current website gate is a single-password private-preview session, not multi-user identity, roles, MFA, or account recovery. Do not use it as a public customer authentication system.
+The current website gate is a single-password private-preview session, not multi-user identity, roles, MFA, or account recovery. The current authentication model is limited to private preview use.
 
 See the root [SECURITY.md](../SECURITY.md) and [RELEASE_READINESS.md](../RELEASE_READINESS.md) for security and release requirements.
