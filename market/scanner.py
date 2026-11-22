@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from asyncio import Semaphore
 from datetime import datetime, timezone
 
@@ -89,6 +88,11 @@ class Scanner:
         ]
         candidates.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
         if not candidates:
+            self._scan_status[market].update({
+                "state": "NO_ELIGIBLE_DATA", "completed_at": datetime.now(timezone.utc).isoformat(),
+                "symbols_selected": 0, "refresh_successes": 0, "refresh_failures": 0,
+                "last_error": "No eligible ticker snapshot available",
+            })
             return
 
         # Rotate through the full eligible universe in bounded batches. This avoids
@@ -119,7 +123,12 @@ class Scanner:
                     await self.candle_manager.collect_historical(
                         self.spot_client, self.futures_client, market, symbol, timeframe, limit=200,
                     )
-                    return True
+                    collection = self.candle_manager.get_collection_status(market, symbol, timeframe)
+                    if collection and collection.get("state") == "FAILED":
+                        status["refresh_failures"] += 1
+                        status["last_error"] = f"{symbol} {timeframe}: {collection.get('error')}"
+                        return False
+                    return bool(collection and collection.get("state") == "SUCCESS")
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
