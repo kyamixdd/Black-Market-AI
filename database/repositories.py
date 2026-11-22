@@ -492,7 +492,7 @@ class Repository:
     # --- Public strategy library ---
     @staticmethod
     def _public_strategy_dict(obj: PublicStrategyModel, *, favorite_count: int = 0,
-                              is_favorite: bool = False) -> dict[str, Any]:
+                              is_favorite: bool = False, is_owner: bool = False) -> dict[str, Any]:
         return {
             "public_id": obj.public_id, "name": obj.name, "description": obj.description,
             "strategy_key": obj.strategy_key, "rules": json.loads(obj.rules_json),
@@ -504,7 +504,7 @@ class Repository:
             "report_provenance": obj.report_provenance,
             "report_sha256": obj.report_sha256,
             "version": obj.version, "favorite_count": favorite_count,
-            "is_favorite": is_favorite, "created_at": obj.created_at.isoformat() if obj.created_at else None,
+            "is_favorite": is_favorite, "is_owner": is_owner, "created_at": obj.created_at.isoformat() if obj.created_at else None,
             "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
         }
 
@@ -567,7 +567,7 @@ class Repository:
             for row in rows:
                 count = session.scalar(select(func.count()).select_from(StrategyFavoriteModel).where(StrategyFavoriteModel.public_id == row.public_id)) or 0
                 fav = bool(owner_key and session.get(StrategyFavoriteModel, (owner_key, row.public_id)))
-                output.append(self._public_strategy_dict(row, favorite_count=count, is_favorite=fav))
+                output.append(self._public_strategy_dict(row, favorite_count=count, is_favorite=fav, is_owner=bool(owner_key and owner_key == row.owner_key)))
             return output
 
     def get_public_strategy(self, public_id: str, owner_key: str | None = None) -> dict[str, Any] | None:
@@ -577,7 +577,7 @@ class Repository:
                 return None
             count = session.scalar(select(func.count()).select_from(StrategyFavoriteModel).where(StrategyFavoriteModel.public_id == public_id)) or 0
             fav = bool(owner_key and session.get(StrategyFavoriteModel, (owner_key, public_id)))
-            result = self._public_strategy_dict(obj, favorite_count=count, is_favorite=fav)
+            result = self._public_strategy_dict(obj, favorite_count=count, is_favorite=fav, is_owner=bool(owner_key and owner_key == obj.owner_key))
             versions = session.scalars(select(PublicStrategyVersionModel).where(
                 PublicStrategyVersionModel.public_id == public_id).order_by(PublicStrategyVersionModel.version.desc())).all()
             result["version_history"] = [{"version": v.version, "created_at": v.created_at.isoformat() if v.created_at else None,
