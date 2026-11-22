@@ -151,5 +151,5 @@ export const requestJson = <T>(path: string, api = true): Promise<T | null> =>
     return null
   }) : client.requestJson<T>(`http://127.0.0.1:8765${path}`).catch(() => null)
 
-export const mutateJson = <T>(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): Promise<T> =>
+export const mutateJson = <T>(path: string, method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', body?: unknown): Promise<T> =>
   client.requestJson<T>(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
