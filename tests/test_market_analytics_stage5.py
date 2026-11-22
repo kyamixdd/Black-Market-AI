@@ -1,6 +1,7 @@
 """Deterministic regression tests for Stage 5 analytics."""
 import math
 
+import numpy as np
 import pytest
 
 from market.analytics import (
@@ -58,3 +59,15 @@ def test_candle_manager_rejects_bad_ohlcv_and_reports_missing_intervals():
     assert not manager.add_candle("SPOT", "BTCUSDT", "1m", base + 60_000, 100, 98, 99, 101, 5)
     assert manager.add_candle("SPOT", "BTCUSDT", "1m", base + 180_000, 101, 103, 100, 102, 5)
     assert manager.detect_missing_candles("SPOT", "BTCUSDT", "1m") == [base + 60_000, base + 120_000]
+
+def test_wilder_adx_is_smoothed_and_requires_full_initialization():
+    from market.momentum_analyzer import MomentumAnalyzer
+
+    closes = np.array([100.0 + index for index in range(40)])
+    highs = closes + 1.0
+    lows = closes - 1.0
+    result = MomentumAnalyzer.adx(highs, lows, closes, period=14)
+    assert 0 <= result["adx"] <= 100
+    assert result["plus_di"] > result["minus_di"]
+    insufficient = MomentumAnalyzer.adx(highs[:20], lows[:20], closes[:20], period=14)
+    assert insufficient["adx"] == 0.0
