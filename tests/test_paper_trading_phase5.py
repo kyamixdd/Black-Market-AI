@@ -1334,6 +1334,7 @@ async def test_opening_position_at_entry_price_preserves_portfolio_equity(
     simulator = Simulator(EventBus())
     simulator.fee_calc.calculate = lambda *_args: 0.0
     simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
+    simulator.risk_manager.max_risk_pct = 2.0
     simulator.validate_new_position = lambda *_args: (True, "OK")
     simulator._calculate_order_quantity = lambda *_args: (1.0, leverage)
 
@@ -1349,7 +1350,7 @@ async def test_opening_position_at_entry_price_preserves_portfolio_equity(
         "market": market,
         "direction": "LONG",
         "entry": 100.0,
-        "stop_loss": 90.0,
+        "stop_loss": 96.0,
         "take_profit": [120.0],
         "leverage": leverage,
     }
