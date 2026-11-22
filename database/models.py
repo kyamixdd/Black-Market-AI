@@ -332,6 +332,7 @@ class PublicStrategyModel(Base):
     risk_json = Column(Text, nullable=False, default="{}")
     limitations_json = Column(Text, nullable=False, default="[]")
     report_json = Column(Text, nullable=False, default="{}")
+    report_sha256 = Column(String(64), nullable=False, default="")
     report_provenance = Column(String(32), nullable=False, default="USER_SUBMITTED")
     version = Column(Integer, nullable=False, default=1)
     visibility = Column(String(16), nullable=False, default="PUBLIC")
