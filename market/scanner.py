@@ -6,6 +6,7 @@ import math
 import time
 import logging
 from asyncio import Semaphore
+from datetime import datetime, timezone
 
 from core.event_bus import EventBus
 from core.event_models import EventType, make_event
@@ -56,6 +57,18 @@ class Scanner:
         self.analysis_timeframes = tuple(TIMEFRAMES)
         self._running = False
         self._tasks: list[asyncio.Task] = []
+        self._scan_status: dict[str, dict] = {market: {"state": "IDLE", "started_at": None, "completed_at": None, "symbols_selected": 0, "timeframes_configured": list(self.analysis_timeframes), "refresh_successes": 0, "refresh_failures": 0, "last_error": None} for market in ("SPOT", "FUTURES")}
+
+    def status_snapshot(self) -> dict:
+        return {
+            "running": self._running,
+            "markets": {market: {**status, "timeframes_configured": list(status["timeframes_configured"])} for market, status in self._scan_status.items()},
+            "configured_timeframes": list(self.analysis_timeframes),
+            "analysis_batch_size": self.analysis_symbol_limit,
+            "scan_all_eligible": self.scan_all_eligible,
+            "stream_symbol_limit": self.stream_symbol_limit,
+            "max_concurrent_scans": self.max_concurrent_scans,
+        }
 
     async def _analyze_market(self, market: str) -> None:
         """Refresh candles for the most liquid symbols, then run strategy analysis."""
@@ -73,11 +86,12 @@ class Scanner:
 
         # Rotate through the full eligible universe in bounded batches. This avoids
         # permanently ignoring symbols beyond the first page while controlling REST load.
-        batch_size = self.analysis_symbol_limit
+        batch_size = min(self.analysis_symbol_limit, len(candidates) if self.scan_all_eligible else self.analysis_symbol_limit)
         offset = self._analysis_offsets.get(market, 0)
         if self.scan_all_eligible:
-            selected = (candidates + candidates)[offset:offset + batch_size]
-            self._analysis_offsets[market] = (offset + batch_size) % len(candidates)
+            end = offset + batch_size
+            selected = candidates[offset:end] + candidates[:max(0, end - len(candidates))]
+            self._analysis_offsets[market] = end % len(candidates)
         else:
             selected = candidates[:batch_size]
             self._analysis_offsets[market] = 0
