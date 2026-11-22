@@ -526,7 +526,8 @@ class Repository:
                 "risk_json": self._json_value(record.get("risk_configuration", {})),
                 "limitations_json": self._json_value(record.get("known_limitations", [])),
                 "report_json": report_json, "report_sha256": sha256(report_json.encode("utf-8")).hexdigest(),
-                "report_provenance": record.get("report_provenance", "USER_SUBMITTED"),\n                "source_report_id": record.get("source_report_id"), "version": version, "visibility": "PUBLIC",
+                "report_provenance": record.get("report_provenance", "USER_SUBMITTED"),
+                "source_report_id": record.get("source_report_id"), "version": version, "visibility": "PUBLIC",
             }
             if obj is None:
                 obj = PublicStrategyModel(public_id=record["public_id"], **values)
@@ -697,7 +698,8 @@ class Repository:
                 "symbol": record["symbol"], "market": record["market"], "timeframe": record["timeframe"],
                 "status": record.get("status", "saved"),
                 "config_json": self._json_value(record.get("config", {})),
-                "report_json": self._json_value(record.get("report", {})),\n                "origin": record.get("origin", "USER_SUBMITTED"),
+                "report_json": self._json_value(record.get("report", {})),
+                "origin": record.get("origin", "USER_SUBMITTED"),
             }
             if obj is None:
                 obj = BacktestReportModel(report_id=record["report_id"], **values)
