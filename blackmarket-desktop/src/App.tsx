@@ -889,21 +889,57 @@ function App() {
     return `${marketInfo} Ask about opportunities, signals, rejected trades, regime, portfolio, learning, or risk for a local-data summary.`
   }
 
-  const sendMessage = (text: string) => {
+  const sendMessage = async (text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
-    const id = messages.length + 1
+    const userId = Date.now()
+    const assistantId = userId + 1
     setMessages((current) => [
       ...current,
-      { id, role: 'user', text: trimmed },
-      { id: id + 1, role: 'assistant', text: assistantAnswer(trimmed) },
+      { id: userId, role: 'user', text: trimmed },
+      { id: assistantId, role: 'assistant', text: 'Checking the local market data…' },
     ])
     setMessageInput('')
+    try {
+      const response = await requestJson<{
+        answer?: string
+        status?: string
+        tool?: string
+        sources?: string[]
+        disclaimer?: string
+      }>('/assistant/query', true)
+      // requestJson's generic GET helper is used elsewhere; assistant requires POST.
+      const payload = await mutateJson<{
+        answer?: string
+        status?: string
+        tool?: string
+        sources?: string[]
+        disclaimer?: string
+      }>('/assistant/query', 'POST', {
+        query: trimmed,
+        symbol,
+        market: marketType,
+        timeframe,
+      })
+      const answer = payload?.answer
+        ? `${payload.answer}${payload.sources?.length ? `\\n\\nSource: ${payload.sources.join(', ')}` : ''}${payload.disclaimer ? `\\n\\n${payload.disclaimer}` : ''}`
+        : 'The local assistant endpoint returned no answer. Check the backend connection and try again.'
+      setMessages((current) => current.map((message) =>
+        message.id === assistantId ? { ...message, text: answer } : message,
+      ))
+    } catch (error) {
+      const fallback = assistantAnswer(trimmed)
+      setMessages((current) => current.map((message) =>
+        message.id === assistantId
+          ? { ...message, text: `Local assistant unavailable (${String(error)}).\\n\\nFallback summary from currently loaded dashboard data: ${fallback}` }
+          : message,
+      ))
+    }
   }
 
   const submitMessage = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    sendMessage(messageInput)
+    void sendMessage(messageInput)
   }
 
   const changeNavigation = (label: ScreenName) => {
