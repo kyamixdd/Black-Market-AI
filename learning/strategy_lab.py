@@ -222,6 +222,8 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
                 stop = _number(signal.get("stop_loss"), "signal.stop_loss", 0.00000001)
                 targets = signal.get("take_profit") or []
                 target = _number(targets[0] if isinstance(targets, list) else targets, "signal.take_profit", 0.00000001)
+                if config.market == "SPOT" and side in {"SHORT", "SELL"}:
+                    continue
                 if side in {"LONG", "BUY"} and stop < entry < target or side in {"SHORT", "SELL"} and target < entry < stop:
                     risk_per_unit = abs(entry - stop)
                     risk_cash = equity * risk_pct / 100.0
