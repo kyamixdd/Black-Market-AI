@@ -1,4 +1,4 @@
-import { getApiToken } from './localAuth'
+import { getApiToken } from './localAuth.ts'
 
 type EventCallback = (data: unknown) => void
 
