@@ -165,7 +165,7 @@ class Scanner:
         if event_time_ms and (event_time_ms > now_ms + 5_000 or event_time_ms < now_ms - 120_000):
             return
         if valid_price(price) and valid_volume(volume) and math.isfinite(change):
-            self.cache.update_ticker(market, str(symbol), price, volume, change, source="WEBSOCKET") if hasattr(self.cache, "source_aware") else self.cache.update_ticker(market, str(symbol), price, volume, change)
+            self.cache.update_ticker(market, str(symbol), price, volume, change, source="WEBSOCKET")
 
     async def _refresh_stream_subscriptions(self, market: str) -> None:
         if self.websocket_manager is None:
