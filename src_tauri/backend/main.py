@@ -94,6 +94,8 @@ def _api_host() -> str:
     if _REMOTE_API_ENABLED:
         if not _api_token:
             raise RuntimeError("BLACKMARKET_API_TOKEN is required when remote API mode is enabled.")
+        if len(_api_token.encode("utf-8")) < 32:
+            raise RuntimeError("BLACKMARKET_API_TOKEN must be at least 32 bytes when remote API mode is enabled.")
         if host not in {"0.0.0.0", "::"} and not _is_loopback(host):
             raise RuntimeError("Remote API host must be 0.0.0.0, ::, or loopback.")
         return host
