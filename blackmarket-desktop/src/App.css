@@ -2738,3 +2738,140 @@ button, input, select, textarea { min-width: 0; }
   .workspace-toolbar .workspace-search { flex: 1 1 100%; }
   .workspace-summary-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+/* Strategy Lab: keep research forms aligned with the shared terminal UI. */
+.strategy-lab,
+.strategy-lab > *,
+.strategy-lab .workspace-panel {
+  min-width: 0;
+  max-width: 100%;
+}
+.strategy-lab .workspace-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+.strategy-lab .workspace-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.strategy-lab .workspace-form-grid > label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.strategy-lab .workspace-form-grid input,
+.strategy-lab .workspace-form-grid select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid var(--border-panel);
+  border-radius: 5px;
+  background: var(--bg-terminal);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 11px;
+}
+.strategy-lab .workspace-form-grid input:focus-visible,
+.strategy-lab .workspace-form-grid select:focus-visible,
+.strategy-lab button:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+}
+.strategy-lab .workspace-form-grid > button {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  align-self: end;
+  padding: 7px 10px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.strategy-lab .workspace-form > .primary-action,
+.strategy-lab .workspace-form > .table-action {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  margin: 0;
+  padding: 9px 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.strategy-lab .persistence-panel .workspace-form-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr);
+  gap: 10px;
+}
+.strategy-lab .persistence-panel .workspace-form-grid > label {
+  align-self: stretch;
+}
+.strategy-lab .persistence-panel .workspace-form-grid > button {
+  min-height: 38px;
+}
+.strategy-lab .workspace-panel details,
+.strategy-lab details {
+  min-width: 0;
+  max-width: 100%;
+}
+.strategy-lab pre,
+.strategy-lab .workspace-code {
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.strategy-lab .strategy-equity-chart {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+.strategy-lab .workspace-panel .workspace-note {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .strategy-lab .workspace-form-grid,
+  .strategy-lab .persistence-panel .workspace-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+  }
+  .strategy-lab .workspace-form-grid > label,
+  .strategy-lab .workspace-form-grid > button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  .strategy-lab .workspace-form-grid input,
+  .strategy-lab .workspace-form-grid select,
+  .strategy-lab .workspace-form-grid > button {
+    min-height: 42px;
+    font-size: 12px;
+  }
+  .strategy-lab .workspace-form > .primary-action,
+  .strategy-lab .workspace-form > .table-action {
+    min-height: 42px;
+    font-size: 12px;
+  }
+  .strategy-lab .workspace-panel {
+    padding: 10px;
+  }
+}
+@media (max-width: 360px) {
+  .strategy-lab .workspace-panel h2 {
+    font-size: 12px;
+  }
+  .strategy-lab .workspace-form-grid input,
+  .strategy-lab .workspace-form-grid select {
+    padding-inline: 7px;
+  }
+}

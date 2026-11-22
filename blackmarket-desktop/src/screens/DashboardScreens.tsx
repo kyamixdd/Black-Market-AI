@@ -1288,6 +1288,11 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     setSavedStrategies(strategies?.strategies ?? [])
     setSavedReports(reports?.reports ?? [])
     setSavedWorkspaces(workspaces?.workspaces ?? [])
+    if (!strategies || !reports || !workspaces) {
+      setPersistenceMessage('Saved research could not be loaded. Check the backend connection and try again.')
+      return false
+    }
+    return true
   }
   useEffect(() => { void reloadSaved() }, [])
   useEffect(() => {
@@ -1341,9 +1346,21 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     setPersistenceMessage('Saved strategy configuration loaded into the form.')
   }
   const loadChosenReport = async () => {
-    if (!chosenReportId) return
-    const report = await requestJson<any>(`/research/reports/${encodeURIComponent(chosenReportId)}`)
-    if (report) setLoadedReport(report)
+    if (!chosenReportId) {
+      setPersistenceMessage('Choose a saved report first.')
+      return
+    }
+    try {
+      const report = await requestJson<any>(`/research/reports/${encodeURIComponent(chosenReportId)}`)
+      if (!report) {
+        setPersistenceMessage('Unable to open this report. Check the backend connection and try again.')
+        return
+      }
+      setLoadedReport(report)
+      setPersistenceMessage('Saved report opened.')
+    } catch (reason) {
+      setPersistenceMessage(reason instanceof Error ? reason.message : String(reason))
+    }
   }
   const saveWorkspaceSnapshot = async () => {
     try {
@@ -1364,9 +1381,16 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     }
   }
   const loadChosenWorkspace = async () => {
-    if (!chosenWorkspaceId) return
-    const workspace = await requestJson<any>(`/research/workspaces/${encodeURIComponent(chosenWorkspaceId)}`)
-    if (workspace) {
+    if (!chosenWorkspaceId) {
+      setPersistenceMessage('Choose a saved workspace first.')
+      return
+    }
+    try {
+      const workspace = await requestJson<any>(`/research/workspaces/${encodeURIComponent(chosenWorkspaceId)}`)
+      if (!workspace) {
+        setPersistenceMessage('Unable to restore this workspace. Check the backend connection and try again.')
+        return
+      }
       setLoadedWorkspace(workspace)
       onWorkspaceLoad(workspace)
       const savedLab = workspace.payload?.strategyLab
@@ -1387,6 +1411,8 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
         if (savedLab.comparison) setComparison(savedLab.comparison)
       }
       setPersistenceMessage('Workspace snapshot loaded into the dashboard.')
+    } catch (reason) {
+      setPersistenceMessage(reason instanceof Error ? reason.message : String(reason))
     }
   }
   const run = async (event: FormEvent) => {
