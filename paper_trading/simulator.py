@@ -14,6 +14,8 @@ from config import (
     MAX_SPOT_POSITIONS,
     RISK_MAX_DAILY_LOSS_PCT,
     RISK_MAX_LEVERAGE,
+    RISK_MAX_POSITION_SIZE_PCT,
+    RISK_MAX_ASSET_EXPOSURE_PCT,
     RISK_MAX_TOTAL_OPEN_PCT,
     RISK_PER_TRADE_PCT,
     SPOT_INITIAL_BALANCE,
@@ -62,6 +64,8 @@ class Simulator:
             max_leverage=RISK_MAX_LEVERAGE,
             max_spot_positions=MAX_SPOT_POSITIONS,
             max_futures_positions=MAX_FUTURES_POSITIONS,
+            max_position_size_pct=RISK_MAX_POSITION_SIZE_PCT,
+            max_asset_exposure_pct=RISK_MAX_ASSET_EXPOSURE_PCT,
         )
 
     def get_balance(self, market: str) -> float:
@@ -158,14 +162,16 @@ class Simulator:
 
     def _get_total_risk(self) -> float:
         total = 0.0
-        for pos in self.spot_positions.values():
-            if pos.get("stop_loss"):
-                risk = abs(pos["entry_price"] - pos["stop_loss"]) * pos["amount"]
-                total += risk
-        for pos in self.futures_positions.values():
-            if pos.get("stop_loss"):
-                risk = abs(pos["entry_price"] - pos["stop_loss"]) * pos["amount"]
-                total += risk
+        groups = (self.spot_positions, self.futures_positions)
+        for positions in groups:
+            for pos in positions.values():
+                if pos.get("status", "OPEN") not in ("OPEN", "CLOSING") or not pos.get("stop_loss"):
+                    continue
+                total += abs(float(pos["entry_price"]) - float(pos["stop_loss"])) * float(pos["amount"])
+        for order in self.open_orders.values():
+            if order.get("status") != "OPEN" or not order.get("stop_loss"):
+                continue
+            total += abs(float(order["entry_price"]) - float(order["stop_loss"])) * float(order["amount"])
         return total
 
     def _get_volume_24h(self, market: str, symbol: str) -> float:
@@ -224,16 +230,21 @@ class Simulator:
     def validate_new_position(self, signal: dict[str, Any], quantity_override: float | None = None) -> tuple[bool, str]:
         market = signal["market"]
         direction = signal["direction"]
+        if market not in ("SPOT", "FUTURES") or signal.get("direction") not in ("BUY", "SELL", "LONG", "SHORT"):
+            return False, "Unsupported market or direction"
         positions = self._get_positions(market)
+        pending = {
+            order_id: order for order_id, order in self.open_orders.items()
+            if order.get("market") == market and order.get("status") == "OPEN"
+        }
+        occupied = {**positions, **pending}
 
-        # Check total position limit using risk manager
-        max_positions = MAX_SPOT_POSITIONS if market == "SPOT" else MAX_FUTURES_POSITIONS
-        if not self.risk_manager.check_position_limit(positions, max_positions):
+        # Pending limit orders reserve slots and symbol exposure until filled or cancelled.
+        max_positions = self.risk_manager.max_spot_positions if market == "SPOT" else self.risk_manager.max_futures_positions
+        if not self.risk_manager.check_position_limit(occupied, max_positions):
             return False, f"Max {market} positions reached"
-
-        # Check per-symbol position limit
-        if not self.risk_manager.check_symbol_exposure(positions, signal["symbol"]):
-            return False, f"Position already open for {signal['symbol']} on {market}"
+        if not self.risk_manager.check_symbol_exposure(occupied, signal["symbol"]):
+            return False, f"Position already open or pending for {signal['symbol']} on {market}"
 
         # Daily loss is total mark-to-market equity drawdown from the fixed
         # UTC-day opening baseline, not merely closed-trade P&L.
@@ -249,6 +260,8 @@ class Simulator:
         if risk_amount <= 0:
             return False, "Invalid stop loss"
         qty, leverage = self._calculate_order_quantity(signal, balance)
+        if leverage < 1.0:
+            return False, "Invalid leverage"
         if quantity_override is not None:
             if quantity_override <= 0 or quantity_override > qty + 1e-9:
                 return False, "Requested quantity exceeds risk-sized maximum"
@@ -265,7 +278,15 @@ class Simulator:
             required_margin = qty * entry / leverage
             if required_margin + fee > balance + 1e-9:
                 return False, "Insufficient available Futures balance for margin and fees"
-        # Total open risk
+        # Enforce notional limits on actual intended entry and aggregate asset exposure.
+        notional = qty * float(signal["entry"])
+        if not self.risk_manager.check_position_notional(notional, total_balance):
+            return False, "Maximum position size exceeded"
+        if not self.risk_manager.check_asset_exposure(
+            self.spot_positions, signal["symbol"], notional, total_balance,
+            other_positions=self.futures_positions,
+        ):
+            return False, "Maximum asset exposure exceeded"
         total_risk = self._get_total_risk()
         new_risk = risk_amount * qty
         if not self.risk_manager.check_total_risk(total_risk, new_risk, total_balance):
