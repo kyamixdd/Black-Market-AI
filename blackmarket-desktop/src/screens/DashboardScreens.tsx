@@ -327,6 +327,7 @@ type Props = {
   onManualTrade: (payload: { symbol: string; market: 'SPOT' | 'FUTURES'; side: 'BUY' | 'SELL' | 'LONG' | 'SHORT'; order_type: 'MARKET' | 'LIMIT'; quantity: number; price?: number; stop_loss: number; take_profit?: number; leverage: number }) => Promise<void>
   onSettingsSave: (settings: Record<string, unknown>) => Promise<void>
   onStrategyLabRun: (payload: Record<string, unknown>) => Promise<any>
+  onStrategyLabCompare: (payload: Record<string, unknown>) => Promise<any>
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -1039,7 +1040,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
-      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} />}
+      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
       {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
@@ -1048,7 +1049,7 @@ export function DashboardScreen(props: Props) {
 }
 
 
-function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
+function StrategyLabScreen({ onRun, onCompare }: { onRun: Props['onStrategyLabRun']; onCompare: Props['onStrategyLabCompare'] }) {
   const [strategy, setStrategy] = useState('momentum')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
@@ -1064,6 +1065,11 @@ function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
   const [error, setError] = useState('')
   const [result, setResult] = useState<any>(null)
   const [selectedTrade, setSelectedTrade] = useState<any>(null)
+  const [comparison, setComparison] = useState<any>(null)
+  const [minScore, setMinScore] = useState('0')
+  const [feeRate, setFeeRate] = useState('')
+  const [slippage, setSlippage] = useState('')
+  const [spread, setSpread] = useState('')
   const run = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
@@ -1074,9 +1080,29 @@ function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
         end_date: new Date(end + 'T23:59:59Z').toISOString(),
         initial_capital: Number(capital), sizing_mode: mode,
         risk_per_trade_pct: Number(risk), fixed_notional: Number(notional),
-        max_position_pct: Number(maxPosition),
+        max_position_pct: Number(maxPosition), strategy_parameters: { min_score: Number(minScore) },
+        fee_rate: feeRate === '' ? undefined : Number(feeRate),
+        slippage_bps: slippage === '' ? undefined : Number(slippage),
+        spread_bps: spread === '' ? undefined : Number(spread),
       })
       setResult(data)
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  const compare = async () => {
+    setBusy(true); setError(''); setComparison(null)
+    try {
+      setComparison(await onCompare({
+        symbol: symbol.toUpperCase(), market, timeframe,
+        start_date: new Date(start + 'T00:00:00Z').toISOString(),
+        end_date: new Date(end + 'T23:59:59Z').toISOString(),
+        initial_capital: Number(capital), sizing_mode: mode,
+        risk_per_trade_pct: Number(risk), fixed_notional: Number(notional),
+        max_position_pct: Number(maxPosition), strategy_parameters: { min_score: Number(minScore) },
+        fee_rate: feeRate === '' ? undefined : Number(feeRate),
+        slippage_bps: slippage === '' ? undefined : Number(slippage),
+        spread_bps: spread === '' ? undefined : Number(spread),
+      }))
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
     finally { setBusy(false) }
   }
@@ -1097,11 +1123,17 @@ function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
           <label>Risk per trade (%)<input type="number" min="0.01" max="100" step="any" value={risk} onChange={e => setRisk(e.target.value)} /></label>
           <label>Fixed notional<input type="number" min="0.01" step="any" value={notional} onChange={e => setNotional(e.target.value)} /></label>
           <label>Max position (% equity)<input type="number" min="0.01" max="100" step="any" value={maxPosition} onChange={e => setMaxPosition(e.target.value)} /></label>
+          <label>Minimum strategy score<input type="number" min="0" step="any" value={minScore} onChange={e => setMinScore(e.target.value)} /></label>
+          <label>Fee rate (optional)<input type="number" min="0" step="any" placeholder="Use market default" value={feeRate} onChange={e => setFeeRate(e.target.value)} /></label>
+          <label>Slippage (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={slippage} onChange={e => setSlippage(e.target.value)} /></label>
+          <label>Spread (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={spread} onChange={e => setSpread(e.target.value)} /></label>
         </div>
         <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Running backtest…' : 'Run historical backtest'}</button>
+        <button className="table-action" type="button" disabled={busy} onClick={() => void compare()}>Compare all strategies</button>
       </form>
       {error && <div role="alert" className="workspace-error">{error}</div>}
       {result?.status === 'insufficient_data' && <EmptyState text={`Insufficient historical candles. Available: ${result.available_candles}; required: ${result.required_candles}. Try a wider range or another timeframe.`} />}
+      {comparison?.results && <section><h2>Strategy comparison · same conditions</h2><div className="workspace-summary-grid">{comparison.results.map((item: any) => <SummaryCard key={item.strategy} label={item.strategy} value={item.metrics ? pct(item.metrics.net_return_pct) : item.status} detail={item.metrics ? `DD ${pct(item.metrics.max_drawdown_pct)} · ${item.metrics.trade_count} trades` : 'Insufficient history'} />)}</div></section>}
       {metrics && <>
         <div className="workspace-summary-grid">
           {[
