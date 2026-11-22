@@ -1137,6 +1137,10 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     if (definition.fixed_notional != null) setNotional(String(definition.fixed_notional))
     if (definition.max_position_pct != null) setMaxPosition(String(definition.max_position_pct))
     if (definition.strategy_parameters?.min_score != null) setMinScore(String(definition.strategy_parameters.min_score))
+    if (definition.fee_rate != null) setFeeRate(String(definition.fee_rate))
+    if (definition.slippage_bps != null) setSlippage(String(definition.slippage_bps))
+    if (definition.spread_bps != null) setSpread(String(definition.spread_bps))
+    if (definition.funding_rate != null) setFunding(String(definition.funding_rate))
     setPersistenceMessage('Saved strategy configuration loaded into the form.')
   }
   const loadChosenReport = async () => {
@@ -1168,6 +1172,23 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     if (workspace) {
       setLoadedWorkspace(workspace)
       onWorkspaceLoad(workspace)
+      const savedLab = workspace.payload?.strategyLab
+      if (savedLab && typeof savedLab === 'object') {
+        if (typeof savedLab.strategy === 'string') setStrategy(savedLab.strategy)
+        if (typeof savedLab.symbol === 'string') setSymbol(savedLab.symbol)
+        if (savedLab.market === 'SPOT' || savedLab.market === 'FUTURES') setMarket(savedLab.market)
+        if (typeof savedLab.timeframe === 'string') setTimeframe(savedLab.timeframe)
+        for (const [key, setter] of [
+          ['start', setStart], ['end', setEnd], ['capital', setCapital], ['risk', setRisk],
+          ['mode', setMode], ['notional', setNotional], ['maxPosition', setMaxPosition],
+          ['minScore', setMinScore], ['feeRate', setFeeRate], ['slippage', setSlippage],
+          ['spread', setSpread], ['funding', setFunding],
+        ] as const) {
+          if (savedLab[key] != null) setter(String(savedLab[key]))
+        }
+        if (savedLab.result) setResult(savedLab.result)
+        if (savedLab.comparison) setComparison(savedLab.comparison)
+      }
       setPersistenceMessage('Workspace snapshot loaded into the dashboard.')
     }
   }
