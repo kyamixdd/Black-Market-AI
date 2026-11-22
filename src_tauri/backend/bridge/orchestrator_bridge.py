@@ -822,20 +822,29 @@ class OrchestratorBridge:
     # ===== Market Breadth =====
 
     def get_market_breadth(self) -> dict:
-        """Return advance/decline breadth for the currently cached market universe."""
+        """Return breadth by market to avoid conflating duplicate SPOT/FUTURES symbols."""
         snapshots = self.get_all_market_snapshots()
-        valid = [s for s in snapshots if s.get("price_change_24h") is not None
-                 and math.isfinite(float(s["price_change_24h"]))]
-        summary = breadth_summary(float(s["price_change_24h"]) for s in valid)
-        total_volume = sum(float(s.get("volume_24h") or 0) for s in valid
-                           if math.isfinite(float(s.get("volume_24h") or 0)))
+        by_market = {}
+        for market in ("SPOT", "FUTURES"):
+            valid = [item for item in snapshots if item.get("market") == market
+                     and item.get("price_change_24h") is not None
+                     and math.isfinite(float(item["price_change_24h"]))]
+            summary = breadth_summary(float(item["price_change_24h"]) for item in valid)
+            volume_values = [float(item["volume_24h"]) for item in valid
+                             if item.get("volume_24h") is not None
+                             and math.isfinite(float(item["volume_24h"])) and float(item["volume_24h"]) >= 0]
+            by_market[market] = {
+                **summary, "total_quote_volume_24h": sum(volume_values) if volume_values else None,
+                "sample_coverage": len(valid),
+            }
+        total_sample = sum(item["sample_coverage"] for item in by_market.values())
         return {
-            **summary,
-            "total_volume": total_volume if valid else None,
-            "scope": "cached eligible tickers; SPOT and FUTURES are counted separately",
-            "sample_coverage": len(valid),
-            "avg_spread_bps": None,
-            "avg_orderbook_imbalance": None,
+            "markets": by_market, "sample_size": total_sample,
+            "scope": "cached eligible market tickers; SPOT and FUTURES counts are separate market listings",
+            "total_quote_volume_24h": sum(
+                item["total_quote_volume_24h"] or 0 for item in by_market.values()
+            ) if total_sample else None,
+            "avg_spread_bps": None, "avg_orderbook_imbalance": None,
             "spread_status": "UNAVAILABLE: no live order-book depth sample",
             "orderbook_status": "UNAVAILABLE: no live order-book depth sample",
         }
