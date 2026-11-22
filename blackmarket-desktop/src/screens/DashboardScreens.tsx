@@ -1100,25 +1100,28 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   useEffect(() => { void reloadSaved() }, [])
   const saveCurrentStrategy = async () => {
     try {
-    const saved = await mutateJson<any>('/research/strategies', 'POST', {
-      name: strategyName.trim() || strategy,
-      strategy_key: strategy,
-      description: 'Saved from Strategy Lab',
-      tags: ['strategy-lab'],
-      definition: {
-        symbol: symbol.toUpperCase(), market, timeframe, sizing_mode: mode,
-        initial_capital: Number(capital), risk_per_trade_pct: Number(risk),
-        fixed_notional: Number(notional), max_position_pct: Number(maxPosition),
-        strategy_parameters: { min_score: Number(minScore) },
-        fee_rate: feeRate === '' ? null : Number(feeRate),
-        slippage_bps: slippage === '' ? null : Number(slippage),
-        spread_bps: spread === '' ? null : Number(spread),
-        funding_rate: funding === '' ? null : Number(funding),
-      },
-    })
-    setChosenStrategyId(saved.strategy_id)
-    setPersistenceMessage('Strategy saved to the database.')
-    await reloadSaved()
+      const saved = await mutateJson<any>('/research/strategies', 'POST', {
+        name: strategyName.trim() || strategy,
+        strategy_key: strategy,
+        description: 'Saved from Strategy Lab',
+        tags: ['strategy-lab'],
+        definition: {
+          symbol: symbol.toUpperCase(), market, timeframe, sizing_mode: mode,
+          initial_capital: Number(capital), risk_per_trade_pct: Number(risk),
+          fixed_notional: Number(notional), max_position_pct: Number(maxPosition),
+          strategy_parameters: { min_score: Number(minScore) },
+          fee_rate: feeRate === '' ? null : Number(feeRate),
+          slippage_bps: slippage === '' ? null : Number(slippage),
+          spread_bps: spread === '' ? null : Number(spread),
+          funding_rate: funding === '' ? null : Number(funding),
+        },
+      })
+      setChosenStrategyId(saved.strategy_id)
+      setPersistenceMessage('Strategy saved to the database.')
+      await reloadSaved()
+    } catch (reason) {
+      setPersistenceMessage(reason instanceof Error ? reason.message : String(reason))
+    }
   }
   const loadChosenStrategy = () => {
     const saved = savedStrategies.find(item => item.strategy_id === chosenStrategyId)
