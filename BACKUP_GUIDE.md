@@ -97,3 +97,8 @@ Restore model artifacts and registry metadata from a compatible backup/version. 
 6. Keep the pre-restore database until these checks succeed.
 
 Restore is intentionally not exposed as an arbitrary-path HTTP endpoint. It requires the application to be stopped or coordinated so no active process can write while the database is replaced.
+
+
+## Encryption and confidentiality
+
+SQLite database files, SQLite backup files, runtime-settings sidecars, and workspace/research records are **not encrypted by this application**. SHA-256 manifests detect file changes; they do not encrypt data. Protect the data directory and backup destination with appropriate filesystem access controls. Use an independently managed encrypted storage/backup solution if encryption at rest is required. Environment secrets from `.env` are not included in the backup bundle.
