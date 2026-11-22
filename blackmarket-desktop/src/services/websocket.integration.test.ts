@@ -49,3 +49,46 @@ test('WebSocket reconnects and authenticates again after a disconnect', async ()
     globalThis.WebSocket = original
   }
 })
+
+class MockEventSource {
+  static CONNECTING = 0
+  static OPEN = 1
+  static CLOSED = 2
+  static instances: MockEventSource[] = []
+  readyState = 0
+  onopen: ((event: Event) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  url: string
+  constructor(url: string) { this.url = url; MockEventSource.instances.push(this) }
+  open() { this.readyState = 1; this.onopen?.({} as Event) }
+  fail() { this.readyState = 2; this.onerror?.({} as Event) }
+  close() { this.readyState = 2 }
+}
+
+test('hosted SSE reconnects through the same-origin proxy after disconnect', async () => {
+  const originalWindow = globalThis.window
+  const originalEventSource = globalThis.EventSource
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: {} })
+  globalThis.EventSource = MockEventSource as unknown as typeof EventSource
+  MockEventSource.instances = []
+  const service = new WebSocketService()
+  try {
+    const connected = service.connect()
+    const first = MockEventSource.instances[0]
+    assert.equal(first.url, '/api/backend/events/stream')
+    first.open()
+    await connected
+    first.fail()
+    await new Promise((resolve) => setTimeout(resolve, 1150))
+    assert.equal(MockEventSource.instances.length, 2)
+    const second = MockEventSource.instances[1]
+    assert.equal(second.url, '/api/backend/events/stream')
+    second.open()
+    assert.equal(service.connectionState, 'connected')
+  } finally {
+    service.disconnect()
+    globalThis.EventSource = originalEventSource
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
+  }
+})
