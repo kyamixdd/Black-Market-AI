@@ -1,6 +1,8 @@
 """Risk management for paper trading."""
 from __future__ import annotations
 
+import math
+
 
 class RiskManager:
     def __init__(self, max_risk_pct: float, max_daily_loss_pct: float,
@@ -13,12 +15,17 @@ class RiskManager:
         self.max_spot_positions = max_spot_positions
         self.max_futures_positions = max_futures_positions
 
-    def check_daily_loss(self, daily_pnl: float, total_balance: float) -> bool:
-        """Return False only when realized losses reach the configured daily limit."""
-        if total_balance <= 0:
+    def check_daily_loss(self, daily_pnl: float, equity_baseline: float) -> bool:
+        """Reject when total account equity drawdown reaches the daily limit."""
+        try:
+            pnl = float(daily_pnl)
+            baseline = float(equity_baseline)
+        except (TypeError, ValueError, OverflowError):
             return False
-        daily_loss = max(0.0, -float(daily_pnl))
-        loss_pct = daily_loss / total_balance * 100.0
+        if not math.isfinite(pnl) or not math.isfinite(baseline) or baseline <= 0:
+            return False
+        daily_loss = max(0.0, -pnl)
+        loss_pct = daily_loss / baseline * 100.0
         return loss_pct < self.max_daily_loss_pct
 
     def check_position_limit(self, positions: dict, max_positions: int) -> bool:

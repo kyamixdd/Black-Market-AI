@@ -46,8 +46,9 @@ class Simulator:
         self.futures_positions: dict[str, dict] = {}
         self.open_orders: dict[str, dict] = {}
         self.closed_trades: list[dict] = []
-        self.daily_pnl = 0.0
+        self.daily_pnl = 0.0  # realized net P&L ledger
         self.daily_pnl_date = datetime.now(timezone.utc).date()
+        self.daily_start_equity = self.initial_spot_balance + self.initial_futures_balance
         self.fee_calc = FeeCalculator()
         self.funding_calc = FundingCalculator()
         self.liquidation = LiquidationEngine()
@@ -128,13 +129,20 @@ class Simulator:
         }
 
 
+    def get_daily_equity_baseline(self) -> float:
+        """Return the total-equity baseline for the current UTC day."""
+        self.get_daily_pnl()
+        return float(self.daily_start_equity)
+
     def get_daily_pnl(self) -> float:
-        """Return realized P&L for the current UTC calendar day."""
+        """Return current-day mark-to-market P&L, including unrealized losses."""
         today = datetime.now(timezone.utc).date()
         if self.daily_pnl_date != today:
             self.daily_pnl = 0.0
             self.daily_pnl_date = today
-        return self.daily_pnl
+            self.daily_start_equity = self.get_account_equity_breakdown()["total_equity"]
+        equity = self.get_account_equity_breakdown()["total_equity"]
+        return float(equity) - float(self.daily_start_equity)
 
     def _get_positions(self, market: str) -> dict[str, dict]:
         return self.spot_positions if market == "SPOT" else self.futures_positions
@@ -218,16 +226,12 @@ class Simulator:
         if not self.risk_manager.check_symbol_exposure(positions, signal["symbol"]):
             return False, f"Position already open for {signal['symbol']} on {market}"
 
-        # Risk manager - daily loss check
-        # Spot principal is held in open positions rather than free cash; include
-        # it in account equity so open trades do not shrink the risk denominator.
-        spot_position_value = sum(
-            float(position.get("reserved_notional", position.get("entry_price", 0.0) * position.get("amount", 0.0)))
-            for position in self.spot_positions.values()
-            if position.get("status") == "OPEN"
-        )
-        total_balance = self.spot_balance + self.futures_balance + spot_position_value
-        if not self.risk_manager.check_daily_loss(self.get_daily_pnl(), total_balance):
+        # Daily loss is total mark-to-market equity drawdown from the fixed
+        # UTC-day opening baseline, not merely closed-trade P&L.
+        daily_pnl = self.get_daily_pnl()
+        daily_equity_baseline = self.get_daily_equity_baseline()
+        total_balance = self.get_account_equity_breakdown()["total_equity"]
+        if not self.risk_manager.check_daily_loss(daily_pnl, daily_equity_baseline):
             return False, "Daily loss limit exceeded"
 
         # Risk manager check
@@ -880,6 +884,7 @@ class Simulator:
             "closed_trades": self.closed_trades,
             "daily_pnl": self.daily_pnl,
             "daily_pnl_date": self.daily_pnl_date.isoformat(),
+            "daily_start_equity": self.daily_start_equity,
         }
 
     def restore_state(self, state: dict[str, Any]) -> None:
@@ -911,6 +916,16 @@ class Simulator:
         except (TypeError, ValueError):
             self.daily_pnl_date = datetime.now(timezone.utc).date()
         self.daily_pnl = state.get("daily_pnl", 0.0)
+        restored_baseline = state.get("daily_start_equity")
+        try:
+            restored_baseline = float(restored_baseline)
+        except (TypeError, ValueError, OverflowError):
+            restored_baseline = None
+        self.daily_start_equity = (
+            restored_baseline
+            if restored_baseline is not None and math.isfinite(restored_baseline) and restored_baseline > 0
+            else self.get_account_equity_breakdown()["total_equity"]
+        )
         self.get_daily_pnl()
         logger.info("Restored state: Spot=%.2f, Futures=%.2f, OpenPos=%d, Trades=%d",
                     self.spot_balance, self.futures_balance,

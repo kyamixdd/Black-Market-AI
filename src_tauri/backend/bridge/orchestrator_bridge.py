@@ -635,7 +635,10 @@ class OrchestratorBridge:
         """Get current risk metrics."""
         sim = self.simulator
         manager = sim.risk_manager
-        total_balance = sim.spot_balance + sim.futures_balance
+        account = sim.get_account_equity_breakdown()
+        total_balance = account["total_equity"]
+        daily_pnl = sim.get_daily_pnl()
+        daily_baseline = sim.get_daily_equity_baseline()
 
         # Current exposure
         total_risk = 0.0
@@ -654,7 +657,7 @@ class OrchestratorBridge:
                 unmeasured_positions += 1
 
         exposure_pct = (total_risk / total_balance * 100) if total_balance > 0 else 0
-        daily_loss_pct = abs(min(0, sim.get_daily_pnl())) / total_balance * 100 if total_balance > 0 else 0
+        daily_loss_pct = abs(min(0, daily_pnl)) / daily_baseline * 100 if daily_baseline > 0 else 0
         max_open_risk_pct = manager.max_open_risk_pct
         used_capacity_pct = min(100, exposure_pct / max_open_risk_pct * 100) if max_open_risk_pct > 0 else 0
         daily_capacity_pct = max(0, 100 * (1 - daily_loss_pct / manager.max_daily_loss_pct)) if manager.max_daily_loss_pct > 0 else 0

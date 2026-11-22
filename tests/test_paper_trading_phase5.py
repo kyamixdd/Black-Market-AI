@@ -300,7 +300,9 @@ async def test_risk_daily_loss_protection():
     bus = EventBus()
     sim = Simulator(bus)
 
-    # Manually set daily PnL to exceed limit (2% of $1000 = $20)
+    # Mark a $25 account-equity loss against the $1000 day-start baseline.
+    sim.daily_start_equity = 1000.0
+    sim.spot_balance -= 25.0
     sim.daily_pnl = -25.0
 
     signal = {
@@ -1361,3 +1363,49 @@ async def test_opening_position_at_entry_price_preserves_portfolio_equity(
     assert account["total_used_capital"] >= collateral
     assert account["total_equity"] == pytest.approx(before["total_balance"])
     assert simulator._get_positions(market)[position_id][collateral_key] == pytest.approx(collateral)
+
+@pytest.mark.asyncio
+async def test_daily_loss_gate_includes_unrealized_losses_and_total_equity():
+    simulator = Simulator(EventBus())
+    simulator.spot_balance -= 100.0
+    simulator.spot_positions["POS-DAY-LOSS"] = {
+        "position_id": "POS-DAY-LOSS", "symbol": "ETHUSDT", "market": "SPOT",
+        "side": "BUY", "entry_price": 100.0, "amount": 1.0,
+        "current_price": 75.0, "reserved_notional": 100.0,
+        "unrealized_pnl": -25.0, "stop_loss": 70.0, "status": "OPEN",
+    }
+    assert simulator.get_account_equity_breakdown()["total_equity"] == pytest.approx(975.0)
+    assert simulator.get_daily_pnl() == pytest.approx(-25.0)
+    assert simulator.get_daily_equity_baseline() == pytest.approx(1000.0)
+
+    signal = {
+        "signal_id": "SIG-UNREALIZED-DAILY-LOSS", "symbol": "BTCUSDT",
+        "market": "FUTURES", "direction": "LONG", "entry": 100.0,
+        "stop_loss": 90.0, "take_profit": [120.0], "leverage": 1.0,
+    }
+    allowed, reason = simulator.validate_new_position(signal)
+    assert allowed is False
+    assert reason == "Daily loss limit exceeded"
+
+
+def test_daily_equity_baseline_persists_and_restores():
+    simulator = Simulator(EventBus())
+    simulator.daily_start_equity = 1000.0
+    simulator.spot_balance -= 30.0
+    state = simulator.get_state_snapshot()
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+
+    assert restored.daily_start_equity == pytest.approx(1000.0)
+    assert restored.get_daily_pnl() == pytest.approx(-30.0)
+
+
+def test_daily_equity_baseline_resets_on_utc_rollover():
+    simulator = Simulator(EventBus())
+    simulator.spot_balance -= 35.0
+    simulator.daily_pnl_date = datetime.now(timezone.utc).date() - timedelta(days=1)
+    simulator.daily_pnl = -35.0
+
+    assert simulator.get_daily_pnl() == pytest.approx(0.0)
+    assert simulator.daily_start_equity == pytest.approx(965.0)
