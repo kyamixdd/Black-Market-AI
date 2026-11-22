@@ -257,6 +257,16 @@ jobs:
             while ((Get-Date) -lt $deadline -and (Get-Process BlackMarketBackend -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }
             if (Get-Process BlackMarketBackend -ErrorAction SilentlyContinue) { throw "Backend remained running after desktop shutdown." }
           } finally { $env:PATH = $originalPath }
+          # Tauri stores user data outside the installation directory. Reinstalling
+          # must not erase the user's configuration/database directory.
+          $userDataDir = Join-Path $env:APPDATA "com.blackmarket.ai"
+          New-Item -ItemType Directory -Path $userDataDir -Force | Out-Null
+          $preservationMarker = Join-Path $userDataDir "ci-reinstall-preservation-marker.txt"
+          "keep-user-data" | Set-Content -LiteralPath $preservationMarker -Encoding ascii
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
+          if (-not (Test-Path -LiteralPath $preservationMarker)) {
+            throw "Reinstall removed user data from $userDataDir."
+          }
           $uninstaller = Get-ChildItem $appRoot -Filter "uninstall.exe" -File -Recurse | Select-Object -First 1
           if ($uninstaller) { Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait }
           if (Get-Process BlackMarketBackend -ErrorAction SilentlyContinue) { throw "Backend remained running after uninstall." }
