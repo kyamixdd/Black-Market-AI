@@ -28,6 +28,8 @@ try {
   const widths = [320, 375, 430, 768, 1024, 1280, 1440, 1920]
   await page.goto(url, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#root > *', { timeout: 15000 })
+  assert.ok(await page.locator('#application-navigation').count(), 'Application navigation should be rendered')
+  await page.locator('#market-chart').waitFor({ state: 'attached' })
   for (const width of widths) {
     await page.setViewportSize({ width, height: 900 })
     await page.waitForTimeout(250)
@@ -40,7 +42,19 @@ try {
     assert.ok(metrics.rootPresent, `React root did not render at ${width}px`)
     assert.ok(metrics.documentWidth <= width + 1, `Horizontal document overflow at ${width}px: ${JSON.stringify(metrics)}`)
     console.log(`responsive ${width}px: document=${metrics.documentWidth}px body=${metrics.bodyWidth}px`)
+    const marketsTab = page.locator('#application-navigation button[title="Markets"]')
+    await marketsTab.scrollIntoViewIfNeeded()
+    await marketsTab.click()
+    assert.equal(await marketsTab.getAttribute('aria-current'), 'page', `Markets navigation failed at ${width}px`)
+    const overviewTab = page.locator('#application-navigation button[title="Overview"]')
+    await overviewTab.scrollIntoViewIfNeeded()
+    await overviewTab.click()
+    assert.equal(await overviewTab.getAttribute('aria-current'), 'page', `Overview navigation failed at ${width}px`)
   }
+  const chartSettings = page.getByRole('button', { name: 'Chart settings' })
+  await chartSettings.click()
+  assert.ok(await page.locator('.settings-options').isVisible(), 'Chart settings panel should open')
+  await chartSettings.click()
   assert.deepEqual(errors, [], 'Frontend threw uncaught runtime errors during responsive smoke test')
 } finally {
   await browser.close()
