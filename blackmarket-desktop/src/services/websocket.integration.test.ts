@@ -11,7 +11,8 @@ class MockSocket {
   onerror: ((event: Event) => void) | null = null
   onmessage: ((event: MessageEvent) => void) | null = null
   sent: string[] = []
-  constructor(public url: string) { MockSocket.instances.push(this) }
+  url: string
+  constructor(url: string) { this.url = url; MockSocket.instances.push(this) }
   send(value: string) { this.sent.push(value) }
   open() { this.readyState = 1; this.onopen?.({} as Event) }
   message(data: unknown) { this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent) }
