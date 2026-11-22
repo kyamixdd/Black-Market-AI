@@ -1056,7 +1056,7 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   data: WorkspaceData; preferences: DashboardPreferences; screen: ScreenName;
   symbol: string; marketType: 'SPOT' | 'FUTURES'; onWorkspaceLoad: Props['onWorkspaceLoad'];
 }) {
-  const [strategy, setStrategy] = useState('momentum')
+  const [dna, setDna] = useState<any>(null)\n  const [dnaError, setDnaError] = useState('')\n  const [strategy, setStrategy] = useState('momentum')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
   const [timeframe, setTimeframe] = useState('1h')
@@ -1097,7 +1097,7 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     setSavedReports(reports?.reports ?? [])
     setSavedWorkspaces(workspaces?.workspaces ?? [])
   }
-  useEffect(() => { void reloadSaved() }, [])
+  useEffect(() => { void reloadSaved() }, [])\n  useEffect(() => {\n    let active = true\n    requestJson<any>('/learning/strategy-dna').then(value => { if (active) setDna(value) }).catch(error => { if (active) setDnaError(error instanceof Error ? error.message : 'Strategy DNA unavailable') })\n    return () => { active = false }\n  }, [])
   const saveCurrentStrategy = async () => {
     try {
       const saved = await mutateJson<any>('/research/strategies', 'POST', {
@@ -1246,6 +1246,25 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   return (
     <div className="workspace-content strategy-lab">
       <ScreenHeader title="Strategy Lab" description="Historical research · simulated execution · paper-trading compatible" />
+      <section className="workspace-panel">
+        <h2>Strategy DNA · behavior monitoring</h2>
+        <p className="workspace-note">Profiles are derived from saved backtests and closed paper trades. Diagnostics describe observed behavior only; they do not predict future profitability.</p>
+        {dnaError && <div role="status" className="workspace-note">Strategy DNA unavailable: {dnaError}</div>}
+        {!dna && !dnaError && <p className="workspace-note">Loading historical and paper-trading records…</p>}
+        {dna?.profiles?.map((profile: any) => <details key={profile.strategy}>
+          <summary>{profile.strategy_type} · {profile.behavioral_differences?.status ?? 'Not evaluated'} · {profile.sample_size?.historical_trades ?? 0} historical / {profile.sample_size?.current_paper_trades ?? 0} paper trades</summary>
+          <div className="workspace-summary-grid">
+            <SummaryCard label="HISTORICAL WIN RATE" value={profile.historical_behavior?.win_rate_pct == null ? '—' : pct(profile.historical_behavior.win_rate_pct)} />
+            <SummaryCard label="PAPER WIN RATE" value={profile.current_paper_behavior?.win_rate_pct == null ? '—' : pct(profile.current_paper_behavior.win_rate_pct)} />
+            <SummaryCard label="HISTORICAL DD" value={profile.historical_behavior?.max_drawdown_pct == null ? '—' : pct(profile.historical_behavior.max_drawdown_pct)} />
+            <SummaryCard label="PAPER DD" value={profile.current_paper_behavior?.max_drawdown_pct == null ? '—' : pct(profile.current_paper_behavior.max_drawdown_pct)} />
+          </div>
+          <p className="workspace-note">Timeframes: {profile.supported_timeframes?.join(', ')} · Entry: {profile.entry_conditions} · Exit: {profile.exit_conditions}</p>
+          {profile.behavioral_differences?.reasons?.map((reason: string, index: number) => <p key={index} className="workspace-note">{reason}</p>)}
+          {profile.behavioral_differences?.reason && <p className="workspace-note">{profile.behavioral_differences.reason}</p>}
+          <p className="workspace-note">Known limitations: {profile.known_limitations?.join(' · ')} · Last evaluated: {profile.last_evaluated_at ?? 'Not evaluated'}</p>
+        </details>)}
+      </section>
       <form className="workspace-form" onSubmit={run}>
         <div className="workspace-form-grid">
           <label>Strategy<select value={strategy} onChange={e => setStrategy(e.target.value)}>{['momentum','breakout','trend_following','mean_reversion','reversal'].map(v => <option key={v}>{v}</option>)}</select></label>
