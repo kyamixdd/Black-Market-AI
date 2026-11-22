@@ -241,6 +241,7 @@ class DatabaseBackupManager:
             target_path = Path(target_path)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path: Path | None = None
+            live_target = target_path.resolve() == Path(self._get_source_path()).resolve()
             try:
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".restore.db", dir=target_path.parent, delete=False) as tmp:
@@ -259,7 +260,6 @@ class DatabaseBackupManager:
                 finally:
                     check.close()
 
-                live_target = target_path.resolve() == Path(self._get_source_path()).resolve()
                 if live_target:
                     try:
                         with self.db.engine.connect() as connection:
@@ -278,6 +278,11 @@ class DatabaseBackupManager:
                 return True
             except Exception as exc:
                 logger.error("Restore failed: %s", exc, exc_info=True)
+                if live_target and self.db._engine is None:
+                    try:
+                        self.db.init_db()
+                    except Exception:
+                        logger.critical("Database could not be reopened after failed restore", exc_info=True)
                 return False
             finally:
                 if tmp_path is not None:
