@@ -247,7 +247,7 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
             side = pending["side"]
             raw_entry = next_bar["open"]
             direction = 1 if side == "LONG" else -1
-            entry_fill = raw_entry * (1 + direction * (spread_bps / 2.0 + slip_bps) / 10000.0
+            entry_fill = raw_entry * (1 + direction * (spread_bps / 2.0 + slip_bps) / 10000.0)
             quantity = min((equity * risk_pct / 100.0) / abs(entry_fill - pending["stop_loss"]) if config.sizing_mode == "risk_pct" else fixed_notional / entry_fill,
                           equity * max_position_pct / 100.0 / entry_fill)
             entry_fee = quantity * entry_fill * fee_rate
