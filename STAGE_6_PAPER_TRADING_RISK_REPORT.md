@@ -5,7 +5,7 @@ This stage hardens the local paper-trading simulator only. Real exchange order p
 
 ## Implemented
 - Serialized market-order execution and limit-order placement under the account allocation lock.
-- Pending open limit orders reserve market position slots, symbol exposure, and aggregate stop risk until cancelled or filled.
+- Pending open limit orders reserve market position slots, symbol exposure, aggregate stop risk, and required cash/margin including estimated fees until cancelled or filled.
 - Backend validation of supported market/direction, finite positive entry and stop prices, stop/target direction, daily equity drawdown, position count, duplicate symbol, leverage, available margin, and total open stop risk.
 - Configurable maximum position notional and aggregate base-asset exposure across Spot and Futures. Defaults: 50% of total account equity per position and 30% per asset. Runtime settings are validated, atomically persisted, restored, and applied to the live risk manager.
 - Fill-time checks for per-trade risk, aggregate open risk, notional cap, and asset exposure. Auto-sized market orders are reduced when spread/slippage changes the stop distance.
