@@ -155,6 +155,11 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup default stable
+      - name: Prepare Tauri resource directory for compile-only check
+        run: |
+          mkdir -p resources/backend ../dist
+          printf 'Compile-only placeholder; packaged builds use the Windows backend bundle.\n' > resources/backend/.ci-placeholder
+        working-directory: blackmarket-desktop/src-tauri
       - name: Compile Tauri application
         run: cargo check --locked
         working-directory: blackmarket-desktop/src-tauri
