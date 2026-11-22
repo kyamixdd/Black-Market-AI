@@ -43,7 +43,7 @@ class CandleManager:
                    open_time: int, open_: float, high: float, low: float,
                    close: float, volume: float, close_time: int | None = None) -> bool:
         """Add a candle, deduplicate by open_time. Returns True if added, False if duplicate."""
-        if (market not in {"SPOT", "FUTURES"} or timeframe not in TIMEFRAME_SECONDS:
+        if market not in {"SPOT", "FUTURES"} or timeframe not in TIMEFRAME_SECONDS:
             return False
         if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9]{2,32}", symbol):
             return False
@@ -116,15 +116,16 @@ class CandleManager:
         if len(series) < 2:
             return []
 
-        tf_seconds = TIMEFRAME_SECONDS.get(timeframe, 60)
-        expected_interval_ms = tf_seconds * 1000
+        if timeframe not in TIMEFRAME_SECONDS:
+            return []
+        expected_interval_ms = TIMEFRAME_SECONDS[timeframe] * 1000
         missing = []
-
-        for i in range(1, min(len(series), expected_count)):
-            expected_time = series[-i]["open_time"] + expected_interval_ms
-            actual_time = series[-(i + 1)]["open_time"]
-            if actual_time != expected_time:
-                missing.append(expected_time)
+        recent = series[-max(2, expected_count):]
+        for previous, current in zip(recent, recent[1:]):
+            gap = current["open_time"] - previous["open_time"]
+            if gap > expected_interval_ms:
+                missing.extend(range(previous["open_time"] + expected_interval_ms,
+                                    current["open_time"], expected_interval_ms))
 
         return missing
 
