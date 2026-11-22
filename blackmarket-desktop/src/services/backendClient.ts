@@ -11,7 +11,8 @@ export function createBackendClient(options: BackendClientOptions) {
   const headers = () => options.authorization?.() ?? {}
 
   async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetcher(`${options.baseUrl}${path}`, {
+    const url = /^https?:\\/\\//.test(path) ? path : `${options.baseUrl}${path}`
+    const response = await fetcher(url, {
       ...init,
       headers: {
         ...headers(),
