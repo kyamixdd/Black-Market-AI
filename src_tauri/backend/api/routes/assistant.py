@@ -27,7 +27,7 @@ async def query_assistant(request: AssistantQuery):
     answer = summarize_result(request.query, result)
     interpretation = await optional_provider_interpretation(request.query, result)
     if interpretation:
-        answer += "\\n\\nOptional provider interpretation (not verified facts): " + interpretation
+        answer += "\n\nOptional provider interpretation (not verified facts): " + interpretation
     return {
         "answer": answer,
         "tool": result.get("tool"),
