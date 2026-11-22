@@ -1045,6 +1045,9 @@ type CommunityStrategy = {
   backtest_report: Record<string, unknown>
   report_provenance: string
   report_sha256: string
+  source_report_id?: string | null
+  reproducibility_status?: string
+  verification_status?: string
   version: number
   favorite_count: number
   is_favorite: boolean
@@ -1073,6 +1076,7 @@ function CommunityLibraryScreen() {
   const [risk, setRisk] = useState('{"risk_per_trade_pct":1,"max_position_pct":10}')
   const [limitations, setLimitations] = useState('Results are user-submitted and not a forecast.')
   const [report, setReport] = useState('{"total_trades":0,"sample_period":""}')
+  const [sourceReportId, setSourceReportId] = useState('')
 
   const load = async () => {
     const params = new URLSearchParams({ q: query, sort, limit: '50' })
@@ -1095,7 +1099,7 @@ function CommunityLibraryScreen() {
         supported_timeframes: timeframes.split(',').map(value => value.trim()).filter(Boolean),
         rules: JSON.parse(rules), risk_configuration: JSON.parse(risk),
         known_limitations: limitations.split('\n').map(value => value.trim()).filter(Boolean),
-        backtest_report: JSON.parse(report),
+        backtest_report: JSON.parse(report),\n        ...(sourceReportId.trim() ? { source_report_id: sourceReportId.trim() } : {}),
       }
       await mutateJson(editingId ? `/community/strategies/${editingId}` : '/community/strategies', editingId ? 'PUT' : 'POST', payload)
       setNotice(editingId ? 'Published strategy version updated.' : 'Strategy published. Shared performance is labelled user-submitted.')
@@ -1124,7 +1128,7 @@ function CommunityLibraryScreen() {
     setRules(JSON.stringify(item.rules, null, 2))
     setRisk(JSON.stringify(item.risk_configuration, null, 2))
     setLimitations(item.known_limitations.join('\n'))
-    setReport(JSON.stringify(item.backtest_report, null, 2))
+    setReport(JSON.stringify(item.backtest_report, null, 2))\n    setSourceReportId(item.source_report_id ?? '')
     setNotice(`Editing your published strategy. Saving creates version ${item.version + 1}.`)
   }
 
@@ -1170,7 +1174,7 @@ function CommunityLibraryScreen() {
           <h3>{item.name}</h3>
           <p>{item.description || 'No description supplied.'}</p>
           <p className="workspace-note">{item.strategy_key.replaceAll('_',' ')} · v{item.version} · {item.supported_timeframes.join(', ')}</p>
-          <p className="workspace-note">Report provenance: <b>USER SUBMITTED</b> · {String(item.backtest_report?.total_trades ?? '—')} reported trades · win rate {String(item.backtest_report?.win_rate_pct ?? '—')}% · return {String(item.backtest_report?.net_return_pct ?? '—')}% · drawdown {String(item.backtest_report?.max_drawdown_pct ?? '—')}%</p>
+          <p className="workspace-note">Report provenance: <b>{item.report_provenance.replaceAll('_',' ')}</b> · {String(item.backtest_report?.total_trades ?? '—')} reported trades · win rate {String(item.backtest_report?.win_rate_pct ?? '—')}% · return {String(item.backtest_report?.net_return_pct ?? '—')}% · drawdown {String(item.backtest_report?.max_drawdown_pct ?? '—')}%</p>
           <div className="workspace-actions">
             <button className="table-action" onClick={() => void openDetails(item)}>Details</button>
             {item.is_owner && <button className="table-action" onClick={() => editStrategy(item)}>Edit / new version</button>}
@@ -1184,7 +1188,7 @@ function CommunityLibraryScreen() {
     {selected && <section className="workspace-panel">
       <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => setSelected(null)}>Close</button></div>
       <p>{selected.description}</p>
-      <p className="workspace-note">Shared report: USER_SUBMITTED · SHA-256 {selected.report_sha256 || 'not available'}. Digest confirms stored content integrity only; user-submitted metrics are not independently verified.</p>
+      <p className="workspace-note">Shared report: {selected.report_provenance.replaceAll('_',' ')} · SHA-256 {selected.report_sha256 || 'not available'}. Reproducibility: {selected.reproducibility_status ?? 'NOT_REPLAYED'} · Verification: {selected.verification_status ?? 'NOT_VERIFIED'}. The digest confirms stored content integrity only; locally generated reports have not been independently replayed or verified.</p>
       <h3>Submitted backtest summary</h3><pre className="workspace-code">{JSON.stringify(selected.backtest_report, null, 2)}</pre>
       <h3>Rules</h3><pre className="workspace-code">{JSON.stringify(selected.rules, null, 2)}</pre>
       <h3>Risk configuration</h3><pre className="workspace-code">{JSON.stringify(selected.risk_configuration, null, 2)}</pre>
@@ -1205,7 +1209,7 @@ function CommunityLibraryScreen() {
         <label>Strategy rules (JSON)<textarea className="workspace-search" rows={4} required value={rules} onChange={event => setRules(event.target.value)} /></label>
         <label>Risk configuration (JSON)<textarea className="workspace-search" rows={3} value={risk} onChange={event => setRisk(event.target.value)} /></label>
         <label>Known limitations (one per line)<textarea className="workspace-search" rows={3} value={limitations} onChange={event => setLimitations(event.target.value)} /></label>
-        <label>Backtest summary (JSON, optional)<textarea className="workspace-search" rows={3} value={report} onChange={event => setReport(event.target.value)} /></label>
+        <label>Local Strategy Lab report ID (optional)<input className="workspace-search" maxLength={64} value={sourceReportId} onChange={event => setSourceReportId(event.target.value)} placeholder="Paste a saved report ID to use its generated metrics" /></label>\n        <label>Backtest summary (JSON, user-submitted unless a local report ID is supplied)<textarea className="workspace-search" rows={3} value={report} onChange={event => setReport(event.target.value)} /></label>
         <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Publishing…' : 'Publish to public library'}</button>
       </form>
     </section>
