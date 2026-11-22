@@ -1493,3 +1493,35 @@ This dated snapshot supersedes earlier phase summaries wherever they describe wo
 - Live Binance connectivity and future ML performance cannot be guaranteed by deterministic CI or historical validation.
 
 See `RELEASE_READINESS.md` for the current score, release decision, and P0/P1 checklist. The current engineering maturity assessment is 7.8/10; this is a qualitative audit score, not a profitability or security guarantee.
+
+
+---
+
+## Branch status snapshot — 2026-11-22
+
+### Revision and CI
+
+- Repository: `kyamixdd/Black-Market-AI`
+- Development branch: `black-market-ai-beta`
+- Audited revision: `db3fc448af100236efac42ee8ed8e2fbe6a162d7`
+- Promotion revision observed on `main`: `07817c4881b563fff9bcdc4f933d2c0f2449728c` (PR #32)
+- CI run #343 for the audited revision: success
+
+### Current implementation
+
+- Windows build pipeline produces a bundled backend executable and NSIS installer.
+- Installer CI smoke test covers installation, startup with Python removed from PATH, backend/database/WebSocket readiness, shutdown and uninstall.
+- Development host records 282 passing Python tests with third-party deprecation warnings.
+- Desktop frontend build/tests and native lifecycle checks are recorded.
+- Manual paper order/position operations, runtime settings persistence, market analytics/freshness, scanner coverage/streaming integration, and model confidence/promotion gates are present in the current development line.
+- API/session security and SQLite durability/recovery have been updated. SQLite database and backup files remain unencrypted by the application.
+
+### Open release work
+
+- Complete clean-machine manual UI acceptance and release artifact verification.
+- Verify installer signing, versioning, upgrade and uninstall behavior.
+- Keep the Next.js website classified as private preview until hosted backend, database, SSE, market-data and paper-trading E2E checks pass.
+- Resolve and verify the reported Vercel deployment failure before treating the hosted site as available.
+- Live exchange reliability and future model performance remain outside deterministic CI guarantees.
+
+See `RELEASE_READINESS.md` for the component assessment and release acceptance criteria.
