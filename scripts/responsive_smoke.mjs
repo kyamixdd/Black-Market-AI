@@ -25,6 +25,7 @@ try {
   page.on('pageerror', error => errors.push(error.message))
   const widths = [320, 375, 430, 768, 1024, 1280, 1440, 1920]
   await page.goto(url, { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('#root > *', { timeout: 15000 })
   for (const width of widths) {
     await page.setViewportSize({ width, height: 900 })
     await page.waitForTimeout(250)
