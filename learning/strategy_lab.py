@@ -196,7 +196,8 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
                     hours = (bar["open_time"] - position["entry_time"]) / 3600000.0
                     funding = position["quantity"] * position["entry_fill"] * _number(config.funding_rate, "funding_rate") * int(hours // 8) * (1 if long_side else -1)
                 exit_slippage = abs(exit_fill - raw_exit) * position["quantity"] * (slip_bps / (spread_bps / 2.0 + slip_bps) if spread_bps / 2.0 + slip_bps else 0.0)
-                exit_spread = raw_exit * spread_bps / 20000.0 * position["quantity"]\n                total_cost = position["entry_fee"] + exit_fee + position["entry_slippage"] + exit_slippage + position["entry_spread"] + exit_spread + funding
+                exit_spread = raw_exit * spread_bps / 20000.0 * position["quantity"]
+                total_cost = position["entry_fee"] + exit_fee + position["entry_slippage"] + exit_slippage + position["entry_spread"] + exit_spread + funding
                 net = gross - total_cost
                 equity += net
                 trades.append({
@@ -272,8 +273,8 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
         equity += net
         trades.append({**position, "exit_time": last["close_time"], "exit_price": last["close"], "exit_fill": exit_fill,
                        "gross_pnl": gross, "net_pnl": net, "fees": position["entry_fee"] + exit_fee,
-                       "slippage": position["entry_slippage"] + abs(exit_fill - last["close"]) * position["quantity"],
-                       "spread": position["entry_spread"], "funding": 0.0, "close_reason": "END_OF_TEST",
+                       "slippage": position["entry_slippage"] + exit_slippage,
+                       "spread": position["entry_spread"] + exit_spread, "funding": funding, "close_reason": "END_OF_TEST",
                        "bars_held": bars_in_position, "status": "CLOSED"})
         curve.append({"time": last["close_time"], "equity": equity})
     metrics = _metrics(trades, curve, initial, candles)
