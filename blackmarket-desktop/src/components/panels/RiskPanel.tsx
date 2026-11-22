@@ -1,5 +1,5 @@
-// Risk analytics panel with circular risk visualization.
-import { useEffect, useRef, useState } from 'react';
+// Risk analytics panel with a compact, source-backed risk visualization.
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../services/api';
 
 interface RiskData {
@@ -19,6 +19,14 @@ interface RiskData {
   max_asset_exposure_pct: number;
 }
 
+const percent = (value: number | null | undefined) =>
+  Number.isFinite(value) ? `${(value as number).toFixed(2)}%` : '—';
+
+const boundedPercent = (value: number | null | undefined) =>
+  Math.min(100, Math.max(0, Number.isFinite(value) ? value as number : 0));
+
+const statusLabel = (status: string) => status.replace(/_/g, ' ').toLowerCase();
+
 export const RiskPanel: React.FC = () => {
   const [data, setData] = useState<RiskData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -26,7 +34,7 @@ export const RiskPanel: React.FC = () => {
   const requestInFlight = useRef(false);
   const mounted = useRef(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (requestInFlight.current) return;
     requestInFlight.current = true;
     try {
@@ -42,84 +50,96 @@ export const RiskPanel: React.FC = () => {
         setData(payload);
         setError(null);
       }
-    } catch (e) {
-      if (mounted.current) setError(e instanceof Error ? e.message : 'Risk data unavailable');
+    } catch (cause) {
+      if (mounted.current) {
+        setError(cause instanceof Error ? cause.message : 'Risk data unavailable');
+      }
     } finally {
       requestInFlight.current = false;
       if (mounted.current) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     mounted.current = true;
     void fetchData();
-    const interval = setInterval(() => void fetchData(), 10000);
+    const interval = window.setInterval(() => void fetchData(), 10_000);
     return () => {
       mounted.current = false;
-      clearInterval(interval);
+      window.clearInterval(interval);
     };
-  }, []);
+  }, [fetchData]);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'NORMAL': return 'text-gray-200';
-      case 'WARNING': return 'text-gray-200';
-      case 'CRITICAL': return 'text-gray-200';
-      default: return 'text-gray-400';
-    }
-  };
-
-  const getStatusDot = (status: string) => {
-    switch (status) {
-      case 'NORMAL': return 'bg-gray-200';
-      case 'WARNING': return 'bg-gray-200';
-      case 'CRITICAL': return 'bg-gray-200';
-      default: return 'bg-gray-400';
-    }
-  };
-
-  if (loading) {
+  if (loading && !data) {
     return (
-      <div className="panel h-80 flex items-center justify-center" role="status" aria-label="Loading risk analytics">
-        <div className="spinner" />
-      </div>
+      <section className="panel risk-panel" aria-label="Risk analytics">
+        <div className="panel-heading"><h2>Risk analytics</h2></div>
+        <div className="workspace-empty" role="status">Loading risk data…</div>
+      </section>
     );
   }
 
   if (!data) {
     return (
-      <div className="panel p-3 sm:p-4 min-w-0">
-        <div className="panel-header">Risk Analytics</div>
-        <p className="text-sm text-muted my-3" role={error ? 'alert' : 'status'}>
-          {error || 'Risk data unavailable'}
-        </p>
-        <button type="button" className="btn-ghost text-sm" onClick={() => { setLoading(true); void fetchData(); }}>
-          Retry
-        </button>
-      </div>
+      <section className="panel risk-panel" aria-label="Risk analytics">
+        <div className="panel-heading"><h2>Risk analytics</h2></div>
+        <div className="workspace-empty" role="alert">{error || 'Risk data unavailable'}</div>
+        <div className="risk-foot">
+          <button type="button" className="table-action" onClick={() => { setLoading(true); void fetchData(); }}>
+            Retry
+          </button>
+        </div>
+      </section>
     );
   }
 
-  const clampPercent = (value: number) => Math.min(100, Math.max(0, Number.isFinite(value) ? value : 0));
-  const exposureDegrees = (clampPercent(data.current_exposure_pct) / 100) * 360;
-  const riskCapacityDegrees = (clampPercent(data.used_risk_capacity_pct) / 100) * 360;
+  const exposure = boundedPercent(data.current_exposure_pct);
+  const usedCapacity = boundedPercent(data.used_risk_capacity_pct);
+  const status = data.risk_manager_status.toUpperCase();
+  const statusTone = status === 'NORMAL' ? 'positive' : status === 'CRITICAL' ? 'negative' : '';
 
-function getStatusColor(status: string): string {
-  switch (status) {
-    case 'NORMAL': return 'text-green-400';
-    case 'WARNING': return 'text-yellow-400';
-    case 'CRITICAL': return 'text-red-400';
-    default: return 'text-gray-400';
-  }
-}
-
-function getStatusDot(status: string): string {
-  switch (status) {
-    case 'NORMAL': return 'bg-green-400';
-    case 'WARNING': return 'bg-yellow-400';
-    case 'CRITICAL': return 'bg-red-400';
-    default: return 'bg-gray-400';
-  }
-}
+  return (
+    <section className="panel risk-panel" aria-label="Risk analytics">
+      <div className="panel-heading">
+        <h2>Risk analytics</h2>
+        <span className={`risk-status ${statusTone}`} role="status">{statusLabel(status)}</span>
+      </div>
+      <div className="risk-content">
+        <div
+          className="risk-dial"
+          aria-label={`Risk capacity used ${percent(data.used_risk_capacity_pct)}`}
+          style={{ background: `conic-gradient(var(--text-secondary) ${usedCapacity}%, var(--border-subtle) 0)` }}
+        >
+          <div>
+            <strong className="risk-digit">{percent(data.current_exposure_pct)}</strong>
+            <span className="risk-caption">Exposure</span>
+          </div>
+        </div>
+        <div className="risk-stats">
+          <div className="risk-stat"><span>Capacity used</span><b>{percent(data.used_risk_capacity_pct)}</b></div>
+          <div className="risk-stat"><span>Capacity available</span><b>{percent(data.available_risk_capacity_pct)}</b></div>
+          <div className="risk-stat"><span>Open trade risk</span><b>{percent(data.open_trade_risk_pct)}</b></div>
+          <div className="risk-stat"><span>Daily loss capacity</span><b>{percent(data.daily_loss_capacity_pct)}</b></div>
+        </div>
+      </div>
+      <div className="risk-foot">
+        <span>Risk / trade <b>{percent(data.risk_per_trade_pct)}</b></span>
+        <span>Max leverage <b>{Number.isFinite(data.max_leverage) ? `${data.max_leverage}×` : '—'}</b></span>
+      </div>
+      <div className="risk-foot">
+        <span>Spot positions <b>{Number.isFinite(data.max_spot_positions) ? data.max_spot_positions : '—'}</b></span>
+        <span>Futures <b>{Number.isFinite(data.max_futures_positions) ? data.max_futures_positions : '—'}</b></span>
+      </div>
+      <div className="risk-foot">
+        <span>Max daily loss <b>{percent(data.max_daily_loss_pct)}</b></span>
+        <span>Total open <b>{percent(data.max_total_open_pct)}</b></span>
+      </div>
+      <div className="risk-foot">
+        <span>Position cap <b>{percent(data.max_position_size_pct)}</b></span>
+        <span>Asset cap <b>{percent(data.max_asset_exposure_pct)}</b></span>
+      </div>
+    </section>
+  );
+};
 
 export default RiskPanel;

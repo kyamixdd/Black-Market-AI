@@ -1,18 +1,76 @@
 :root {
   color-scheme: dark;
-  --bg-outer: #09090B; --bg-terminal: #0D0D10; --bg-panel: #111114;
-  --bg-elevated: #19191E; --bg-hover: #202026;
-  --border-subtle: #24242A; --border-panel: #303038; --border-strong: #41414A;
-  --text-primary: #F4F4F5; --text-secondary: #A1A1AA; --text-muted: #71717A; --text-disabled: #52525B;
-  --accent-positive: #86A995; --accent-negative: #B77E7E;
-  --bg: var(--bg-terminal); --panel: var(--bg-panel); --panel-raised: var(--bg-elevated);
-  --border: var(--border-panel); --grid: var(--border-subtle); --text: var(--text-primary);
-  --secondary: var(--text-secondary); --muted: var(--text-muted);
-  --positive: var(--accent-positive); --negative: var(--accent-negative);
-  --warning: #A1A1AA; --danger-digit: var(--accent-negative); --accent: #D4D4D8;
+
+  /* Reference terminal palette — shared by web and Tauri */
+  --bg-outer: #09090B;
+  --bg-terminal: #0D0D10;
+  --bg-panel: #111114;
+  --bg-elevated: #19191E;
+  --bg-hover: #202026;
+  --border-subtle: #24242A;
+  --border-panel: #303038;
+  --border-strong: #41414A;
+  --text-primary: #F4F4F5;
+  --text-secondary: #A1A1AA;
+  --text-muted: #71717A;
+  --text-disabled: #52525B;
+  --accent-positive: #86A995;
+  --accent-negative: #B77E7E;
+  --accent-neutral: #D4D4D8;
+
+  /* Semantic aliases retained for existing screens */
+  --bg: var(--bg-terminal);
+  --panel: var(--bg-panel);
+  --panel-raised: var(--bg-elevated);
+  --border: var(--border-panel);
+  --grid: var(--border-subtle);
+  --text: var(--text-primary);
+  --secondary: var(--text-secondary);
+  --muted: var(--text-muted);
+  --positive: var(--accent-positive);
+  --negative: var(--accent-negative);
+  --warning: #A1A1AA;
+  --danger-digit: var(--accent-negative);
+  --accent: var(--accent-neutral);
+
+  /* Shared typography */
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   --mono: "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", Consolas, monospace;
-  --font-xs: 9px; --font-sm: 10px; --font-md: 11px; --font-lg: 13px;
-  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-  --radius-sm: 4px; --radius-card: 7px;
+  --font-xs: 9px;
+  --font-sm: 10px;
+  --font-md: 11px;
+  --font-lg: 13px;
+  --font-title: 14px;
+  --font-metric: 20px;
+  --numeric-font: var(--mono);
+  --numeric-feature-settings: "tnum";
+
+  /* Compact terminal spacing and control sizing */
+  --space-0: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --control-height: 28px;
+  --control-height-touch: 40px;
+
+  /* Flat panel geometry */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-control: 3px;
+  --radius-panel: 4px;
+  --radius-card: 4px;
+  --terminal-radius: 4px;
   --shadow-panel: inset 0 1px 0 rgba(255,255,255,.018);
+  --focus-ring: 1px solid #777780;
+}
+
+/* Financial figures use stable widths as values update. */
+.font-mono-num,
+.tabular-nums {
+  font-family: var(--numeric-font);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: var(--numeric-feature-settings);
 }
