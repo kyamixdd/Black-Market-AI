@@ -989,13 +989,40 @@ function SettingsScreen({
       </div>
       <h2 className="workspace-section-title">Engine configuration · persistent</h2>
       <form className="settings-card-list" onSubmit={async (event) => {
-        event.preventDefault(); setSaving(true); setMessage('')
+        event.preventDefault()
+        setMessage('')
+        const numberKeys = ['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions']
+        const numericValues: Record<string, number> = {}
+        for (const key of numberKeys) {
+          if (draft[key] === undefined || draft[key] === '') continue
+          const parsed = Number(draft[key])
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            setMessage(`${key.replaceAll('_', ' ')} must be a finite number greater than zero.`)
+            return
+          }
+          if (['risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct'].includes(key) && parsed > 100) {
+            setMessage(`${key.replaceAll('_', ' ')} cannot exceed 100%.`)
+            return
+          }
+          if (['max_spot_positions','max_futures_positions'].includes(key) && !Number.isInteger(parsed)) {
+            setMessage(`${key.replaceAll('_', ' ')} must be a whole number.`)
+            return
+          }
+          numericValues[key] = parsed
+        }
+        const timeframeValues = draft.timeframes === undefined
+          ? undefined
+          : draft.timeframes.split(',').map((item) => item.trim()).filter(Boolean)
+        if (timeframeValues && (!timeframeValues.length || timeframeValues.some((item) => !/^(\d+[smhdw]|1M)$/.test(item)))) {
+          setMessage('Enter one or more valid interval values separated by commas (for example: 1m, 15m, 1h, 1d).')
+          return
+        }
+        setSaving(true)
         const payload: Record<string, unknown> = {}
         const boolKeys = ['spot_enabled','futures_enabled','scan_all_eligible_symbols','telegram_enabled']
-        const numberKeys = ['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions']
         for (const key of boolKeys) if (draft[key] !== undefined) payload[key] = draft[key] === 'true'
-        for (const key of numberKeys) if (draft[key] !== undefined && draft[key] !== '') payload[key] = Number(draft[key])
-        if (draft.timeframes !== undefined) payload.timeframes = draft.timeframes.split(',').map((item) => item.trim()).filter(Boolean)
+        Object.assign(payload, numericValues)
+        if (timeframeValues) payload.timeframes = timeframeValues
         try { await onSettingsSave(payload); setDraft({}); setMessage('Settings saved and applied.') }
         catch (error) { setMessage(error instanceof Error ? error.message : 'Settings could not be saved.') }
         finally { setSaving(false) }
