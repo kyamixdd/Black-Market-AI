@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chromium } from 'playwright'
+import { createRequire } from 'node:module'
+const require = createRequire(`${process.cwd()}/package.json`)
+const { chromium } = require('playwright')
 
 const host = '127.0.0.1'
 const port = 4173
