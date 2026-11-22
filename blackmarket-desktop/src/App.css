@@ -3064,6 +3064,105 @@ a:focus-visible {
 }
 
 
+/* Community Library: responsive filters, cards, details, and publish form. */
+.workspace-community-library,
+.workspace-community-library > *,
+.workspace-community-library .workspace-panel,
+.workspace-community-library .workspace-panel > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.workspace-community-library .workspace-toolbar:first-of-type {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(5, minmax(130px, 1fr));
+  align-items: stretch;
+  gap: 8px;
+}
+.workspace-community-library .workspace-toolbar:first-of-type .workspace-search,
+.workspace-community-library .workspace-toolbar:first-of-type select,
+.workspace-community-library .workspace-toolbar:first-of-type button {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+.workspace-community-library .workspace-summary-grid > article {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.workspace-community-library .workspace-summary-grid > article h3,
+.workspace-community-library .workspace-toolbar h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workspace-community-library .workspace-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 6px;
+  margin-top: auto;
+}
+.workspace-community-library .workspace-actions > button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.workspace-community-library .workspace-form > label,
+.workspace-community-library .workspace-form > button {
+  min-width: 0;
+  max-width: 100%;
+}
+.workspace-community-library .workspace-form input,
+.workspace-community-library .workspace-form select,
+.workspace-community-library .workspace-form textarea {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+.workspace-community-library .workspace-form > .primary-action {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 38px;
+}
+.workspace-community-library .workspace-code {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+@media (max-width: 1180px) {
+  .workspace-community-library .workspace-toolbar:first-of-type {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .workspace-community-library .workspace-toolbar:first-of-type {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace-community-library .workspace-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .workspace-community-library .workspace-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace-community-library .workspace-form > label,
+  .workspace-community-library .workspace-form > button {
+    grid-column: 1 / -1;
+  }
+  .workspace-community-library .workspace-toolbar h2 {
+    flex: 1 1 100%;
+  }
+}
+@media (max-width: 380px) {
+  .workspace-community-library .workspace-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace-community-library .workspace-panel {
+    padding: 8px;
+  }
+}
+
 /* Unified reference-terminal finishing layer.
    Keep this as the final shared layer so page-level legacy rules cannot
    reintroduce oversized radii, loose spacing, or desktop-only widths. */
