@@ -33,6 +33,9 @@ class WebSocketManager:
         self._subscribed_streams: set[str] = set()
         self._spot_streams: list[str] = []
         self._futures_streams: list[str] = []
+        self._connected_connections = 0
+        self._last_message_ms: int | None = None
+        self._reconnect_attempts = 0
 
     def add_handler(self, handler: Callable[[dict], Awaitable[None]]) -> None:
         self._handlers.append(handler)
@@ -48,9 +51,11 @@ class WebSocketManager:
                 await self.rate_limiter.acquire("websocket_conn", 1.0, timeout=30.0)
                 logger.info("Connecting WS to %s (%d streams)", base_url, len(streams))
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
+                    self._connected_connections += 1
                     backoff = 1.0
                     while self._running:
                         msg = await ws.recv()
+                        self._last_message_ms = int(time.time() * 1000)
                         try:
                             data = json.loads(msg)
                         except Exception:
@@ -65,16 +70,24 @@ class WebSocketManager:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
+                self._reconnect_attempts += 1
                 logger.warning("WS connection error on %s: %s (reconnecting in %.1fs)",
                                base_url, exc, backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2.0, 30.0)
 
     def status_snapshot(self) -> dict:
-        active = any(not task.done() for task in self._tasks)
-        state = "RECONNECTING" if active and self._running else "OFFLINE" if not self._running else "UNAVAILABLE"
-        return {"state": state, "last_message_ms": None, "message_age_ms": None,
-                "reconnect_attempts": None,
+        age = None if self._last_message_ms is None else max(0, int(time.time() * 1000) - self._last_message_ms)
+        if not self._running:
+            state = "OFFLINE"
+        elif self._connected_connections > 0 and age is not None and age <= 120_000:
+            state = "LIVE"
+        elif self._connected_connections > 0:
+            state = "STALE"
+        else:
+            state = "RECONNECTING" if self._tasks else "UNAVAILABLE"
+        return {"state": state, "last_message_ms": self._last_message_ms,
+                "message_age_ms": age, "reconnect_attempts": self._reconnect_attempts,
                 "active_streams": len(self._spot_streams) + len(self._futures_streams)}
 
     async def start(self, spot_streams: list[str], futures_streams: list[str]) -> None:
@@ -107,6 +120,7 @@ class WebSocketManager:
 
     async def stop(self) -> None:
         self._running = False
+        self._connected_connections = 0
         for t in self._tasks:
             t.cancel()
         if self._tasks:
