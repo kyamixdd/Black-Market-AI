@@ -30,14 +30,21 @@ class MarketCache:
         with self._lock:
             self._prices[market][symbol] = price
 
-    def update_ticker(self, market: str, symbol: str, price: float, volume: float, change_pct: float) -> None:
+    def update_ticker(self, market: str, symbol: str, price: float, volume: float, change_pct: float, source: str = "REST") -> None:
+        try:
+            change_value = float(change_pct)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not valid_price(price) or not valid_volume(volume) or not math.isfinite(change_value):
+            return
         with self._lock:
-            self._prices[market][symbol] = price
-            self._volumes[market][symbol] = volume
-            self._changes[market][symbol] = change_pct
+            self._prices[market][symbol] = float(price)
+            self._volumes[market][symbol] = float(volume)
+            self._changes[market][symbol] = change_value
             now = datetime.now(timezone.utc)
             self._updated_at[market][symbol] = now
             self._ticker_updated_at[market][symbol] = now
+            self._sources[market][symbol] = source.upper()
 
     def update_mark(self, market: str, symbol: str, mark: float, funding: float | None = None) -> None:
         with self._lock:
@@ -84,6 +91,7 @@ class MarketCache:
                 "symbol": symbol,
                 "market": market,
                 "timestamp": self._ticker_updated_at.get(market, {}).get(symbol),
+                "data_source": self._sources.get(market, {}).get(symbol, "UNKNOWN"),
                 "price": price,
                 "volume_24h": self._volumes.get(market, {}).get(symbol),
                 "price_change_24h": self._changes.get(market, {}).get(symbol),
