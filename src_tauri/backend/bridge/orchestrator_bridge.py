@@ -943,6 +943,9 @@ class OrchestratorBridge:
             "total_quote_volume_24h": sum(
                 item["total_quote_volume_24h"] or 0 for item in by_market.values()
             ) if total_sample else None,
+            "total_volume": sum(
+                item["total_quote_volume_24h"] or 0 for item in by_market.values()
+            ) if total_sample else None,
             "avg_spread_bps": None, "avg_orderbook_imbalance": None,
             "spread_status": "UNAVAILABLE: no live order-book depth sample",
             "orderbook_status": "UNAVAILABLE: no live order-book depth sample",
