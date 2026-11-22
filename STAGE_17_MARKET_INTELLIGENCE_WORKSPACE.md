@@ -6,7 +6,7 @@
 - `market/regime_radar.py` adds a deterministic OHLCV-based classification using 20/50-period moving averages, 20-candle log-return realized volatility, and 20-candle slope.
 - Labels include `UPTREND`, `DOWNTREND`, `RANGE_BOUND`, `HIGH_VOLATILITY`, `LOW_VOLATILITY`, `MIXED`, and `INSUFFICIENT_DATA`.
 - Each result includes UTC classification time, asset/market/timeframe, sample completeness, measured indicators, supporting evidence, and limitations.
-- Rule-strength is not a calibrated probability; confidence is explicitly null or labeled as rule strength.
+- No calibrated confidence model exists; the API returns null confidence rather than a pseudo-probability.
 - API: `GET /api/intelligence/regime/{symbol}?market=SPOT&timeframe=1h&limit=100`.
 
 ### Evidence-backed market analysis
