@@ -1,378 +1,162 @@
 # BlackMarket AI
 
-**Local autonomous market research and paper trading simulation platform**
+**Local-first cryptocurrency market intelligence and paper-trading research platform**
 
-⚠️ **PAPER TRADING ONLY** - No real money execution. No API keys required.
+> **Paper trading only.** The application is designed for simulated Spot and USDⓈ-M Futures trading. It does not place real exchange orders and does not require Binance trading credentials.
 
-## Overview
+## Project status (22 November 2026)
 
-BlackMarket AI is a comprehensive cryptocurrency market intelligence system that autonomously discovers, analyzes, and simulates trading strategies across Binance Spot and Futures markets. The system uses hybrid machine learning (RandomForest + XGBoost + River online learning) to generate trading signals and execute paper trades with realistic simulation including fees, slippage, funding, and liquidation risks.
+- **Current development branch:** `black-market-ai-beta`
+- **Audited branch head:** `db3fc448af100236efac42ee8ed8e2fbe6a162d7`
+- **Latest promotion to `main` observed:** `07817c4` (PR #32)
+- **Latest GitHub Actions run observed for the branch head:** CI run #343 — success
+- **Current release assessment:** Desktop beta candidate; not yet a broadly supported public release. The hosted website remains a private-preview path.
 
-### Key Features
+The score and readiness notes in [RELEASE_READINESS.md](RELEASE_READINESS.md) are an engineering assessment, not a guarantee of trading performance or security certification.
 
-- 🚀 **Market Discovery**: Discovers 2,181+ symbols (1,373 Spot + 808 Futures) from Binance public APIs
-- 📊 **Multi-Timeframe Analysis**: 9 timeframes (1m to 1w) with technical indicators (RSI, MACD, ADX, VWAP, etc.)
-- 🧠 **Hybrid ML**: Ensemble models with online learning and walk-forward validation
-- 🎯 **Strategy Engine**: 5 strategy families (Momentum, Breakout, Trend Following, Mean Reversion, Reversal)
-- 💰 **Paper Trading**: Realistic simulation with spread, slippage, fees, funding, and liquidation
-- 📱 **Telegram Integration**: Real-time notifications for signals, positions, and system status
-- 📺 **Terminal Dashboard**: Live TUI with 11 views (portfolio, signals, positions, learning, etc.)
-- 🔄 **Learning Loop**: Predictions → Outcomes → Training → Model promotion
-- 🛡️ **Risk Management**: Position limits, daily loss protection, leverage controls
-- 💾 **State Persistence**: Automatic database backups and recovery
+## What it does
 
-## Requirements
+BlackMarket AI combines public exchange market data, multi-timeframe analysis, strategy signals, a paper-trading simulator, risk controls, and a local learning pipeline.
 
-- **Python**: 3.10 or higher (3.14 recommended)
-- **Operating System**: Windows 10+, macOS 10.14+, or Linux (Ubuntu 18.04+)
-- **Memory**: 4GB RAM minimum, 8GB recommended
-- **Disk**: 500MB for application, additional space for historical data
-- **Network**: Internet connection for Binance API access
+### Main capabilities
 
-## Installation
+- Public Binance Spot and USDⓈ-M Futures market data.
+- Symbol discovery, market scanning, candle history, and nine configured timeframes (1m, 3m, 5m, 15m, 30m, 1h, 4h, 1d, 1w).
+- Technical analysis including RSI, MACD, ADX, ATR, VWAP, moving averages, Bollinger Bands, and market-regime context.
+- Five strategy families: Momentum, Breakout, Trend Following, Mean Reversion, and Reversal.
+- Market breadth, relative strength, volatility/ATR, quote-volume comparisons, and freshness indicators where sufficient source data is available.
+- Paper Spot and Futures portfolios with simulated fees, spread, slippage, funding, leverage, liquidation, stop-loss/take-profit, limit orders, and partial position management.
+- Risk limits for trade sizing, daily loss, total open risk, leverage, and position counts.
+- Learning infrastructure using RandomForest, XGBoost, and River, with chronological validation, confidence calibration, economic evidence, and gated model promotion.
+- SQLite persistence, integrity checks, backup/recovery, and a Textual terminal dashboard.
+- Optional Telegram notifications.
 
-### Quick Start (Windows)
+**Important:** An implemented strategy or a passing backtest is not evidence of future profitability. Market metrics can be unavailable when the required history is missing; the UI should show that state rather than invent a value.
+
+## Supported product paths
+
+### Windows desktop — primary product path
+
+The primary user experience is the Tauri desktop application with its supervised local backend. The Windows installer pipeline now builds a bundled backend executable; a clean-installer CI smoke test installs and starts the app with Python removed from `PATH`.
+
+For users, install the published Windows NSIS release artifact when one is available. Do not use an intermediate CI artifact as a stable public release.
+
+For developers, build from a Windows environment with the required Rust/Tauri, Node/npm, MSVC C++ build tools, Windows SDK, and WebView2 prerequisites:
 
 ```powershell
-# Download and extract BlackMarket AI to your desired location
-# Open PowerShell in the extracted folder and run:
-.\install_windows.ps1
+./scripts/build_windows_installer.ps1
 ```
 
-### Quick Start (macOS/Linux)
+The installer is produced under:
+
+`blackmarket-desktop/src-tauri/target/release/bundle/nsis/`
+
+The installer workflow and clean-machine smoke test are covered by CI. Before a public stable release, verify the exact release artifact, version, signing status, upgrade/uninstall behavior, and supported Windows versions.
+
+### Website — private preview, not production-hosted service
+
+The Next.js website imports the same canonical React dashboard as the desktop app. It uses a server-side login/session layer and a same-origin backend proxy; browser code must never receive the backend bearer token.
+
+The website requires server-side configuration:
+
+- `BLACKMARKET_BACKEND_URL`
+- `BLACKMARKET_SESSION_SECRET` (at least 32 random characters)
+- `BLACKMARKET_WEB_PASSWORD`
+- `BLACKMARKET_API_TOKEN`
+
+The backend host must explicitly enable remote API mode, require the same high-entropy bearer token, use HTTPS, and configure durable storage. Remote API mode is disabled by default.
+
+The website login is a **single-password private-preview gate**, not multi-user identity, role-based authorization, or a managed public SaaS account system. The hosted backend and deployment must pass end-to-end authentication, persistence, data-freshness, event-stream, portfolio, and rejected-order tests before being advertised as production-ready.
+
+See [blackmarket-web/README.md](blackmarket-web/README.md) for deployment configuration.
+
+## Legacy CLI / terminal mode
+
+The Python terminal application remains available for development and local use.
+
+### Requirements
+
+- Python 3.10+
+- Internet access for public Binance market data
+- Windows, macOS, or Linux for the Python/CLI path
+
+### Setup
 
 ```bash
-# Download and extract BlackMarket AI to your desired location
-# Open terminal in the extracted folder and run:
-chmod +x install_unix.sh
-./install_unix.sh
+python -m venv .venv
+# Windows PowerShell: .venv\\Scripts\\Activate.ps1
+# macOS/Linux: source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
-### Manual Installation
+On Windows, the repository also provides installer/run/test scripts. Review scripts before running them and keep personal credentials out of the repository.
 
-1. **Clone or extract the project**
-   ```bash
-   cd /path/to/BlackMarket-AI
-   ```
+### Run
 
-2. **Create virtual environment**
-   ```bash
-   python -m venv venv
-   
-   # Activate virtual environment
-   # Windows:
-   venv\Scripts\activate
-   # macOS/Linux:
-   source venv/bin/activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your preferred text editor
-   ```
-
-5. **Create required directories**
-   ```bash
-   mkdir -p data models logs backups
-   ```
-
-## Configuration
-
-Edit the `.env` file to customize your setup:
-
-```env
-# System
-APP_NAME=BLACKMARKET_AI
-APP_ENV=development
-LOG_LEVEL=INFO
-
-# Exchange (Public APIs only - no keys needed)
-BINANCE_MARKET_DATA_ONLY=true
-
-# Market Scanning
-SCAN_ALL_ELIGIBLE_SYMBOLS=true
-SPOT_ENABLED=true
-USDM_FUTURES_ENABLED=true
-
-# Timeframes
-TIMEFRAMES=1m,3m,5m,15m,30m,1h,4h,1d,1w
-
-# Paper Capital
-SPOT_INITIAL_BALANCE=500
-FUTURES_INITIAL_BALANCE=500
-PAPER_TRADING_ENABLED=true
-
-# Risk Management
-RISK_PER_TRADE_PCT=0.5
-RISK_MAX_DAILY_LOSS_PCT=2.0
-RISK_MAX_LEVERAGE=3
-MAX_SPOT_POSITIONS=5
-MAX_FUTURES_POSITIONS=5
-
-# Learning
-ML_ENABLED=true
-AUTO_MODEL_TRAINING=true
-MODEL_VALIDATION_REQUIRED=true
-
-# Telegram (Optional; disabled by default)
-TELEGRAM_ENABLED=false
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHAT_ID=your_chat_id_here
-
-# Database
-DATABASE_URL=sqlite:///data/blackmarket.db
+```bash
+python main.py
 ```
 
-### Telegram Bot Setup
+For the Tauri desktop development app:
 
-Telegram is optional. Leave `TELEGRAM_ENABLED=false` to run the core application without bot credentials; set it to `true` only after configuring both values below.
-
-1. Create a bot with [@BotFather](https://t.me/BotFather)
-2. Get your bot token
-3. Get your chat ID by sending a message to your bot and using:
-   ```bash
-   curl -s "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates" | jq '.result[0].message.chat.id'
-   ```
-
-## Supported deployment target
-
-The supported primary product path is the **Tauri desktop application with its supervised local Python backend**. The desktop UI authenticates to the loopback API at `127.0.0.1:8765`; the backend is started and stopped by the desktop supervisor.
-
-The Next.js website and remote-backend configuration are an optional private-preview/deployment path, not the verified primary release target. A hosted deployment must not be described as production-ready until the selected host, backend API authentication, database persistence, market-data freshness, WebSocket/SSE updates, portfolio endpoints, and paper-order rejection paths have been exercised end to end. A successful frontend deployment alone does not verify the hosted backend.
-
-## Running the Application
-
-### Desktop Dashboard (Tauri)
-
-Launch the BlackMarket AI desktop executable or its shortcut as the primary experience. The desktop application starts and supervises the local FastAPI backend. It checks backend, database, and WebSocket readiness before showing market data; a startup failure displays diagnostics and a retry action instead of placeholder dashboard values. Only one desktop instance is allowed, and closing the app stops a backend process that it started.
-
-The Tauri bundle is configured to include the Python source, but it does **not** bundle a Python interpreter or the Python package environment. Install Python 3.10+ and the project dependencies first. On Windows, run `.\install_windows.ps1` from the project directory; it installs `src_tauri\backend\requirements.txt` into the project's `venv`, which the desktop supervisor can use. For another interpreter, set `BLACKMARKET_PYTHON` to its executable and install the backend requirements there. A missing interpreter or dependency is reported in the startup screen and backend log.
-
-The desktop backend binds only to `127.0.0.1:8765`. Desktop data, configuration, and logs use the current user's application-data directory; the startup screen shows the backend log location when available. The desktop app does not require Binance credentials and does not provide real-money trading.
-
-For desktop development on Windows, install the Tauri prerequisites (Rust and Visual Studio C++ Build Tools), then run:
-
-```powershell
-cd .\blackmarket-desktop
+```bash
+cd blackmarket-desktop
 npm ci
 npm run tauri:dev
 ```
 
-The browser preview (`npm run dev`) cannot start the Python backend; use the Tauri desktop app to test managed startup.
+The browser-only Vite preview does not supervise the local Python backend; use Tauri to verify desktop-managed startup.
 
-To build the Windows NSIS installer from a Windows development environment with Rust 1.90+, the MSVC C++ build tools and Windows SDK, and WebView2 installed:
+## Configuration and secrets
 
-```powershell
-cd .\blackmarket-desktop
-npm ci
-npm run tauri:build
-```
+Copy `.env.example` to `.env` for the Python/desktop backend. Telegram is optional and disabled by default. Never commit `.env`, Telegram credentials, session secrets, or backend bearer tokens.
 
-The configured installer output is under `blackmarket-desktop\src-tauri\target\release\bundle\nsis`. The bundle is configured to include the desktop and Python source, but not a Python runtime or its dependencies; it is not a self-contained production installer until those prerequisites are provisioned for target machines.
+The desktop API binds to loopback by default (`127.0.0.1:8765`) and requires bearer authentication. Do not enable remote API mode on an untrusted network. The website's credentials must remain server-side.
 
-#### Windows batch fallback and diagnostics
-
-These scripts are fallback/development tools; they do not start or stop Python directly:
-
-```bat
-START_BLACKMARKET.bat
-STOP_BLACKMARKET.bat
-CHECK_BLACKMARKET.bat
-```
-
-`START_BLACKMARKET.bat` launches a built desktop executable when found, or runs the Tauri development app with its console visible for diagnostics. Set `BLACKMARKET_DESKTOP_EXE` to an executable's absolute path to use an installed build outside the project folders. `STOP_BLACKMARKET.bat` requests a graceful desktop close and never force-kills a backend process. `CHECK_BLACKMARKET.bat` reports the desktop process and local API readiness without changing application state.
-
-### Windows Terminal Dashboard
-
-```powershell
-# Optional legacy terminal interface
-.\run_windows.ps1
-
-# Or directly:
-python main.py
-
-# Run tests
-.\test_windows.ps1
-```
-
-### macOS/Linux
-
-```bash
-# Run the application
-./run_unix.sh
-
-# Or directly:
-python main.py
-
-# Run tests
-./test_unix.sh
-```
-
-### Terminal Dashboard
-
-The application starts with a live terminal dashboard showing:
-- Portfolio overview
-- Market scanner status
-- Trading signals
-- Open positions
-- Learning progress
-- System health
-
-**Keyboard Shortcuts:**
-- `1-0`: Switch between tabs
-- `l`: Toggle log view
-- `r`: Refresh dashboard
-- `space`: Pause/resume updates
-- `q`: Quit
+See [SECURITY.md](SECURITY.md) for the threat model, security limitations, and release checklist.
 
 ## Testing
 
-Run the complete test suite:
+### Python regression suite
+
 ```bash
-python -m pytest tests/ -v
+python -m pytest -q -m "not live"
 ```
 
-Run specific test phases:
+Live exchange smoke tests are marked separately because they depend on external service availability.
+
+### Desktop frontend
+
 ```bash
-# Phase 1 - Project Foundation
-python -m pytest tests/test_core.py -v
-
-# Phase 2 - Exchange
-python -m pytest tests/test_exchange.py -v
-
-# Phase 3 - Market Analysis
-python -m pytest tests/test_market_analysis.py -v
-
-# Phase 4 - Intelligence
-python -m pytest tests/test_intelligence.py -v
-
-# Phase 5 - Paper Trading
-python -m pytest tests/test_paper_trading_phase5.py -v
-
-# Phase 6 - Learning
-python -m pytest tests/test_learning_phase6.py -v
-
-# Phase 7 - Dashboard & Telegram
-python -m pytest tests/test_phase7_dashboard_telegram.py -v
-
-# Phase 8 - Integration
-python -m pytest tests/test_integration_phase8.py -v
+cd blackmarket-desktop
+npm ci
+npm run build
+npm run lint
+npm test
 ```
 
-## Backup and Recovery
+### Windows installer
 
-### Automatic Backups
-
-The recovery subsystem creates a verified, compressed SQLite backup every six hours and during graceful shutdown, retaining up to 30 backups. The default CLI location is `data/backups/`. In the installed Tauri app, the database and backups use the per-user application data directory (normally `%APPDATA%\\com.blackmarket.ai\\backups`), not the installation directory.
-
-### Manual Backup
-
-Use the application’s verified SQLite backup mechanism rather than copying a database file while the engine is running. Stop the app before performing a manual restore, and preserve the current database before replacing it.
-
-### Recovery
-
-On startup, the application checks database integrity and recovers persisted paper-trading state. If integrity validation fails, it reports the error and preserves the database for recovery rather than silently recreating it.
-
-## Security
-
-### Important Security Constraints
-
-- ❌ **No Binance Order Endpoints**: Only public market data APIs are used
-- ❌ **No API Keys Required**: All data is from public Binance endpoints
-- ❌ **No Real Money Execution**: All trading is simulated paper trading
-- ❌ **No Model Modification of Risk Limits**: Risk parameters cannot be changed by ML models
-- ❌ **No Trading on Stale Data**: All signals have freshness validation
-- ❌ **No Promotion of Unvalidated Models**: Models must pass walk-forward validation
-- ❌ **No Deleting Losing Trades**: All trades are preserved for analysis
-- ❌ **No Fabricated Fills**: All fills are based on realistic market conditions
-- ❌ **No Exposure of Telegram Credentials**: Tokens are stored in .env file
-
-### Data Protection
-
-- SQLite database files are **not encrypted by the application**. Protect them with OS-level full-disk encryption and appropriate user-account permissions.
-- Configuration files (.env) should never be committed to version control
-- Backup files are stored locally with timestamps
-- No sensitive data is logged or transmitted
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Module Import Errors**
-   ```bash
-   # Ensure virtual environment is activated
-   # Check Python version (>=3.10)
-   python --version
-   ```
-
-2. **Database Issues**
-   - Do **not** delete or overwrite a database that fails an integrity check; it may contain recoverable paper-trading history.
-   - Stop the application and make a byte-for-byte copy of the database and its related SQLite sidecar files (if present) before attempting recovery.
-   - Use the application's verified backup/restore procedure where possible. Test recovery on a copy, never on the only original.
-   - If no verified backup exists, preserve the original file and review the backend log before attempting repair.
-
-3. **WebSocket Connection Issues**
-   - The system automatically retries with exponential backoff
-   - Check internet connection
-   - Firewalls may block WebSocket connections
-
-4. **Memory Issues**
-   - Reduce `MAX_CONCURRENT_SCANS` in config.py
-   - Close other applications using memory
-
-5. **Telegram Not Working**
-   - Verify bot token and chat ID
-   - Check bot permissions
-   - Test with `python -c "from notifications.telegram_client import TelegramClient; TelegramClient('token', '123').test_connection()"`
-
-### Debug Mode
-
-Enable debug logging:
-```env
-LOG_LEVEL=DEBUG
+```powershell
+./scripts/build_windows_installer.ps1
 ```
 
-### Performance Tuning
+The GitHub Actions workflow checks the Python backend, desktop TypeScript/lint/tests, website build, and Windows installer startup/shutdown smoke test. CI success is necessary but does not replace manual release acceptance or a live market-data check.
 
-- Adjust `TIMEFRAMES` to reduce data processing
-- Set `SCAN_ALL_ELIGIBLE_SYMBOLS=false` for faster startup
-- Reduce `PREDICTION_HORIZON_MINUTES` for more frequent updates
+## Data, backups, and recovery
 
-## Architecture
+The application stores local application state in SQLite. Database files and backups are **not encrypted by the application**; use OS-level disk encryption and restrictive account permissions.
 
-### Core Components
+The recovery subsystem verifies database integrity and creates compressed backups according to configured backup behavior. Preserve the original database and SQLite sidecar files before attempting manual recovery. Test restoration on a copy, not on the only original.
 
-1. **Orchestrator**: Central coordinator managing all services
-2. **Event Bus**: Async message passing between components
-3. **Market Scanner**: Discovers and monitors symbols
-4. **Intelligence Core**: Generates trading signals
-5. **Paper Trading Simulator**: Executes simulated trades
-6. **Learning Engine**: Trains ML models from outcomes
-7. **Telegram Client**: Sends notifications
-8. **Terminal Dashboard**: Real-time monitoring interface
+## Documentation
 
-### Data Flow
+- [Security policy and threat model](SECURITY.md)
+- [Development progress and historical implementation log](DEVELOPMENT_PROGRESS.md)
+- [Release readiness audit and pre-release checklist](RELEASE_READINESS.md)
+- [Website deployment guide](blackmarket-web/README.md)
 
-```
-Market Data → Candles → Indicators → Strategies → Signals → Paper Trading → Outcomes → Learning → New Models
-```
+## Disclaimer
 
-## Support
-
-- **Documentation**: See DEVELOPMENT_PROGRESS.md for detailed phase-by-phase progress
-- **Issues**: Report bugs in your issue tracking system
-- **Contributions**: Fork and submit pull requests
-
-## License
-
-This project is for educational and research purposes only. Use at your own risk.
-
----
-
-**Remember**: This is a paper trading system. No real money is ever at risk.#
+BlackMarket AI is a software research and paper-trading project, not financial advice or an investment service. Simulated fills, historical tests, and machine-learning scores do not represent actual execution or guarantee results. Use at your own risk.
