@@ -73,6 +73,14 @@ class PublishRequest(BaseModel):
     risk_configuration: dict[str, float] = Field(default_factory=dict)
     known_limitations: list[str] = Field(default_factory=list, max_length=30)
     backtest_report: ReportSummary = Field(default_factory=ReportSummary)
+    source_report_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("source_report_id")
+    @classmethod
+    def report_id_safe(cls, value):
+        if value is not None and not re.fullmatch(r"[a-fA-F0-9-]{8,64}", value):
+            raise ValueError("Invalid saved backtest report identifier.")
+        return value
 
     @field_validator("strategy_key")
     @classmethod
@@ -123,6 +131,36 @@ class PublishRequest(BaseModel):
         return [str(v).strip()[:500] for v in values if str(v).strip()]
 
 
+def _report_for_publication(request: PublishRequest) -> tuple[dict[str, Any], str, str | None]:
+    if not request.source_report_id:
+        return request.backtest_report.model_dump(exclude_none=True), "USER_SUBMITTED", None
+    saved = _repo().get_backtest_report(request.source_report_id)
+    if saved is None or saved.get("origin") != "LOCAL_BACKTEST":
+        raise HTTPException(status_code=422, detail="Only a locally generated Strategy Lab report can be referenced as a local backtest.")
+    if str(saved.get("status", "")).lower() not in {"completed", "ok"}:
+        raise HTTPException(status_code=422, detail="The referenced backtest is not completed.")
+    result = saved.get("report") or {}
+    metrics = result.get("metrics") if isinstance(result, dict) else {}
+    metrics = metrics if isinstance(metrics, dict) else {}
+    trades = result.get("trades") if isinstance(result, dict) else []
+    config = saved.get("config") or {}
+    start = str(config.get("start_date") or "")
+    end = str(config.get("end_date") or "")
+    sample_period = f"{start[:10]} to {end[:10]}" if start and end else ""
+    pf = metrics.get("profit_factor")
+    if not isinstance(pf, (int, float)) or not 0 <= float(pf) <= 1_000_000:
+        pf = None
+    summary = ReportSummary(
+        total_trades=metrics.get("trade_count", len(trades) if isinstance(trades, list) else None),
+        win_rate_pct=metrics.get("win_rate_pct"),
+        net_return_pct=metrics.get("net_return_pct"),
+        max_drawdown_pct=metrics.get("max_drawdown_pct"),
+        profit_factor=pf,
+        sample_period=sample_period,
+    )
+    return summary.model_dump(exclude_none=True), "LOCAL_BACKTEST", request.source_report_id
+
+
 class FavoriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     favorite: bool
@@ -161,8 +199,7 @@ def publish_strategy(request: PublishRequest,
     owner = _owner(x_bm_community_owner)
     record = request.model_dump()
     record["public_id"] = uuid.uuid4().hex
-    # Never accept client-declared verification. Publicly shared performance is user-submitted.
-    record["backtest_report"] = request.backtest_report.model_dump(exclude_none=True)
+    record["backtest_report"], record["report_provenance"], record["source_report_id"] = _report_for_publication(request)
     try:
         return _repo().publish_public_strategy(record, owner)
     except PermissionError as exc:
@@ -189,7 +226,7 @@ def update_strategy(public_id: str, request: PublishRequest,
         raise HTTPException(status_code=404, detail="Strategy not found")
     record = request.model_dump()
     record["public_id"] = public_id
-    record["backtest_report"] = request.backtest_report.model_dump(exclude_none=True)
+    record["backtest_report"], record["report_provenance"], record["source_report_id"] = _report_for_publication(request)
     try:
         return _repo().publish_public_strategy(record, owner)
     except PermissionError as exc:
