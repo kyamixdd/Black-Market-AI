@@ -151,10 +151,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
+      - name: Install stable Rust toolchain and rustfmt
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
       - name: Check Rust formatting
         run: cargo fmt --manifest-path blackmarket-desktop/src-tauri/Cargo.toml --all -- --check
       - name: Compile Tauri application
