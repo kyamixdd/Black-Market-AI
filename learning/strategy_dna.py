@@ -51,9 +51,9 @@ STRATEGY_DNA = {
     "reversal": {
         "type": "Reversal",
         "timeframes": ["15m"],
-        "entry": "See the strategy implementation for its reversal-specific candle/indicator conditions.",
-        "exit": "Signal-provided stop and take-profit levels; simulator applies configured risk and execution rules.",
-        "known_limitations": ["Detailed entry conditions depend on implementation and market data", "Paper-trade slippage is not persisted in trade history"],
+        "entry": "15m RSI below 25 triggers oversold long; RSI above 75 triggers overbought short (Spot maps short to sell).",
+        "exit": "Oversold: 2% stop with 3%/6% targets. Overbought: 2% stop with 3%/6% downside targets.",
+        "known_limitations": ["The implementation labels this a divergence heuristic but uses RSI extremes rather than confirmed price/RSI divergence", "Paper-trade slippage is not persisted in trade history"],
     },
 }
 
