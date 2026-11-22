@@ -30,8 +30,8 @@ try {
   await page.waitForSelector('#root > *', { timeout: 15000 })
   await page.waitForLoadState('load')
   const performanceBaseline = await page.evaluate(() => {
-    const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
-    const resources = performance.getEntriesByType('resource') as PerformanceResourceTiming[]
+    const navigation = performance.getEntriesByType('navigation')[0]
+    const resources = performance.getEntriesByType('resource')
     return {
       domContentLoadedMs: Math.round(navigation?.domContentLoadedEventEnd ?? 0),
       loadEventMs: Math.round(navigation?.loadEventEnd ?? 0),
