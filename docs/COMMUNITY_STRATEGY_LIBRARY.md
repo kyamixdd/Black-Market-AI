@@ -11,6 +11,7 @@
 ## Ownership and privacy
 - Hosted web users receive a signed, pseudonymous community-owner cookie after successful login. The same-origin backend proxy verifies it and forwards only the verified owner UUID.
 - The desktop client uses a random UUID stored in its local webview storage. It is not a user account and does not sync ownership between devices.
+- Desktop local mode stores community records in its own local backend database. Cross-user public discovery requires the hosted application to connect to one common backend/database; a local desktop listing is not automatically uploaded to the hosted community.
 - Community records are stored in dedicated `public_strategies`, `public_strategy_versions`, `strategy_favorites`, and `strategy_report_flags` tables.
 - The publisher submits only the explicit strategy fields and a small allowlisted report summary. No portfolio, balances, API credentials, personal settings, or private trade records are fetched or included automatically.
 - Rule JSON is bounded and rejects common private-field names. Risk configuration accepts only a small allowlist of numeric risk fields.
@@ -24,6 +25,7 @@
 
 ## Limitations
 - Reports are queued in the database for review; this stage does not include a moderator/admin review console or automatic removal workflow.
+- Shared library durability depends on the configured backend's persistent storage. Do not use ephemeral disk as the production community database.
 - Search/filter and sorting operate on public metadata only; no profitability ranking is presented.
 - Public sharing is for research only. All execution remains paper/simulator-only; no exchange order execution is added.
 - The backend uses existing SQLite persistence and does not require a paid community service.
