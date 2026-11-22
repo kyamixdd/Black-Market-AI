@@ -248,13 +248,23 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
                 "close_reason": "OPEN", "bars_held": 0, "status": "OPEN",
             }
             pending = None
-        curve.append({"time": bar["close_time"], "equity": equity})
+        marked_equity = equity
+        if position:
+            direction_sign = 1 if position["side"] == "LONG" else -1
+            unrealized = (bar["close"] - position["entry_price"]) * position["quantity"] * direction_sign
+            estimated_exit_cost = position["quantity"] * bar["close"] * (fee_rate + spread_bps / 20000.0 + slip_bps / 10000.0)
+            marked_equity += unrealized - position["entry_fee"] - estimated_exit_cost
+        curve.append({"time": bar["close_time"], "equity": marked_equity})
     if position:
         last = candles[-1]
         exit_fill = last["close"] * (1 - (spread_bps / 2.0 + slip_bps) / 10000.0 * (1 if position["side"] == "LONG" else -1))
         gross = (last["close"] - position["entry_price"]) * position["quantity"] * (1 if position["side"] == "LONG" else -1)
         exit_fee = position["quantity"] * exit_fill * fee_rate
-        exit_slippage = last["close"] * slip_bps / 10000.0 * position["quantity"]\n        exit_spread = last["close"] * spread_bps / 20000.0 * position["quantity"]\n        costs = position["entry_fee"] + exit_fee + position["entry_slippage"] + position["entry_spread"] + exit_slippage + exit_spread
+        exit_slippage = last["close"] * slip_bps / 10000.0 * position["quantity"]\n        exit_spread = last["close"] * spread_bps / 20000.0 * position["quantity"]\n        funding = 0.0
+        if config.market == "FUTURES" and config.funding_rate is not None:
+            hours = (last["open_time"] - position["entry_time"]) / 3600000.0
+            funding = position["quantity"] * position["entry_fill"] * _number(config.funding_rate, "funding_rate") * int(hours // 8) * (1 if position["side"] == "LONG" else -1)
+        costs = position["entry_fee"] + exit_fee + position["entry_slippage"] + position["entry_spread"] + exit_slippage + exit_spread + funding
         net = gross - costs
         equity += net
         trades.append({**position, "exit_time": last["close_time"], "exit_price": last["close"], "exit_fill": exit_fill,
