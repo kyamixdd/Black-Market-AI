@@ -1,4 +1,6 @@
-import { NextRequest } from "next/server";\nimport { rateLimited, requestClientKey } from "./rate-limit-core.mjs";\nexport { rateLimited, requestClientKey };
+import { NextRequest } from "next/server";
+import { rateLimited, requestClientKey } from "./rate-limit-core.mjs";
+export { rateLimited, requestClientKey };
 
 export async function readLimitedBody(request: NextRequest, maxBytes: number): Promise<string> {
   const declaredLength = request.headers.get("content-length");
