@@ -22,6 +22,9 @@ from .models import (
     SymbolModel,
     SystemEventModel,
     TradeHistoryModel,
+    SavedStrategyModel,
+    BacktestReportModel,
+    WorkspaceModel,
 )
 
 logger = logging.getLogger(__name__)
@@ -478,6 +481,157 @@ class Repository:
                 return prev.version
             session.commit()
             return None
+
+
+    # --- Saved strategies, backtest reports, and workspaces ---
+    @staticmethod
+    def _json_value(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+    @staticmethod
+    def _json_object(value: str) -> dict[str, Any]:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+
+    def save_strategy_definition(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._get_session() as session:
+            obj = session.get(SavedStrategyModel, record["strategy_id"])
+            values = {
+                "name": record["name"],
+                "strategy_key": record["strategy_key"],
+                "description": record.get("description", ""),
+                "definition_json": self._json_value(record.get("definition", {})),
+                "tags_json": self._json_value(record.get("tags", [])),
+                "version": int(record.get("version", 1)),
+            }
+            if obj is None:
+                obj = SavedStrategyModel(strategy_id=record["strategy_id"], **values)
+                session.add(obj)
+            else:
+                for key, value in values.items():
+                    setattr(obj, key, value)
+                obj.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            return self._strategy_dict(obj)
+
+    def get_strategy_definition(self, strategy_id: str) -> dict[str, Any] | None:
+        with self._get_session() as session:
+            obj = session.get(SavedStrategyModel, strategy_id)
+            return self._strategy_dict(obj) if obj else None
+
+    def list_strategy_definitions(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._get_session() as session:
+            rows = session.scalars(select(SavedStrategyModel).order_by(SavedStrategyModel.updated_at.desc()).limit(limit)).all()
+            return [self._strategy_dict(row) for row in rows]
+
+    def delete_strategy_definition(self, strategy_id: str) -> bool:
+        with self._get_session() as session:
+            obj = session.get(SavedStrategyModel, strategy_id)
+            if obj is None:
+                return False
+            session.delete(obj)
+            session.commit()
+            return True
+
+    def _strategy_dict(self, obj: SavedStrategyModel) -> dict[str, Any]:
+        return {
+            "strategy_id": obj.strategy_id, "name": obj.name, "strategy_key": obj.strategy_key,
+            "description": obj.description, "definition": json.loads(obj.definition_json),
+            "tags": json.loads(obj.tags_json), "version": obj.version,
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
+        }
+
+    def save_backtest_report(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._get_session() as session:
+            obj = session.get(BacktestReportModel, record["report_id"])
+            values = {
+                "strategy_id": record.get("strategy_id"), "strategy_name": record["strategy_name"],
+                "symbol": record["symbol"], "market": record["market"], "timeframe": record["timeframe"],
+                "status": record.get("status", "saved"),
+                "config_json": self._json_value(record.get("config", {})),
+                "report_json": self._json_value(record.get("report", {})),
+            }
+            if obj is None:
+                obj = BacktestReportModel(report_id=record["report_id"], **values)
+                session.add(obj)
+            else:
+                for key, value in values.items():
+                    setattr(obj, key, value)
+            session.commit()
+            return self._report_dict(obj)
+
+    def get_backtest_report(self, report_id: str) -> dict[str, Any] | None:
+        with self._get_session() as session:
+            obj = session.get(BacktestReportModel, report_id)
+            return self._report_dict(obj) if obj else None
+
+    def list_backtest_reports(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._get_session() as session:
+            rows = session.scalars(select(BacktestReportModel).order_by(BacktestReportModel.created_at.desc()).limit(limit)).all()
+            return [self._report_dict(row) for row in rows]
+
+    def delete_backtest_report(self, report_id: str) -> bool:
+        with self._get_session() as session:
+            obj = session.get(BacktestReportModel, report_id)
+            if obj is None:
+                return False
+            session.delete(obj)
+            session.commit()
+            return True
+
+    def _report_dict(self, obj: BacktestReportModel) -> dict[str, Any]:
+        return {
+            "report_id": obj.report_id, "strategy_id": obj.strategy_id, "strategy_name": obj.strategy_name,
+            "symbol": obj.symbol, "market": obj.market, "timeframe": obj.timeframe, "status": obj.status,
+            "config": json.loads(obj.config_json), "report": json.loads(obj.report_json),
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+        }
+
+    def save_workspace(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._get_session() as session:
+            obj = session.get(WorkspaceModel, record["workspace_id"])
+            values = {
+                "name": record["name"], "owner_key": record.get("owner_key", "local"),
+                "schema_version": int(record.get("schema_version", 1)),
+                "payload_json": self._json_value(record.get("payload", {})),
+            }
+            if obj is None:
+                obj = WorkspaceModel(workspace_id=record["workspace_id"], **values)
+                session.add(obj)
+            else:
+                for key, value in values.items():
+                    setattr(obj, key, value)
+                obj.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            return self._workspace_dict(obj)
+
+    def get_workspace(self, workspace_id: str, owner_key: str = "local") -> dict[str, Any] | None:
+        with self._get_session() as session:
+            obj = session.get(WorkspaceModel, workspace_id)
+            return self._workspace_dict(obj) if obj and obj.owner_key == owner_key else None
+
+    def list_workspaces(self, owner_key: str = "local", limit: int = 100) -> list[dict[str, Any]]:
+        with self._get_session() as session:
+            rows = session.scalars(select(WorkspaceModel).where(WorkspaceModel.owner_key == owner_key).order_by(WorkspaceModel.updated_at.desc()).limit(limit)).all()
+            return [self._workspace_dict(row) for row in rows]
+
+    def delete_workspace(self, workspace_id: str, owner_key: str = "local") -> bool:
+        with self._get_session() as session:
+            obj = session.get(WorkspaceModel, workspace_id)
+            if obj is None or obj.owner_key != owner_key:
+                return False
+            session.delete(obj)
+            session.commit()
+            return True
+
+    def _workspace_dict(self, obj: WorkspaceModel) -> dict[str, Any]:
+        return {
+            "workspace_id": obj.workspace_id, "name": obj.name, "owner_key": obj.owner_key,
+            "schema_version": obj.schema_version, "payload": json.loads(obj.payload_json),
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
+        }
 
     # --- System Events & Notifications ---
     def save_system_event(self, event_dict: dict[str, Any]) -> str:
