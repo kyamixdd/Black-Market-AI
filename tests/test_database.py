@@ -15,6 +15,39 @@ def test_database_init(tmp_path):
     assert db.integrity_check() == "ok"
 
 
+
+def test_database_initialization_and_additive_migration_are_idempotent(tmp_path):
+    import sqlite3
+
+    db_file = tmp_path / "legacy.db"
+    connection = sqlite3.connect(db_file)
+    connection.execute("CREATE TABLE paper_positions (position_id VARCHAR(64) PRIMARY KEY)")
+    connection.execute("CREATE TABLE trade_history (id INTEGER PRIMARY KEY)")
+    connection.commit()
+    connection.close()
+
+    db = Database(f"sqlite:///{db_file}")
+    db.init_db()
+    db.init_db()
+    with db.engine.connect() as connection:
+        position_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(paper_positions)")}
+        trade_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(trade_history)")}
+    assert {"reserved_notional", "reserved_margin", "order_id", "strategy"} <= position_columns
+    assert "order_id" in trade_columns
+    assert db.integrity_check() == "ok"
+    assert db.foreign_key_check() == []
+    db.close()
+
+
+def test_corrupt_sqlite_database_is_detected_before_init(tmp_path):
+    db_file = tmp_path / "corrupt.db"
+    db_file.write_bytes(b"not a sqlite database")
+    db = Database(f"sqlite:///{db_file}")
+    import pytest
+    with pytest.raises(RuntimeError, match="integrity check|could not be opened"):
+        db.init_db()
+    db.close()
+
 def test_symbol_repository(tmp_path):
     db_file = tmp_path / "test.db"
     db = Database(f"sqlite:///{db_file}")
