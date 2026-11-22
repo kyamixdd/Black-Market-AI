@@ -54,9 +54,14 @@ class DatabaseBackupManager:
     def create_backup(self, description: str = "scheduled") -> Path:
         """Create a verified database backup."""
         with self._lock:
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            db_name = self._extract_db_name()
-            backup_name = f"{db_name}_{timestamp}_{description}"
+            safe_description = "".join(
+                char.lower() if char.isalnum() else "_" for char in str(description)
+            ).strip("_")[:40] or "manual"
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            db_name = "".join(
+                char.lower() if char.isalnum() else "_" for char in self._extract_db_name()
+            ).strip("_")[:40] or "blackmarket"
+            backup_name = f"{db_name}_{timestamp}_{safe_description}"
             backup_path = self.config.backup_dir / backup_name
 
             if self.config.compress:
@@ -73,11 +78,56 @@ class DatabaseBackupManager:
                     backup_path.unlink(missing_ok=True)
                     raise RuntimeError("Backup verification failed")
 
-            # Prune old backups
-            self._prune_old_backups()
+            metadata_path = Path(str(backup_path) + ".json")
+            metadata = {
+                "format_version": 1,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "description": safe_description,
+                "database_name": db_name,
+                "compressed": self.config.compress,
+                "backup_file": backup_path.name,
+                "backup_size_bytes": backup_path.stat().st_size,
+                "sha256": self._sha256_file(backup_path),
+                "integrity_check": "ok" if self._verify_backup(backup_path) else "not_verified",
+            }
+            if metadata["integrity_check"] != "ok":
+                backup_path.unlink(missing_ok=True)
+                raise RuntimeError("Backup metadata validation failed")
+            metadata_tmp = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
+            try:
+                metadata_tmp.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+                os.replace(metadata_tmp, metadata_path)
+            finally:
+                metadata_tmp.unlink(missing_ok=True)
 
-            logger.info(f"Backup created: {backup_path}")
+            self._prune_old_backups()
+            logger.info("Backup created: %s", backup_path)
             return backup_path
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def validate_backup(self, backup_path: Path) -> dict[str, Any]:
+        """Validate archive readability, SQLite integrity, and optional manifest hash."""
+        backup_path = Path(backup_path)
+        if not backup_path.is_file() or not self._verify_backup(backup_path):
+            raise RuntimeError("Backup is missing, unreadable, or fails SQLite integrity_check")
+        metadata_path = Path(str(backup_path) + ".json")
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata.get("backup_file") != backup_path.name:
+                raise RuntimeError("Backup metadata filename does not match")
+            if metadata.get("sha256") != self._sha256_file(backup_path):
+                raise RuntimeError("Backup checksum does not match metadata")
+            if metadata.get("backup_size_bytes") != backup_path.stat().st_size:
+                raise RuntimeError("Backup size does not match metadata")
+            return metadata
+        return {"format_version": 0, "legacy_backup": True, "integrity_check": "ok"}
 
     def _extract_db_name(self) -> str:
         """Extract database name from URL."""
@@ -166,19 +216,25 @@ class DatabaseBackupManager:
     def _prune_old_backups(self) -> None:
         """Remove old backups beyond max_backups."""
         backups = sorted(
-            self.config.backup_dir.glob("*.db*"),
+            (p for p in self.config.backup_dir.glob("*.db*") if not p.name.endswith(".json")),
             key=lambda p: p.stat().st_mtime,
-            reverse=True
+            reverse=True,
         )
-        for old_backup in backups[self.config.max_backups:]:
+        for old_backup in backups[max(1, self.config.max_backups):]:
             old_backup.unlink(missing_ok=True)
-            logger.info(f"Pruned old backup: {old_backup}")
+            Path(str(old_backup) + ".json").unlink(missing_ok=True)
+            logger.info("Pruned old backup: %s", old_backup)
 
     def restore_backup(self, backup_path: Path, target_path: Optional[Path] = None) -> bool:
         """Restore a verified SQLite backup atomically and reopen the live database."""
         with self._lock:
             if not backup_path.exists():
                 logger.error("Backup not found: %s", backup_path)
+                return False
+            try:
+                self.validate_backup(backup_path)
+            except Exception as exc:
+                logger.error("Restore validation failed: %s", exc)
                 return False
             if target_path is None:
                 target_path = Path(self._get_source_path())
