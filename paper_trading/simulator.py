@@ -49,6 +49,8 @@ class Simulator:
         self.daily_pnl = 0.0  # realized net P&L ledger
         self.daily_pnl_date = datetime.now(timezone.utc).date()
         self.daily_start_equity = self.initial_spot_balance + self.initial_futures_balance
+        self.daily_equity_state_loaded = False
+        self.persist_daily_equity_callback = None
         self.fee_calc = FeeCalculator()
         self.funding_calc = FundingCalculator()
         self.liquidation = LiquidationEngine()
@@ -129,6 +131,11 @@ class Simulator:
         }
 
 
+    def _persist_daily_equity_baseline(self) -> None:
+        callback = self.persist_daily_equity_callback
+        if callable(callback):
+            callback(self.daily_pnl_date.isoformat(), float(self.daily_start_equity))
+
     def get_daily_equity_baseline(self) -> float:
         """Return the total-equity baseline for the current UTC day."""
         self.get_daily_pnl()
@@ -141,6 +148,8 @@ class Simulator:
             self.daily_pnl = 0.0
             self.daily_pnl_date = today
             self.daily_start_equity = self.get_account_equity_breakdown()["total_equity"]
+            self.daily_equity_state_loaded = True
+            self._persist_daily_equity_baseline()
         equity = self.get_account_equity_breakdown()["total_equity"]
         return float(equity) - float(self.daily_start_equity)
 
@@ -926,6 +935,7 @@ class Simulator:
             if restored_baseline is not None and math.isfinite(restored_baseline) and restored_baseline > 0
             else self.get_account_equity_breakdown()["total_equity"]
         )
+        self.daily_equity_state_loaded = restored_baseline is not None and math.isfinite(restored_baseline) and restored_baseline > 0
         self.get_daily_pnl()
         logger.info("Restored state: Spot=%.2f, Futures=%.2f, OpenPos=%d, Trades=%d",
                     self.spot_balance, self.futures_balance,

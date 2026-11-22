@@ -536,6 +536,13 @@ class PositionRecoveryManager:
             ))
             self.simulator.futures_balance -= reserved_margin + float(position.get("fees_paid", 0.0))
 
+        # Preserve a saved same-day baseline across restart. If none exists or
+        # it belongs to a prior UTC day, start the day from recovered equity.
+        if not self.simulator.daily_equity_state_loaded:
+            self.simulator.daily_start_equity = self.simulator.get_account_equity_breakdown()["total_equity"]
+            self.simulator.daily_equity_state_loaded = True
+            self.simulator._persist_daily_equity_baseline()
+
 
 class ModelCheckpointRecovery:
     """Recovers ML model checkpoints after restart."""

@@ -1409,3 +1409,23 @@ def test_daily_equity_baseline_resets_on_utc_rollover():
 
     assert simulator.get_daily_pnl() == pytest.approx(0.0)
     assert simulator.daily_start_equity == pytest.approx(965.0)
+
+def test_daily_equity_risk_state_round_trip(tmp_path):
+    from datetime import date
+    from core.daily_equity_state import load_daily_equity_state, save_daily_equity_state
+
+    path = tmp_path / "daily-equity.json"
+    save_daily_equity_state("2026-11-22", 987.65, path)
+    assert load_daily_equity_state(path) == {
+        "date": date(2026, 11, 22),
+        "equity": pytest.approx(987.65),
+    }
+
+
+def test_daily_equity_risk_state_rejects_corrupt_file(tmp_path):
+    from core.daily_equity_state import load_daily_equity_state
+
+    path = tmp_path / "daily-equity.json"
+    path.write_text("{invalid", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="daily equity risk state"):
+        load_daily_equity_state(path)

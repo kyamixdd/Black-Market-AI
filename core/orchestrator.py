@@ -96,6 +96,14 @@ class Orchestrator:
         self._recent_snapshots: list[dict] = []
         self._current_regime: str = "UNKNOWN"
         self.apply_runtime_settings(self._load_runtime_settings(), persist=False)
+        from core.daily_equity_state import load_daily_equity_state, save_daily_equity_state
+        self.simulator.persist_daily_equity_callback = save_daily_equity_state
+        daily_state = load_daily_equity_state()
+        today = datetime.now(timezone.utc).date()
+        if daily_state and daily_state["date"] == today:
+            self.simulator.daily_pnl_date = today
+            self.simulator.daily_start_equity = daily_state["equity"]
+            self.simulator.daily_equity_state_loaded = True
 
         self.disaster_recovery = create_disaster_recovery_orchestrator(
             db=self.db,
@@ -544,6 +552,7 @@ class Orchestrator:
                 self.repo.save_position(pos)
             for pos in self.simulator.futures_positions.values():
                 self.repo.save_position(pos)
+            self.simulator._persist_daily_equity_baseline()
         except Exception as exc:
             logger.error("State persistence failed: %s", exc)
 
