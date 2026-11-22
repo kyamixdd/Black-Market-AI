@@ -821,6 +821,8 @@ class OrchestratorBridge:
             "risk_max_daily_loss_pct": self.risk_manager.max_daily_loss_pct,
             "risk_max_total_open_pct": self.risk_manager.max_open_risk_pct,
             "risk_max_leverage": self.risk_manager.max_leverage,
+            "risk_max_position_size_pct": self.risk_manager.max_position_size_pct,
+            "risk_max_asset_exposure_pct": self.risk_manager.max_asset_exposure_pct,
             "max_spot_positions": self.risk_manager.max_spot_positions,
             "max_futures_positions": self.risk_manager.max_futures_positions,
             "telegram_enabled": saved.get("telegram_enabled", getattr(orchestrator, "telegram", None) is not None),
