@@ -185,7 +185,7 @@ CHALLENGES = [
         "trading_rules": "Spot-only, no leverage; regime labels and data windows fixed at challenge start.",
         "fees_and_slippage": {"fee_per_side_pct": 0.1, "slippage_per_side_pct": 0.05},
         "risk_limits": {"max_position_pct": 20, "max_drawdown_pct": 20},
-        "ranking": "Average normalized performance across regimes, with drawdown and minimum sample safeguards.",
+        "ranking": "Average normalized net return across regimes, with drawdown and minimum sample safeguards; raw profit alone is not the ranking metric.",
     },
     {
         "challenge_id": "beginner-strategy-research",
