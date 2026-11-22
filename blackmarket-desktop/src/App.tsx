@@ -30,7 +30,7 @@ import {
 import { LiveMarketChart } from './components/charts/LiveMarketChart'
 import { DashboardScreen } from './screens/DashboardScreens'
 import { getApiAuthorization, setApiToken } from './services/localAuth'
-import { mutateJson, requestJson } from './services/backendClient'
+import { backendBaseUrl, mutateJson, requestJson } from './services/backendClient'
 import {
   assessMarketData,
   marketChartKey,
@@ -136,8 +136,6 @@ type StartupStatus = {
   details?: string | null
   logPath?: string | null
 }
-
-const API_ORIGIN = 'http://127.0.0.1:8765'
 
 async function invoke<T>(command: string): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
@@ -372,7 +370,7 @@ function App() {
       const controller = new AbortController()
       const requestTimeout = window.setTimeout(() => controller.abort(), 5000)
       try {
-        const response = await fetch(isTauri ? `${API_ORIGIN}/health` : '/api/health', {
+        const response = await fetch(isTauri ? `${backendBaseUrl().replace(/\/api$/, '')}/health` : '/api/health', {
           signal: controller.signal,
           cache: 'no-store',
         })
@@ -392,7 +390,7 @@ function App() {
               setApiToken(token)
             }
             const authenticatedResponse = await fetch(
-              isTauri ? `${API_ORIGIN}/api/system/status` : '/api/backend/system/status',
+              isTauri ? `${backendBaseUrl()}/system/status` : `${backendBaseUrl()}/system/status`,
               {
                 headers: isTauri ? getApiAuthorization() : undefined,
                 signal: controller.signal,

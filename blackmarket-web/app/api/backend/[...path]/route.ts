@@ -19,7 +19,7 @@ async function proxy(request: NextRequest, context: Context) {
   const headers = new Headers({ Authorization: "Bearer " + token, Accept: "application/json" });
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("Content-Type", contentType);
-  const init: RequestInit = { method: request.method, headers, cache: "no-store", signal: request.signal };
+  const init: RequestInit = { method: request.method, headers, cache: "no-store", signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]) };
   if (request.method !== "GET" && request.method !== "HEAD") init.body = await request.text();
   try {
     const upstream = await fetch(target, init);

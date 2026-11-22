@@ -1,4 +1,5 @@
 import { getApiToken } from './localAuth.js'
+import { backendEventStreamUrl, backendWebSocketUrl, isDesktopRuntime } from './backendClient.js'
 
 type EventCallback = (data: unknown) => void
 
@@ -36,7 +37,7 @@ export class WebSocketService {
   private manuallyDisconnected = false
 
   constructor() {
-    this.url = 'ws://127.0.0.1:8765/ws'
+    this.url = backendWebSocketUrl()
   }
 
   get connectionState(): ConnectionState {
@@ -65,12 +66,12 @@ export class WebSocketService {
   }
 
   connect(): Promise<void> {
-    if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
+    if (!isDesktopRuntime()) {
       if (this.eventSource?.readyState === EventSource.OPEN || this.eventSource?.readyState === EventSource.CONNECTING) return Promise.resolve()
       this.manuallyDisconnected = false
       this.setState(this.reconnectAttempts ? 'reconnecting' : 'connecting')
       return new Promise((resolve, reject) => {
-        const source = new EventSource('/api/backend/events/stream')
+        const source = new EventSource(backendEventStreamUrl())
         this.eventSource = source
         let settled = false
         source.onopen = () => {
