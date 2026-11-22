@@ -13,6 +13,7 @@ from . import (
     activity,
     settings,
     assistant,
+    backup,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "activity",
     "settings",
     "assistant",
+    "backup",
 ]
