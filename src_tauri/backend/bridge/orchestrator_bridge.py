@@ -15,6 +15,7 @@ from core.event_bus import EventBus
 from core.event_models import EventType
 from database.repositories import Repository
 from market.candle_manager import CandleManager
+from market.analytics import breadth_summary, historical_volatility, volume_comparison, price_change, return_correlation
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,19 @@ class OrchestratorBridge:
         self.risk_manager = orchestrator.simulator.risk_manager
         self._candle_refresh_at: dict[tuple[str, str, str], float] = {}
         self._analytics_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+
+
+    def get_market_data_status(self) -> dict:
+        """Expose a stable aggregate market-data health contract."""
+        markets = {market: self.orch.cache.get_data_status(market)
+                  for market in ("SPOT", "FUTURES")}
+        scanner = getattr(self.orch, "scanner", None)
+        websocket = getattr(scanner, "websocket_manager", None)
+        stream_status = websocket.status_snapshot() if websocket is not None else {
+            "state": "UNAVAILABLE", "last_message_ms": None,
+            "message_age_ms": None, "reconnect_attempts": 0, "active_streams": 0}
+        return {"markets": markets, "websocket": stream_status,
+                "checked_at": datetime.now(timezone.utc).isoformat()}
 
     # ===== Market Data =====
 
@@ -185,6 +199,89 @@ class OrchestratorBridge:
                 limit=max(500, limit),
             )
         return self.candles.get_series(market, symbol, timeframe, limit=limit)
+
+    async def get_symbol_analytics(self, symbol: str, market: str, timeframe: str = "1h") -> dict:
+        """Return interval changes and indicators with explicit candle requirements."""
+        candles = await self.get_candles(symbol, market, timeframe, limit=200)
+        closes, volumes = [], []
+        highs, lows = [], []
+        now_ms = int(time.time() * 1000)
+        for row in candles:
+            try:
+                if int(row["close_time"]) >= now_ms:
+                    continue
+                close, volume = float(row["close"]), float(row["volume"])
+                high, low = float(row["high"]), float(row["low"])
+                if not all(math.isfinite(value) for value in (close, volume, high, low)) or min(close, high, low) <= 0 or volume < 0:
+                    continue
+                closes.append(close); volumes.append(volume); highs.append(high); lows.append(low)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+        changes = {
+            "1h": price_change(closes, 1),
+            "24h": price_change(closes, 24),
+            "7d": price_change(closes, 168),
+        }
+        vol = historical_volatility(closes, 24)
+        volume_stats = volume_comparison(volumes, 20)
+        atr_pct = None
+        if len(closes) >= 15:
+            tr = [max(highs[index] - lows[index],
+                       abs(highs[index] - closes[index - 1]),
+                       abs(lows[index] - closes[index - 1]))
+                  for index in range(1, len(closes))]
+            atr_pct = sum(tr[-14:]) / 14 / closes[-1] * 100
+        return {
+            "symbol": symbol, "market": market, "timeframe": timeframe,
+            "price_change_pct": changes,
+            "historical_volatility_24h_pct": vol,
+            "atr_14_pct": atr_pct,
+            "volume_vs_prior_20_candles": volume_stats,
+            "completed_candle_count": len(closes),
+            "required_candles": {"1h_change": 2, "24h_change": 25, "7d_change": 169,
+                                 "historical_volatility_24h": 25, "atr_14": 15,
+                                 "volume_comparison": 21},
+            "data_completeness": {
+                **{key: "READY" if value is not None else "INSUFFICIENT_DATA"
+                   for key, value in changes.items()},
+                "historical_volatility_24h": "READY" if vol is not None else "INSUFFICIENT_DATA",
+                "atr_14": "READY" if atr_pct is not None else "INSUFFICIENT_DATA",
+                "volume_comparison": volume_stats["status"],
+            },
+        }
+
+    async def get_asset_correlation(self, left_symbol: str, right_symbol: str,
+                                    market: str, timeframe: str = "1h",
+                                    limit: int = 200) -> dict:
+        """Calculate aligned close-return correlation for two selected assets."""
+        left_rows, right_rows = await asyncio.gather(
+            self.get_candles(left_symbol, market, timeframe, limit=limit),
+            self.get_candles(right_symbol, market, timeframe, limit=limit),
+        )
+        now_ms = int(time.time() * 1000)
+        def completed_closes(rows):
+            result = {}
+            for row in rows:
+                try:
+                    if int(row["close_time"]) >= now_ms:
+                        continue
+                    value = float(row["close"])
+                    if value > 0 and math.isfinite(value):
+                        result[int(row["open_time"])] = value
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    continue
+            return result
+        left, right = completed_closes(left_rows), completed_closes(right_rows)
+        common = sorted(set(left) & set(right))
+        value = return_correlation([left[key] for key in common],
+                                   [right[key] for key in common], minimum_returns=20)
+        return {
+            "symbol_a": left_symbol, "symbol_b": right_symbol, "market": market,
+            "timeframe": timeframe, "correlation": value,
+            "aligned_candle_count": len(common), "return_sample_count": max(0, len(common) - 1),
+            "status": "READY" if value is not None else "INSUFFICIENT_DATA",
+            "method": "Pearson correlation of aligned close-to-close logarithmic returns",
+        }
 
     # ===== Signals =====
 
@@ -655,6 +752,9 @@ class OrchestratorBridge:
                 total_risk += risk
             else:
                 unmeasured_positions += 1
+        for order in sim.open_orders.values():
+            if order.get("status") == "OPEN" and order.get("stop_loss"):
+                total_risk += abs(order["entry_price"] - order["stop_loss"]) * order["amount"]
 
         exposure_pct = (total_risk / total_balance * 100) if total_balance > 0 else 0
         daily_loss_pct = abs(min(0, daily_pnl)) / daily_baseline * 100 if daily_baseline > 0 else 0
@@ -681,6 +781,8 @@ class OrchestratorBridge:
             "risk_per_trade_pct": manager.max_risk_pct,
             "max_daily_loss_pct": manager.max_daily_loss_pct,
             "max_total_open_pct": manager.max_open_risk_pct,
+            "max_position_size_pct": manager.max_position_size_pct,
+            "max_asset_exposure_pct": manager.max_asset_exposure_pct,
             "unmeasured_positions": unmeasured_positions,
         }
 
@@ -724,6 +826,8 @@ class OrchestratorBridge:
             "risk_max_daily_loss_pct": self.risk_manager.max_daily_loss_pct,
             "risk_max_total_open_pct": self.risk_manager.max_open_risk_pct,
             "risk_max_leverage": self.risk_manager.max_leverage,
+            "risk_max_position_size_pct": getattr(self.risk_manager, "max_position_size_pct", 50.0),
+            "risk_max_asset_exposure_pct": getattr(self.risk_manager, "max_asset_exposure_pct", 30.0),
             "max_spot_positions": self.risk_manager.max_spot_positions,
             "max_futures_positions": self.risk_manager.max_futures_positions,
             "telegram_enabled": saved.get("telegram_enabled", getattr(orchestrator, "telegram", None) is not None),
@@ -751,48 +855,66 @@ class OrchestratorBridge:
     # ===== Market Heatmap =====
 
     def _volatility_metrics(self, market: str, symbol: str) -> tuple[float | None, float | None]:
-        """Calculate 24h realized volatility and ATR as percentages from 1h candles."""
-        candle_manager = getattr(self, "candles", None)
-        get_series = getattr(candle_manager, "get_series", None)
+        """Return 24 hourly-return realized volatility and 14-period ATR as price percentages."""
+        get_series = getattr(getattr(self, "candles", None), "get_series", None)
         if not callable(get_series):
             return None, None
-        candles = get_series(market, symbol, "1h", limit=25)
-        if len(candles) < 3:
-            return None, None
-        closes = [float(row["close"]) for row in candles[-25:] if float(row.get("close") or 0) > 0]
-        returns = [math.log(closes[index] / closes[index - 1]) for index in range(1, len(closes))]
-        realized = None
-        if len(returns) >= 2:
-            mean = sum(returns) / len(returns)
-            variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
-            realized = math.sqrt(max(0.0, variance)) * math.sqrt(len(returns)) * 100
-        tr_values, previous_close = [], None
-        for row in candles[-24:]:
-            high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
-            tr_values.append(high - low if previous_close is None else max(high - low, abs(high - previous_close), abs(low - previous_close)))
-            previous_close = close
-        last_close = float(candles[-1]["close"])
-        atr_pct = sum(tr_values) / len(tr_values) / last_close * 100 if tr_values and last_close > 0 else None
+        rows = get_series(market, symbol, "1h", limit=26)
+        now_ms = int(time.time() * 1000)
+        completed = []
+        for row in rows:
+            try:
+                values = [float(row[key]) for key in ("open", "high", "low", "close", "volume")]
+                open_time, close_time = int(row["open_time"]), int(row["close_time"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if (not all(math.isfinite(value) for value in values) or min(values[:4]) <= 0
+                    or values[4] < 0 or values[1] < max(values[0], values[3], values[2])
+                    or values[2] > min(values[0], values[3]) or close_time >= now_ms):
+                continue
+            completed.append(row)
+        completed = sorted({int(row["open_time"]): row for row in completed}.values(),
+                           key=lambda row: int(row["open_time"]))
+        closes = [float(row["close"]) for row in completed]
+        realized = historical_volatility(closes, window=24) if len(closes) >= 25 else None
+        atr_pct = None
+        if len(completed) >= 15:
+            ranges = []
+            for index in range(1, len(completed)):
+                row, previous = completed[index], completed[index - 1]
+                high, low, prev_close = float(row["high"]), float(row["low"]), float(previous["close"])
+                ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+            last_close = closes[-1]
+            if last_close > 0 and ranges:
+                atr_pct = sum(ranges[-14:]) / min(14, len(ranges)) / last_close * 100.0
         return realized, atr_pct
 
     def get_market_heatmap(self) -> list[dict]:
-        """Return ticker heatmap enriched with measured 24h candle volatility."""
+        """Return ticker heatmap with market-scoped relative strength and measured volatility."""
         snapshots = [item for item in self.get_all_market_snapshots()
                      if item.get("price") is not None and item.get("volume_24h") is not None
                      and item.get("price_change_24h") is not None]
         if not snapshots:
             return []
-        average_change = sum(item["price_change_24h"] for item in snapshots) / len(snapshots)
-        volumes = sorted(item["volume_24h"] for item in snapshots)
+        benchmark_by_market: dict[str, list[float]] = {}
+        for item in snapshots:
+            benchmark_by_market.setdefault(item["market"], []).append(float(item["price_change_24h"]))
+        average_by_market = {
+            market: sum(changes) / len(changes) for market, changes in benchmark_by_market.items() if changes
+        }
+        volumes = sorted(float(item["volume_24h"]) for item in snapshots)
         result = []
         for item in snapshots:
-            rank = sum(1 for volume in volumes if volume <= item["volume_24h"])
             volatility, atr = self._volatility_metrics(item["market"], item["symbol"])
+            market_sample = len(benchmark_by_market.get(item["market"], []))
+            rank = sum(1 for volume in volumes if volume <= float(item["volume_24h"]))
             result.append({
                 "symbol": item["symbol"], "market": item["market"],
                 "price_change_24h": item["price_change_24h"], "volume_24h": item["volume_24h"],
                 "price": item["price"], "regime": item.get("regime") or "UNKNOWN",
-                "relative_strength_pct": item["price_change_24h"] - average_change,
+                "relative_strength_pct": float(item["price_change_24h"]) - average_by_market[item["market"]],
+                "relative_strength_benchmark": "mean 24h change of cached eligible tickers in same market",
+                "relative_strength_sample_size": market_sample,
                 "volume_rank_pct": rank / len(volumes) * 100,
                 "volatility_24h_pct": volatility, "atr_24h_pct": atr,
                 "data_age_seconds": item.get("data_age_seconds"),
@@ -803,23 +925,37 @@ class OrchestratorBridge:
     # ===== Market Breadth =====
 
     def get_market_breadth(self) -> dict:
-        """Get market breadth statistics."""
+        """Return breadth by market to avoid conflating duplicate SPOT/FUTURES symbols."""
         snapshots = self.get_all_market_snapshots()
-        snapshots = [s for s in snapshots if s.get("price_change_24h") is not None]
-        advancing = sum(1 for s in snapshots if s["price_change_24h"] > 0)
-        declining = sum(1 for s in snapshots if s["price_change_24h"] < 0)
-        neutral = sum(1 for s in snapshots if s["price_change_24h"] == 0)
-        total_volume = sum(s.get("volume_24h") or 0 for s in snapshots)
-        spreads = [s["bid_ask_spread"] for s in snapshots if s.get("bid_ask_spread") is not None]
-        imbalances = [s["orderbook_imbalance"] for s in snapshots if s.get("orderbook_imbalance") is not None]
-
+        by_market = {}
+        for market in ("SPOT", "FUTURES"):
+            valid = [item for item in snapshots if item.get("market") == market
+                     and item.get("price_change_24h") is not None
+                     and math.isfinite(float(item["price_change_24h"]))]
+            summary = breadth_summary(float(item["price_change_24h"]) for item in valid)
+            volume_values = [float(item["volume_24h"]) for item in valid
+                             if item.get("volume_24h") is not None
+                             and math.isfinite(float(item["volume_24h"])) and float(item["volume_24h"]) >= 0]
+            by_market[market] = {
+                **summary, "total_quote_volume_24h": sum(volume_values) if volume_values else None,
+                "sample_coverage": len(valid),
+            }
+        total_sample = sum(item["sample_coverage"] for item in by_market.values())
         return {
-            "advancing": advancing,
-            "declining": declining,
-            "neutral": neutral,
-            "total_volume": total_volume,
-            "avg_spread_bps": sum(spreads) / len(spreads) if spreads else None,
-            "avg_orderbook_imbalance": sum(imbalances) / len(imbalances) if imbalances else None,
+            "advancing": sum(item["advancing"] for item in by_market.values()),
+            "declining": sum(item["declining"] for item in by_market.values()),
+            "neutral": sum(item["neutral"] for item in by_market.values()),
+            "markets": by_market, "sample_size": total_sample,
+            "scope": "cached eligible market tickers; SPOT and FUTURES counts are separate market listings",
+            "total_quote_volume_24h": sum(
+                item["total_quote_volume_24h"] or 0 for item in by_market.values()
+            ) if total_sample else None,
+            "total_volume": sum(
+                item["total_quote_volume_24h"] or 0 for item in by_market.values()
+            ) if total_sample else None,
+            "avg_spread_bps": None, "avg_orderbook_imbalance": None,
+            "spread_status": "UNAVAILABLE: no live order-book depth sample",
+            "orderbook_status": "UNAVAILABLE: no live order-book depth sample",
         }
 
     # ===== Volume =====
@@ -863,8 +999,8 @@ class OrchestratorBridge:
                 completed.append((close_time, quote_volume))
         completed.sort()
         values = [value for _, value in completed]
-        baseline = values[-7:] if len(values) >= 7 else values
-        avg_daily = sum(baseline) / len(baseline) if baseline else None
+        baseline = values[-7:] if len(values) >= 7 else []
+        avg_daily = sum(baseline) / 7 if len(baseline) == 7 else None
         current_24h = float(ticker["quoteVolume"])
         change = ((current_24h / avg_daily) - 1) * 100 if avg_daily and avg_daily > 0 else None
         result = {
@@ -872,7 +1008,8 @@ class OrchestratorBridge:
             "total_volume": current_24h, "volume_change_24h": None,
             "buy_volume_7d_avg": None, "sell_volume_7d_avg": None,
             "average_daily_quote_volume_7d": avg_daily, "volume_change_vs_7d_avg_pct": change,
-            "comparison_period": "Current rolling 24h vs mean of up to 7 completed UTC daily candles",
+            "daily_baseline_count": len(baseline), "daily_baseline_status": "READY" if len(baseline) == 7 else "INSUFFICIENT_DATA",
+            "comparison_period": "Current rolling 24h vs mean of 7 completed UTC daily candles",
             "data_timestamp": datetime.now(timezone.utc), "data_age_seconds": 0.0, "data_freshness": "LIVE",
             "flow_is_estimated": False, "flow_sample_size": len(trades),
             "flow_sample_scope": "Last 500 aggregate trades; not full 24h",

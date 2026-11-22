@@ -1,19 +1,42 @@
 import { NextRequest } from "next/server";
+import { rateLimited, requestClientKey, isSameOriginMutation } from "./rate-limit-core.mjs";
+export { rateLimited, requestClientKey };
 
-const windows = new Map<string, number[]>();
-const WINDOW_MS = 60_000;
-export function rateLimited(key: string, limit: number): boolean {
-  const now = Date.now();
-  const recent = (windows.get(key) ?? []).filter((stamp) => stamp > now - WINDOW_MS);
-  if (recent.length >= limit) { windows.set(key, recent); return true; }
-  recent.push(now); windows.set(key, recent);
-  return false;
+export async function readLimitedBody(request: NextRequest, maxBytes: number): Promise<string> {
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength !== null) {
+    const length = Number(declaredLength);
+    if (!Number.isSafeInteger(length) || length < 0 || length > maxBytes) {
+      throw new Error("Request body exceeds the allowed size.");
+    }
+  }
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("Request body exceeds the allowed size.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(body);
 }
 
 export function sameOriginMutation(request: NextRequest): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) return false;
-  try {
-    return new URL(origin).origin === request.nextUrl.origin;
-  } catch { return false; }
+  return isSameOriginMutation(request.headers.get("origin"), request.nextUrl.toString());
 }

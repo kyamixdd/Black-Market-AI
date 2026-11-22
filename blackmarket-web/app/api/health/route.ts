@@ -26,7 +26,7 @@ export async function GET() {
     ) {
       return NextResponse.json({ status: "backend_unready" }, { status: 503 });
     }
-    return NextResponse.json({ status: "ok", backend: health }, { status: 200 });
+    return NextResponse.json({ status: "ok", backend_ready: true, database_connected: true }, { status: 200 });
   } catch {
     return NextResponse.json({ status: "backend_unreachable" }, { status: 503 });
   }

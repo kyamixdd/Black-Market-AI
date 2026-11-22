@@ -1,132 +1,72 @@
 # BlackMarket AI
 
-**Local-first cryptocurrency market intelligence and paper-trading research platform**
+Local-first cryptocurrency market analysis, strategy research and paper-trading application.
 
-> **Paper trading only.** The application is designed for simulated Spot and USDⓈ-M Futures trading. It does not place real exchange orders and does not require Binance trading credentials.
+BlackMarket AI combines public Binance market data, technical analysis, strategy evaluation, simulated execution, risk controls and local learning tools. The supported desktop product runs a Tauri shell with a supervised Python backend. Trading is simulated; the application does not submit real exchange orders.
 
-## Project status (22 November 2026)
+## Repository status
 
-- **Current development branch:** `black-market-ai-beta`
-- **Audited branch head:** `db3fc448af100236efac42ee8ed8e2fbe6a162d7`
-- **Latest promotion to `main` observed:** `07817c4` (PR #32)
-- **Latest GitHub Actions run observed for the branch head:** CI run #343 — success
-- **Current release assessment:** Desktop beta candidate; not yet a broadly supported public release. The hosted website remains a private-preview path.
+- Development branch: `black-market-ai-beta`
+- Branch head reviewed: `ee602590442d9d29060d525e1aff5539dc42f01c`
+- Latest branch CI: [run #605](https://github.com/kyamixdd/Black-Market-AI/actions/runs/45055409152)
+- CI result: success for the reviewed commit
+- Product version: `1.0.0`
+- Release classification: desktop beta candidate; hosted website private preview
 
-See [RELEASE_READINESS.md](RELEASE_READINESS.md) for the release criteria and audit methodology.
+The CI run completed the Python regression suite, dependency audit, desktop TypeScript/lint/market-data tests, shared website build, Rust/Tauri compile checks, responsive browser smoke tests and Windows bundled-backend/NSIS install smoke test.
 
-## What it does
+CI success verifies the jobs listed in the workflow. It does not establish profitability, signed distribution, full manual Windows acceptance or a live hosted backend deployment.
 
-BlackMarket AI combines public exchange market data, multi-timeframe analysis, strategy signals, a paper-trading simulator, risk controls, and a local learning pipeline.
-
-### Main capabilities
+## Capabilities
 
 - Public Binance Spot and USDⓈ-M Futures market data.
-- Symbol discovery, market scanning, candle history, and nine configured timeframes (1m, 3m, 5m, 15m, 30m, 1h, 4h, 1d, 1w).
-- Technical analysis including RSI, MACD, ADX, ATR, VWAP, moving averages, Bollinger Bands, and market-regime context.
-- Five strategy families: Momentum, Breakout, Trend Following, Mean Reversion, and Reversal.
-- Market breadth, relative strength, volatility/ATR, quote-volume comparisons, and freshness indicators where sufficient source data is available.
-- Paper Spot and Futures portfolios with simulated fees, spread, slippage, funding, leverage, liquidation, stop-loss/take-profit, limit orders, and partial position management.
-- Risk limits for trade sizing, daily loss, total open risk, leverage, and position counts.
-- Learning infrastructure using RandomForest, XGBoost, and River, with chronological validation, confidence calibration, economic evidence, and gated model promotion.
-- SQLite persistence, integrity checks, backup/recovery, and a Textual terminal dashboard.
-- Optional Telegram notifications.
+- Symbol discovery, market scanning, candle history and multi-timeframe analysis.
+- Technical indicators, market breadth, relative strength, volatility and data-freshness reporting.
+- Strategy signals and strategy-family evaluation.
+- Strategy Lab backtesting and comparison with persisted reports.
+- Paper Spot and Futures accounts with simulated fees, spread, slippage, funding, leverage, liquidation and order lifecycle controls.
+- Risk limits and runtime risk settings.
+- Local learning, prediction outcomes, model registry, calibration and promotion gates.
+- Market regime analysis, evidence-linked research, strategy evolution and drift monitoring.
+- Trade review, saved workspaces, shareable analysis and community strategy library.
+- SQLite persistence, integrity checks, backup/restore and model artifacts.
+- Optional Telegram notifications and a deterministic market-intelligence assistant.
+- Textual terminal interface and Tauri desktop interface.
 
-Strategy signals and backtest results are not evidence of future profitability. Metrics requiring unavailable or insufficient history are reported as unavailable.
+Feature availability depends on configured runtime mode and the data available for the selected asset/timeframe. The application reports unavailable or insufficient data rather than treating it as a valid measurement.
 
-## Supported product paths
+## Application structure
 
-### Windows desktop — primary product path
+- `blackmarket-desktop/` — shared React/TypeScript dashboard and Tauri desktop shell.
+- `blackmarket-web/` — Next.js private-preview website, login/session handling and same-origin backend proxy.
+- `src_tauri/backend/` — FastAPI backend, orchestration bridge, market engine and API routes.
+- `core/`, `market_data/`, `strategies/`, `paper_trading/`, `risk/`, `learning/` — Python engine components.
+- `tests/` — backend, frontend-service and subsystem regression tests.
+- `.github/workflows/` — CI, hosted smoke test and desktop release workflows.
+- `docs/` — product-specific technical and operating documentation.
 
-The primary user experience is the Tauri desktop application with its supervised local backend. The Windows installer pipeline now builds a bundled backend executable; a clean-installer CI smoke test installs and starts the app with Python removed from `PATH`.
+## Desktop development
 
-The Windows NSIS installer is the distribution package. CI artifacts are validation outputs and are not tagged releases.
+Requirements include Python 3.10+, Node.js/npm, Rust and the Tauri platform prerequisites. Windows installer builds require the Windows SDK, MSVC build tools and WebView2.
 
-For developers, build from a Windows environment with the required Rust/Tauri, Node/npm, MSVC C++ build tools, Windows SDK, and WebView2 prerequisites:
-
-```powershell
-./scripts/build_windows_installer.ps1
-```
-
-The installer is produced under:
-
-`blackmarket-desktop/src-tauri/target/release/bundle/nsis/`
-
-The installer workflow and clean-machine smoke test are covered by CI. Release acceptance covers artifact identity, version metadata, signing status, upgrade/uninstall behavior, and supported Windows versions.
-
-### Website — private preview, not production-hosted service
-
-The Next.js website imports the same canonical React dashboard as the desktop app. It uses a server-side login/session layer and a same-origin backend proxy; browser code must never receive the backend bearer token.
-
-The website requires server-side configuration:
-
-- `BLACKMARKET_BACKEND_URL`
-- `BLACKMARKET_SESSION_SECRET` (at least 32 random characters)
-- `BLACKMARKET_WEB_PASSWORD`
-- `BLACKMARKET_API_TOKEN`
-
-The backend host must explicitly enable remote API mode, require the same high-entropy bearer token, use HTTPS, and configure durable storage. Remote API mode is disabled by default.
-
-The website login is a **single-password private-preview gate**, not multi-user identity, role-based authorization, or a managed public SaaS account system. Production deployment requires end-to-end verification of authentication, persistence, data freshness, event streaming, portfolio operations, and rejected-order handling.
-
-See [blackmarket-web/README.md](blackmarket-web/README.md) for deployment configuration.
-
-## Legacy CLI / terminal mode
-
-The Python terminal application remains available for development and local use.
-
-### Requirements
-
-- Python 3.10+
-- Internet access for public Binance market data
-- Windows, macOS, or Linux for the Python/CLI path
-
-### Setup
+Create a Python environment and install the project dependencies:
 
 ```bash
 python -m venv .venv
-# Windows PowerShell: .venv\\Scripts\\Activate.ps1
-# macOS/Linux: source .venv/bin/activate
+# Windows PowerShell
+.venv\\Scripts\\Activate.ps1
+# macOS/Linux
+source .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
 ```
 
-On Windows, the repository also provides installer/run/test scripts. Review scripts before running them and keep personal credentials out of the repository.
-
-### Run
-
-```bash
-python main.py
-```
-
-For the Tauri desktop development app:
-
-```bash
-cd blackmarket-desktop
-npm ci
-npm run tauri:dev
-```
-
-The browser-only Vite preview does not supervise the local Python backend; use Tauri to verify desktop-managed startup.
-
-## Configuration and secrets
-
-Copy `.env.example` to `.env` for the Python/desktop backend. Telegram is optional and disabled by default. Never commit `.env`, Telegram credentials, session secrets, or backend bearer tokens.
-
-The desktop API binds to loopback by default (`127.0.0.1:8765`) and requires bearer authentication. Do not enable remote API mode on an untrusted network. The website's credentials must remain server-side.
-
-See [SECURITY.md](SECURITY.md) for the threat model, security limitations, and release checklist.
-
-## Testing
-
-### Python regression suite
+Run backend tests:
 
 ```bash
 python -m pytest -q -m "not live"
 ```
 
-Live exchange smoke tests are marked separately because they depend on external service availability.
-
-### Desktop frontend
+Run the desktop frontend checks:
 
 ```bash
 cd blackmarket-desktop
@@ -134,31 +74,57 @@ npm ci
 npm run build
 npm run lint
 npm test
+npm run tauri:dev
 ```
 
-### Windows installer
+The browser-only Vite preview serves the frontend and does not supervise the Python backend. Use Tauri to verify desktop-managed startup and shutdown.
+
+Build the Windows installer from the repository root:
 
 ```powershell
 ./scripts/build_windows_installer.ps1
 ```
 
-The GitHub Actions workflow checks the Python backend, desktop TypeScript/lint/tests, website build, and Windows installer startup/shutdown smoke test. CI success is necessary but does not replace manual release acceptance or a live market-data check.
+The installer output is under `blackmarket-desktop/src-tauri/target/release/bundle/nsis/`.
 
-## Data, backups, and recovery
+## Website private preview
 
-The application stores local application state in SQLite. Database files and backups are **not encrypted by the application**; use OS-level disk encryption and restrictive account permissions.
+The Next.js website imports the shared dashboard. It uses a server-side single-password session and a same-origin proxy to a separately hosted FastAPI backend.
 
-The recovery subsystem verifies database integrity and creates compressed backups according to configured backup behavior. Preserve the original database and SQLite sidecar files before attempting manual recovery. Test restoration on a copy, not on the only original.
+Required server-only configuration:
+
+- `BLACKMARKET_BACKEND_URL`
+- `BLACKMARKET_API_TOKEN`
+- `BLACKMARKET_SESSION_SECRET`
+- `BLACKMARKET_WEB_PASSWORD_HASH`
+
+The website is not a multi-user account system and is not approved as a public hosted service. A live backend, durable storage, authentication, streaming and paper-trading workflow must be verified before enabling public access. See [website setup](blackmarket-web/README.md) and [release readiness](RELEASE_READINESS.md).
+
+## Security and data
+
+The desktop API binds to loopback by default and requires bearer authentication. Remote API mode is disabled by default. Do not expose the backend directly to the internet without the remote deployment controls described in [SECURITY.md](SECURITY.md).
+
+SQLite databases, model artifacts and backup archives are not application-encrypted. Protect local data using OS-level encryption and access controls. See [Backup and Recovery](BACKUP_GUIDE.md).
+
+## License and distribution
+
+BlackMarket AI is proprietary software. All rights reserved. No permission is granted to copy, modify, redistribute, sublicense, or create derivative or competing products from this source code without prior written permission. See [LICENSE](LICENSE).
+
+The public GitHub repository is source-visible; repository access is not a commercial software license. The commercial product is intended to be distributed as an application, subject to a separate end-user license agreement (EULA). Third-party components remain subject to their own licenses.
+
+Public release also requires the acceptance items in [RELEASE_READINESS.md](RELEASE_READINESS.md), including installer/source identity, Windows upgrade/uninstall checks, signing status disclosure, security review and release artifact verification.
 
 ## Documentation
 
+- [Release readiness](RELEASE_READINESS.md)
 - [Security policy and threat model](SECURITY.md)
-- [Development progress and historical implementation log](DEVELOPMENT_PROGRESS.md)
-- [Backup and recovery guide](BACKUP_GUIDE.md)
+- [Backup and recovery](BACKUP_GUIDE.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
-- [Release readiness audit and pre-release checklist](RELEASE_READINESS.md)
-- [Website deployment guide](blackmarket-web/README.md)
+- [Release and hosting procedures](docs/RELEASING_AND_HOSTING.md)
+- [Project status and audit](docs/PROJECT_STATUS.md)
+- [Market-intelligence assistant](docs/assistant-intelligence.md)
+- [Community strategy library](docs/COMMUNITY_STRATEGY_LIBRARY.md)
 
 ## Disclaimer
 
-BlackMarket AI is a software research and paper-trading project, not financial advice or an investment service. Simulated fills, historical tests, and machine-learning scores do not represent actual execution or guarantee results. Use at your own risk.
+Market data, signals, backtests, simulated fills and model outputs are for research and educational use. They do not constitute financial advice or guarantee future results.

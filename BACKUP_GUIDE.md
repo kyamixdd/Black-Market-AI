@@ -74,3 +74,31 @@ Restore model artifacts and registry metadata from a compatible backup/version. 
 - [ ] Store an encrypted or access-controlled secondary copy.
 - [ ] Perform periodic restore drills using disposable data.
 - [ ] Confirm restored paper-trading records are consistent and not duplicated.
+
+
+## Stage 10 implementation notes
+
+- A manual backup can be triggered through the authenticated API: `POST /api/backup/create` with JSON `{"description":"before-upgrade"}`. The response includes the managed filename and manifest. `GET /api/backup/list` lists managed backup filenames and metadata; it does not expose arbitrary filesystem paths.
+- Backups use SQLite's online backup API. The manager validates the database and writes a paired `.json` manifest containing format version, UTC creation time, description, backup filename, size, SHA-256 checksum, compression state, and integrity result.
+- Restore validates archive readability, SQLite `PRAGMA integrity_check`, manifest filename, checksum, and size before replacing the target. Invalid or missing backups are rejected without replacing the target. Live database restore checkpoints WAL, disposes the engine, replaces the file atomically, and reinitializes the database.
+- Backup retention counts backup files (not manifests) and removes the corresponding manifest together. Filename descriptions are sanitized and timestamps include microseconds to avoid collisions.
+- Database initialization performs a SQLite `quick_check` on an existing non-empty database before schema creation. Additive paper-trading migrations are idempotent and recorded in `schema_migrations` (version 2; version 1 covers paper-trading recovery columns, version 2 adds saved strategy definitions, backtest reports, and workspace snapshots). Use `Database.integrity_check()` and `Database.foreign_key_check()` for diagnostics.
+- Runtime settings and risk configuration are persisted in `runtime_settings.json` using atomic replacement and restrictive permissions where supported. Each new backup includes a validated settings sidecar (`.settings.json`) with a checksum and size in its manifest; restore stages and validates settings together with the database and attempts database rollback if the restore fails. Environment `.env` secrets are not included. Dashboard preferences are saved in workspace snapshots.
+- Dedicated SQLite tables persist saved strategy definitions (`saved_strategies`), immutable Strategy Lab and comparison reports (`backtest_reports`), and dashboard workspace snapshots (`workspaces`). Strategy Lab runs and comparisons are automatically stored before the result is returned. The Strategy Lab UI supports saving/loading strategy definitions, opening saved reports, saving workspace snapshots, and restoring a snapshot into the dashboard.
+- Paper account balances are reconstructed from configured initial balances, durable completed trades, open positions, reserved funds, and fees during recovery. Open positions and recoverable orders are loaded from SQLite.
+
+### Restore drill (desktop/backend stopped)
+
+1. Create a manual backup and save the returned filename.
+2. Stop the application and confirm the managed backend has exited.
+3. Preserve the current database file and any `-wal` / `-shm` files.
+4. Use the application's `DatabaseBackupManager.restore_backup(Path(BACKUP_DIR) / filename)` from a trusted local maintenance script. Do not pass a path outside the configured backup directory.
+5. Start the app and verify paper balances, open positions/orders, trade history, risk settings, runtime settings, saved strategy definitions, backtest reports, workspaces, and saved dashboard preferences.
+6. Keep the pre-restore database until these checks succeed.
+
+Restore is intentionally not exposed as an arbitrary-path HTTP endpoint. It requires the application to be stopped or coordinated so no active process can write while the database is replaced.
+
+
+## Encryption and confidentiality
+
+SQLite database files, SQLite backup files, runtime-settings sidecars, and workspace/research records are **not encrypted by this application**. SHA-256 manifests detect file changes; they do not encrypt data. Protect the data directory and backup destination with appropriate filesystem access controls. Use an independently managed encrypted storage/backup solution if encryption at rest is required. Environment secrets from `.env` are not included in the backup bundle.

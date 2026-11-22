@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
+import { mutateJson, requestJson } from '../services/backendClient'
 import { DataTable as Table, DetailCard, EmptyState, ScreenHeader, SummaryCard, TableHead } from '../components/ui/TerminalPrimitives'
 
 export type ScreenName =
@@ -11,6 +13,8 @@ export type ScreenName =
   | 'Trade History'
   | 'Intelligence'
   | 'Learning'
+  | 'Strategy Lab'
+  | 'Community Library'
   | 'Risk Management'
   | 'Activity'
   | 'Settings'
@@ -324,6 +328,9 @@ type Props = {
   onCancelOrder: (orderId: string) => Promise<void>
   onManualTrade: (payload: { symbol: string; market: 'SPOT' | 'FUTURES'; side: 'BUY' | 'SELL' | 'LONG' | 'SHORT'; order_type: 'MARKET' | 'LIMIT'; quantity: number; price?: number; stop_loss: number; take_profit?: number; leverage: number }) => Promise<void>
   onSettingsSave: (settings: Record<string, unknown>) => Promise<void>
+  onStrategyLabRun: (payload: Record<string, unknown>) => Promise<any>
+  onStrategyLabCompare: (payload: Record<string, unknown>) => Promise<any>
+  onWorkspaceLoad: (workspace: any) => void
 }
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
@@ -1024,6 +1031,194 @@ function SettingsScreen({
   )
 }
 
+
+type CommunityStrategy = {
+  public_id: string
+  name: string
+  description: string
+  strategy_key: string
+  rules: Record<string, unknown>
+  supported_assets: string[]
+  supported_timeframes: string[]
+  risk_configuration: Record<string, number>
+  known_limitations: string[]
+  backtest_report: Record<string, unknown>
+  report_provenance: string
+  report_sha256: string
+  source_report_id?: string | null
+  reproducibility_status?: string
+  verification_status?: string
+  version: number
+  favorite_count: number
+  is_favorite: boolean
+  is_owner: boolean
+  version_history?: { version: number; created_at: string | null; snapshot: Record<string, unknown> }[]
+}
+
+function CommunityLibraryScreen() {
+  const [items, setItems] = useState<CommunityStrategy[]>([])
+  const [query, setQuery] = useState('')
+  const [strategyKey, setStrategyKey] = useState('')
+  const [assetFilter, setAssetFilter] = useState('')
+  const [timeframeFilter, setTimeframeFilter] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [showFavorites, setShowFavorites] = useState(false)
+  const [sort, setSort] = useState('recent')
+  const [selected, setSelected] = useState<CommunityStrategy | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [key, setKey] = useState('momentum')
+  const [assets, setAssets] = useState('BTCUSDT, ETHUSDT')
+  const [timeframes, setTimeframes] = useState('15m, 1h')
+  const [rules, setRules] = useState('{"entry":"Describe the entry rule","exit":"Describe the exit rule"}')
+  const [risk, setRisk] = useState('{"risk_per_trade_pct":1,"max_position_pct":10}')
+  const [limitations, setLimitations] = useState('Results are user-submitted and not a forecast.')
+  const [report, setReport] = useState('{"total_trades":0,"sample_period":""}')
+  const [sourceReportId, setSourceReportId] = useState('')
+
+  const load = async () => {
+    const params = new URLSearchParams({ q: query, sort, limit: '50' })
+    if (strategyKey) params.set('strategy_key', strategyKey)
+    if (assetFilter) params.set('asset', assetFilter.toUpperCase())
+    if (timeframeFilter) params.set('timeframe', timeframeFilter)
+    const result = await requestJson<{ strategies: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
+    if (result) setItems(result.strategies ?? [])
+  }
+  useEffect(() => { void load() }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
+
+  const publish = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setNotice('')
+    try {
+      const payload = {
+        name, description, strategy_key: key,
+        supported_assets: assets.split(',').map(value => value.trim()).filter(Boolean),
+        supported_timeframes: timeframes.split(',').map(value => value.trim()).filter(Boolean),
+        rules: JSON.parse(rules), risk_configuration: JSON.parse(risk),
+        known_limitations: limitations.split('\n').map(value => value.trim()).filter(Boolean),
+        backtest_report: JSON.parse(report),
+        ...(sourceReportId.trim() ? { source_report_id: sourceReportId.trim() } : {}),
+      }
+      await mutateJson(editingId ? `/community/strategies/${editingId}` : '/community/strategies', editingId ? 'PUT' : 'POST', payload)
+      setNotice(editingId ? 'Published strategy version updated.' : 'Strategy published. Shared performance is labelled user-submitted.')
+      setEditingId(null)
+      setName('')
+      await load()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to publish strategy.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const openDetails = async (item: CommunityStrategy) => {
+    const detail = await requestJson<CommunityStrategy>(`/community/strategies/${item.public_id}`)
+    if (detail) setSelected(detail)
+  }
+
+  const editStrategy = (item: CommunityStrategy) => {
+    setEditingId(item.public_id)
+    setName(item.name)
+    setDescription(item.description)
+    setKey(item.strategy_key)
+    setAssets(item.supported_assets.join(', '))
+    setTimeframes(item.supported_timeframes.join(', '))
+    setRules(JSON.stringify(item.rules, null, 2))
+    setRisk(JSON.stringify(item.risk_configuration, null, 2))
+    setLimitations(item.known_limitations.join('\n'))
+    setReport(JSON.stringify(item.backtest_report, null, 2))
+    setSourceReportId(item.source_report_id ?? '')
+    setNotice(`Editing your published strategy. Saving creates version ${item.version + 1}.`)
+  }
+
+  const toggleFavorite = async (item: CommunityStrategy) => {
+    try {
+      await mutateJson(`/community/strategies/${item.public_id}/favorite`, 'POST', { favorite: !item.is_favorite })
+      await load()
+      if (selected?.public_id === item.public_id) setSelected({ ...selected, is_favorite: !item.is_favorite })
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to update favorite.')
+    }
+  }
+
+  const reportItem = async (item: CommunityStrategy) => {
+    try {
+      await mutateJson(`/community/strategies/${item.public_id}/report`, 'POST', { reason: 'misleading_results', details: 'Please review this strategy listing.' })
+      setNotice('Report submitted for review.')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to report listing.')
+    }
+  }
+
+  return <div className="screen-stack">
+    <ScreenHeader title="Community Strategy Library" description="Browse and share strategy research · simulator-only · no live execution" />
+    <p className="workspace-note">Listings are shared only with clients connected to this backend. Desktop local mode keeps its own library; it does not automatically sync to the hosted community.</p>
+    <section className="workspace-panel">
+      <div className="workspace-toolbar">
+        <input className="workspace-search" aria-label="Search strategies" placeholder="Search strategy name or description" value={query} onChange={event => setQuery(event.target.value)} />
+        <select className="workspace-search" aria-label="Filter strategy type" value={strategyKey} onChange={event => setStrategyKey(event.target.value)}>
+          <option value="">All strategy types</option>
+          {['momentum','breakout','trend_following','mean_reversion','reversal'].map(value => <option key={value} value={value}>{value.replaceAll('_',' ')}</option>)}
+        </select>
+        <button className="table-action" onClick={() => setShowFavorites(value => !value)}>{showFavorites ? 'All strategies' : 'Saved strategies'}</button>
+        <input className="workspace-search" aria-label="Filter by asset" placeholder="Asset (BTCUSDT)" value={assetFilter} onChange={event => setAssetFilter(event.target.value)} />
+        <input className="workspace-search" aria-label="Filter by timeframe" placeholder="Timeframe (15m)" value={timeframeFilter} onChange={event => setTimeframeFilter(event.target.value)} />
+        <select className="workspace-search" aria-label="Sort strategies" value={sort} onChange={event => setSort(event.target.value)}>
+          <option value="recent">Recently published</option><option value="updated">Recently updated</option><option value="name">Name</option>
+        </select>
+      </div>
+      {notice && <p className="workspace-note" role="status">{notice}</p>}
+      <div className="workspace-summary-grid">
+        {items.map(item => <article className="workspace-panel" key={item.public_id}>
+          <h3>{item.name}</h3>
+          <p>{item.description || 'No description supplied.'}</p>
+          <p className="workspace-note">{item.strategy_key.replaceAll('_',' ')} · v{item.version} · {item.supported_timeframes.join(', ')}</p>
+          <p className="workspace-note">Report provenance: <b>{item.report_provenance.replaceAll('_',' ')}</b> · {String(item.backtest_report?.total_trades ?? '—')} reported trades · win rate {String(item.backtest_report?.win_rate_pct ?? '—')}% · return {String(item.backtest_report?.net_return_pct ?? '—')}% · drawdown {String(item.backtest_report?.max_drawdown_pct ?? '—')}%</p>
+          <div className="workspace-actions">
+            <button className="table-action" onClick={() => void openDetails(item)}>Details</button>
+            {item.is_owner && <button className="table-action" onClick={() => editStrategy(item)}>Edit / new version</button>}
+            <button className="table-action" onClick={() => void toggleFavorite(item)}>{item.is_favorite ? '★ Saved' : '☆ Save'} · {item.favorite_count}</button>
+            <button className="table-action" onClick={() => void reportItem(item)}>Report</button>
+          </div>
+        </article>)}
+      </div>
+      {!items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
+    </section>
+    {selected && <section className="workspace-panel">
+      <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => setSelected(null)}>Close</button></div>
+      <p>{selected.description}</p>
+      <p className="workspace-note">Shared report: {selected.report_provenance.replaceAll('_',' ')} · SHA-256 {selected.report_sha256 || 'not available'}. Reproducibility: {selected.reproducibility_status ?? 'NOT_REPLAYED'} · Verification: {selected.verification_status ?? 'NOT_VERIFIED'}. The digest confirms stored content integrity only; locally generated reports have not been independently replayed or verified.</p>
+      <h3>Submitted backtest summary</h3><pre className="workspace-code">{JSON.stringify(selected.backtest_report, null, 2)}</pre>
+      <h3>Rules</h3><pre className="workspace-code">{JSON.stringify(selected.rules, null, 2)}</pre>
+      <h3>Risk configuration</h3><pre className="workspace-code">{JSON.stringify(selected.risk_configuration, null, 2)}</pre>
+      <h3>Known limitations</h3><ul>{selected.known_limitations.map((item, i) => <li key={i}>{item}</li>)}</ul>
+      <h3>Version history</h3><ol>{(selected.version_history ?? []).map(version => <li key={version.version}>v{version.version} · {version.created_at ? new Date(version.created_at).toLocaleString() : 'timestamp unavailable'} · {String(version.snapshot.name ?? selected.name)}</li>)}</ol>
+      {selected.is_owner && <button className="table-action" onClick={() => editStrategy(selected)}>Edit / publish next version</button>}
+    </section>}
+    <section className="workspace-panel">
+      <h2>{editingId ? 'Update published strategy' : 'Publish a strategy'}</h2>
+      {editingId && <button className="table-action" type="button" onClick={() => { setEditingId(null); setName(''); setNotice('Editing cancelled.') }}>Cancel version update</button>}
+      <p className="workspace-note">Only the fields below are published. Account balances, credentials, private trades, and personal settings are not sent. Backtest metrics are marked user-submitted, not verified.</p>
+      <form className="workspace-form" onSubmit={publish}>
+        <label>Strategy name<input className="workspace-search" required minLength={2} maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
+        <label>Description<textarea className="workspace-search" maxLength={2000} value={description} onChange={event => setDescription(event.target.value)} /></label>
+        <label>Strategy type<select className="workspace-search" value={key} onChange={event => setKey(event.target.value)}>{['momentum','breakout','trend_following','mean_reversion','reversal'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label>Supported assets (comma separated)<input className="workspace-search" value={assets} onChange={event => setAssets(event.target.value)} /></label>
+        <label>Supported timeframes (comma separated)<input className="workspace-search" value={timeframes} onChange={event => setTimeframes(event.target.value)} /></label>
+        <label>Strategy rules (JSON)<textarea className="workspace-search" rows={4} required value={rules} onChange={event => setRules(event.target.value)} /></label>
+        <label>Risk configuration (JSON)<textarea className="workspace-search" rows={3} value={risk} onChange={event => setRisk(event.target.value)} /></label>
+        <label>Known limitations (one per line)<textarea className="workspace-search" rows={3} value={limitations} onChange={event => setLimitations(event.target.value)} /></label>
+        <label>Local Strategy Lab report ID (optional)<input className="workspace-search" maxLength={64} value={sourceReportId} onChange={event => setSourceReportId(event.target.value)} placeholder="Paste a saved report ID to use its generated metrics" /></label>
+        <label>Backtest summary (JSON, user-submitted unless a local report ID is supplied)<textarea className="workspace-search" rows={3} value={report} onChange={event => setReport(event.target.value)} /></label>
+        <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Publishing…' : 'Publish to public library'}</button>
+      </form>
+    </section>
+  </div>
+}
+
 export function DashboardScreen(props: Props) {
   const { screen, data } = props
   return (
@@ -1036,9 +1231,305 @@ export function DashboardScreen(props: Props) {
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
+      {screen === 'Community Library' && <CommunityLibraryScreen />}
+      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} data={data} preferences={props.preferences} screen={screen} symbol={props.symbol} marketType={props.marketType} onWorkspaceLoad={props.onWorkspaceLoad} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
       {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
     </section>
+  )
+}
+
+
+function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol: dashboardSymbol, marketType, onWorkspaceLoad }: {
+  onRun: Props['onStrategyLabRun']; onCompare: Props['onStrategyLabCompare'];
+  data: WorkspaceData; preferences: DashboardPreferences; screen: ScreenName;
+  symbol: string; marketType: 'SPOT' | 'FUTURES'; onWorkspaceLoad: Props['onWorkspaceLoad'];
+}) {
+  const [dna, setDna] = useState<any>(null)
+  const [dnaError, setDnaError] = useState('')
+  const [strategy, setStrategy] = useState('momentum')
+  const [symbol, setSymbol] = useState('BTCUSDT')
+  const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
+  const [timeframe, setTimeframe] = useState('1h')
+  const [start, setStart] = useState('2026-09-15')
+  const [end, setEnd] = useState('2026-11-21')
+  const [capital, setCapital] = useState('1000')
+  const [risk, setRisk] = useState('1')
+  const [mode, setMode] = useState('risk_pct')
+  const [notional, setNotional] = useState('100')
+  const [maxPosition, setMaxPosition] = useState('50')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState<any>(null)
+  const [selectedTrade, setSelectedTrade] = useState<any>(null)
+  const [comparison, setComparison] = useState<any>(null)
+  const [minScore, setMinScore] = useState('0')
+  const [feeRate, setFeeRate] = useState('')
+  const [slippage, setSlippage] = useState('')
+  const [spread, setSpread] = useState('')
+  const [funding, setFunding] = useState('')
+  const [savedStrategies, setSavedStrategies] = useState<any[]>([])
+  const [savedReports, setSavedReports] = useState<any[]>([])
+  const [savedWorkspaces, setSavedWorkspaces] = useState<any[]>([])
+  const [strategyName, setStrategyName] = useState('')
+  const [chosenStrategyId, setChosenStrategyId] = useState('')
+  const [chosenReportId, setChosenReportId] = useState('')
+  const [chosenWorkspaceId, setChosenWorkspaceId] = useState('')
+  const [loadedReport, setLoadedReport] = useState<any>(null)
+  const [loadedWorkspace, setLoadedWorkspace] = useState<any>(null)
+  const [persistenceMessage, setPersistenceMessage] = useState('')
+  const reloadSaved = async () => {
+    const [strategies, reports, workspaces] = await Promise.all([
+      requestJson<{ strategies?: any[] }>('/research/strategies'),
+      requestJson<{ reports?: any[] }>('/research/reports'),
+      requestJson<{ workspaces?: any[] }>('/research/workspaces'),
+    ])
+    setSavedStrategies(strategies?.strategies ?? [])
+    setSavedReports(reports?.reports ?? [])
+    setSavedWorkspaces(workspaces?.workspaces ?? [])
+  }
+  useEffect(() => { void reloadSaved() }, [])
+  useEffect(() => {
+    let active = true
+    requestJson<any>('/learning/strategy-dna').then(value => { if (active) setDna(value) }).catch(error => { if (active) setDnaError(error instanceof Error ? error.message : 'Strategy DNA unavailable') })
+    return () => { active = false }
+  }, [])
+  const saveCurrentStrategy = async () => {
+    try {
+      const saved = await mutateJson<any>('/research/strategies', 'POST', {
+        name: strategyName.trim() || strategy,
+        strategy_key: strategy,
+        description: 'Saved from Strategy Lab',
+        tags: ['strategy-lab'],
+        definition: {
+          symbol: symbol.toUpperCase(), market, timeframe, sizing_mode: mode,
+          initial_capital: Number(capital), risk_per_trade_pct: Number(risk),
+          fixed_notional: Number(notional), max_position_pct: Number(maxPosition),
+          strategy_parameters: { min_score: Number(minScore) },
+          fee_rate: feeRate === '' ? null : Number(feeRate),
+          slippage_bps: slippage === '' ? null : Number(slippage),
+          spread_bps: spread === '' ? null : Number(spread),
+          funding_rate: funding === '' ? null : Number(funding),
+        },
+      })
+      setChosenStrategyId(saved.strategy_id)
+      setPersistenceMessage('Strategy saved to the database.')
+      await reloadSaved()
+    } catch (reason) {
+      setPersistenceMessage(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+  const loadChosenStrategy = () => {
+    const saved = savedStrategies.find(item => item.strategy_id === chosenStrategyId)
+    if (!saved) return
+    const definition = saved.definition ?? {}
+    setStrategy(saved.strategy_key)
+    if (definition.symbol) setSymbol(String(definition.symbol))
+    if (definition.market === 'SPOT' || definition.market === 'FUTURES') setMarket(definition.market)
+    if (definition.timeframe) setTimeframe(String(definition.timeframe))
+    if (definition.sizing_mode) setMode(String(definition.sizing_mode))
+    if (definition.initial_capital != null) setCapital(String(definition.initial_capital))
+    if (definition.risk_per_trade_pct != null) setRisk(String(definition.risk_per_trade_pct))
+    if (definition.fixed_notional != null) setNotional(String(definition.fixed_notional))
+    if (definition.max_position_pct != null) setMaxPosition(String(definition.max_position_pct))
+    if (definition.strategy_parameters?.min_score != null) setMinScore(String(definition.strategy_parameters.min_score))
+    if (definition.fee_rate != null) setFeeRate(String(definition.fee_rate))
+    if (definition.slippage_bps != null) setSlippage(String(definition.slippage_bps))
+    if (definition.spread_bps != null) setSpread(String(definition.spread_bps))
+    if (definition.funding_rate != null) setFunding(String(definition.funding_rate))
+    setPersistenceMessage('Saved strategy configuration loaded into the form.')
+  }
+  const loadChosenReport = async () => {
+    if (!chosenReportId) return
+    const report = await requestJson<any>(`/research/reports/${encodeURIComponent(chosenReportId)}`)
+    if (report) setLoadedReport(report)
+  }
+  const saveWorkspaceSnapshot = async () => {
+    try {
+      const saved = await mutateJson<any>('/research/workspaces', 'POST', {
+        name: `Workspace ${new Date().toLocaleString()}`,
+        schema_version: 1,
+        payload: {
+          screen, symbol: dashboardSymbol, marketType, preferences,
+          dashboardData: data,
+          strategyLab: { strategy, symbol, market, timeframe, start, end, capital, risk, mode, notional, maxPosition, minScore, feeRate, slippage, spread, funding, result, comparison },
+        },
+      })
+      setChosenWorkspaceId(saved.workspace_id)
+      setPersistenceMessage('Workspace snapshot saved.')
+      await reloadSaved()
+    } catch (reason) {
+      setPersistenceMessage(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+  const loadChosenWorkspace = async () => {
+    if (!chosenWorkspaceId) return
+    const workspace = await requestJson<any>(`/research/workspaces/${encodeURIComponent(chosenWorkspaceId)}`)
+    if (workspace) {
+      setLoadedWorkspace(workspace)
+      onWorkspaceLoad(workspace)
+      const savedLab = workspace.payload?.strategyLab
+      if (savedLab && typeof savedLab === 'object') {
+        if (typeof savedLab.strategy === 'string') setStrategy(savedLab.strategy)
+        if (typeof savedLab.symbol === 'string') setSymbol(savedLab.symbol)
+        if (savedLab.market === 'SPOT' || savedLab.market === 'FUTURES') setMarket(savedLab.market)
+        if (typeof savedLab.timeframe === 'string') setTimeframe(savedLab.timeframe)
+        for (const [key, setter] of [
+          ['start', setStart], ['end', setEnd], ['capital', setCapital], ['risk', setRisk],
+          ['mode', setMode], ['notional', setNotional], ['maxPosition', setMaxPosition],
+          ['minScore', setMinScore], ['feeRate', setFeeRate], ['slippage', setSlippage],
+          ['spread', setSpread], ['funding', setFunding],
+        ] as const) {
+          if (savedLab[key] != null) setter(String(savedLab[key]))
+        }
+        if (savedLab.result) setResult(savedLab.result)
+        if (savedLab.comparison) setComparison(savedLab.comparison)
+      }
+      setPersistenceMessage('Workspace snapshot loaded into the dashboard.')
+    }
+  }
+  const run = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
+    try {
+      const data = await onRun({
+        strategy, symbol: symbol.toUpperCase(), market, timeframe,
+        start_date: new Date(start + 'T00:00:00Z').toISOString(),
+        end_date: new Date(end + 'T23:59:59Z').toISOString(),
+        initial_capital: Number(capital), sizing_mode: mode,
+        risk_per_trade_pct: Number(risk), fixed_notional: Number(notional),
+        max_position_pct: Number(maxPosition), strategy_parameters: { min_score: Number(minScore) },
+        fee_rate: feeRate === '' ? undefined : Number(feeRate),
+        slippage_bps: slippage === '' ? undefined : Number(slippage),
+        spread_bps: spread === '' ? undefined : Number(spread),
+        funding_rate: funding === '' ? undefined : Number(funding),
+      })
+      setResult(data)
+      await reloadSaved()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  const compare = async () => {
+    setBusy(true); setError(''); setComparison(null)
+    try {
+      const compared = await onCompare({
+        symbol: symbol.toUpperCase(), market, timeframe,
+        start_date: new Date(start + 'T00:00:00Z').toISOString(),
+        end_date: new Date(end + 'T23:59:59Z').toISOString(),
+        initial_capital: Number(capital), sizing_mode: mode,
+        risk_per_trade_pct: Number(risk), fixed_notional: Number(notional),
+        max_position_pct: Number(maxPosition), strategy_parameters: { min_score: Number(minScore) },
+        fee_rate: feeRate === '' ? undefined : Number(feeRate),
+        slippage_bps: slippage === '' ? undefined : Number(slippage),
+        spread_bps: spread === '' ? undefined : Number(spread),
+        funding_rate: funding === '' ? undefined : Number(funding),
+      })
+      setComparison(compared)
+      await reloadSaved()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { setBusy(false) }
+  }
+  const metrics = result?.metrics
+  const curve = result?.equity_curve ?? []
+  const curveValues = curve.map((point: { equity: number }) => point.equity).filter((value: number) => Number.isFinite(value))
+  const curveMin = curveValues.length ? Math.min(...curveValues) : 0
+  const curveMax = curveValues.length ? Math.max(...curveValues) : 1
+  const curvePoints = curve.map((point: { equity: number }, index: number) => {
+    const x = 8 + (index / Math.max(1, curve.length - 1)) * 584
+    const y = 8 + ((curveMax - point.equity) / Math.max(1e-9, curveMax - curveMin)) * 164
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+  return (
+    <div className="workspace-content strategy-lab">
+      <ScreenHeader title="Strategy Lab" description="Historical research · simulated execution · paper-trading compatible" />
+      <section className="workspace-panel">
+        <h2>Strategy DNA · behavior monitoring</h2>
+        <p className="workspace-note">Profiles are derived from saved backtests and closed paper trades. Diagnostics describe observed behavior only; they do not predict future profitability.</p>
+        {dnaError && <div role="status" className="workspace-note">Strategy DNA unavailable: {dnaError}</div>}
+        {!dna && !dnaError && <p className="workspace-note">Loading historical and paper-trading records…</p>}
+        {dna?.profiles?.map((profile: any) => <details key={profile.strategy}>
+          <summary>{profile.strategy_type} · {profile.behavioral_differences?.status ?? 'Not evaluated'} · {profile.sample_size?.historical_trades ?? 0} historical / {profile.sample_size?.current_paper_trades ?? 0} paper trades</summary>
+          <div className="workspace-summary-grid">
+            <SummaryCard label="HISTORICAL WIN RATE" value={profile.historical_behavior?.win_rate_pct == null ? '—' : pct(profile.historical_behavior.win_rate_pct)} />
+            <SummaryCard label="PAPER WIN RATE" value={profile.current_paper_behavior?.win_rate_pct == null ? '—' : pct(profile.current_paper_behavior.win_rate_pct)} />
+            <SummaryCard label="HISTORICAL DD" value={profile.historical_behavior?.max_drawdown_pct == null ? '—' : pct(profile.historical_behavior.max_drawdown_pct)} />
+            <SummaryCard label="PAPER DD" value={profile.current_paper_behavior?.max_drawdown_pct == null ? '—' : pct(profile.current_paper_behavior.max_drawdown_pct)} />
+          </div>
+          <p className="workspace-note">Timeframes: {profile.supported_timeframes?.join(', ')} · Entry: {profile.entry_conditions} · Exit: {profile.exit_conditions}</p>
+          {profile.behavioral_differences?.reasons?.map((reason: string, index: number) => <p key={index} className="workspace-note">{reason}</p>)}
+          {profile.behavioral_differences?.reason && <p className="workspace-note">{profile.behavioral_differences.reason}</p>}
+          <p className="workspace-note">Known limitations: {profile.known_limitations?.join(' · ')} · Last evaluated: {profile.last_evaluated_at ?? 'Not evaluated'}</p>
+        </details>)}
+      </section>
+      <form className="workspace-form" onSubmit={run}>
+        <div className="workspace-form-grid">
+          <label>Strategy<select value={strategy} onChange={e => setStrategy(e.target.value)}>{['momentum','breakout','trend_following','mean_reversion','reversal'].map(v => <option key={v}>{v}</option>)}</select></label>
+          <label>Asset<input value={symbol} onChange={e => setSymbol(e.target.value)} maxLength={20} required /></label>
+          <label>Market<select value={market} onChange={e => setMarket(e.target.value as 'SPOT'|'FUTURES')}><option>SPOT</option><option>FUTURES</option></select></label>
+          <label>Timeframe<select value={timeframe} onChange={e => setTimeframe(e.target.value)}>{['1m','3m','5m','15m','30m','1h','4h','1d','1w'].map(v => <option key={v}>{v}</option>)}</select></label>
+          <label>Start date<input type="date" value={start} onChange={e => setStart(e.target.value)} required /></label>
+          <label>End date<input type="date" value={end} onChange={e => setEnd(e.target.value)} required /></label>
+          <label>Starting capital<input type="number" min="1" step="any" value={capital} onChange={e => setCapital(e.target.value)} required /></label>
+          <label>Position sizing<select value={mode} onChange={e => setMode(e.target.value)}><option value="risk_pct">Risk % per trade</option><option value="fixed_notional">Fixed notional</option></select></label>
+          <label>Risk per trade (%)<input type="number" min="0.01" max="100" step="any" value={risk} onChange={e => setRisk(e.target.value)} /></label>
+          <label>Fixed notional<input type="number" min="0.01" step="any" value={notional} onChange={e => setNotional(e.target.value)} /></label>
+          <label>Max position (% equity)<input type="number" min="0.01" max="100" step="any" value={maxPosition} onChange={e => setMaxPosition(e.target.value)} /></label>
+          <label>Minimum strategy score<input type="number" min="0" step="any" value={minScore} onChange={e => setMinScore(e.target.value)} /></label>
+          <label>Fee rate (optional)<input type="number" min="0" step="any" placeholder="Use market default" value={feeRate} onChange={e => setFeeRate(e.target.value)} /></label>
+          <label>Slippage (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={slippage} onChange={e => setSlippage(e.target.value)} /></label>
+          <label>Spread (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={spread} onChange={e => setSpread(e.target.value)} /></label>
+          <label>Funding rate per 8h (optional)<input type="number" step="any" placeholder="Futures assumption only" value={funding} onChange={e => setFunding(e.target.value)} /></label>
+        </div>
+        <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Running backtest…' : 'Run historical backtest'}</button>
+        <button className="table-action" type="button" disabled={busy} onClick={() => void compare()}>Compare all strategies</button>
+      </form>
+      {error && <div role="alert" className="workspace-error">{error}</div>}
+      <section className="workspace-panel persistence-panel">
+        <h2>Saved research & workspaces</h2>
+        <div className="workspace-form-grid">
+          <label>Strategy name<input value={strategyName} onChange={event => setStrategyName(event.target.value)} placeholder={strategy} maxLength={120} /></label>
+          <button className="table-action" type="button" onClick={() => void saveCurrentStrategy()}>Save strategy definition</button>
+          <label>Saved strategy<select value={chosenStrategyId} onChange={event => setChosenStrategyId(event.target.value)}><option value="">Choose saved strategy</option>{savedStrategies.map(item => <option key={item.strategy_id} value={item.strategy_id}>{item.name} · {item.strategy_key} v{item.version}</option>)}</select></label>
+          <button className="table-action" type="button" disabled={!chosenStrategyId} onClick={loadChosenStrategy}>Load strategy</button>
+          <label>Saved backtest report<select value={chosenReportId} onChange={event => setChosenReportId(event.target.value)}><option value="">Choose report</option>{savedReports.map(item => <option key={item.report_id} value={item.report_id}>{item.symbol} · {item.strategy_name} · {timestamp(item.created_at)}</option>)}</select></label>
+          <button className="table-action" type="button" disabled={!chosenReportId} onClick={() => void loadChosenReport()}>Open report</button>
+          <button className="table-action" type="button" onClick={() => void saveWorkspaceSnapshot()}>Save workspace snapshot</button>
+          <label>Saved workspace<select value={chosenWorkspaceId} onChange={event => setChosenWorkspaceId(event.target.value)}><option value="">Choose workspace</option>{savedWorkspaces.map(item => <option key={item.workspace_id} value={item.workspace_id}>{item.name} · {timestamp(item.updated_at)}</option>)}</select></label>
+          <button className="table-action" type="button" disabled={!chosenWorkspaceId} onClick={() => void loadChosenWorkspace()}>Restore workspace</button>
+        </div>
+        {persistenceMessage && <p role="status" className="workspace-note">{persistenceMessage}</p>}
+        {loadedReport && <details open><summary>Saved report · {loadedReport.report_id}</summary><pre>{JSON.stringify(loadedReport, null, 2)}</pre></details>}
+        {loadedWorkspace && <details><summary>Restored workspace data</summary><pre>{JSON.stringify({name: loadedWorkspace.name, updated_at: loadedWorkspace.updated_at, schema_version: loadedWorkspace.schema_version, payload: loadedWorkspace.payload}, null, 2)}</pre></details>}
+      </section>
+      {result?.status === 'insufficient_data' && <EmptyState text={`Insufficient historical candles. Available: ${result.available_candles}; required: ${result.required_candles}. Try a wider range or another timeframe.`} />}
+      {comparison?.results && <section><h2>Strategy comparison · same conditions</h2><div className="workspace-summary-grid">{comparison.results.map((item: any) => <SummaryCard key={item.strategy} label={item.strategy} value={item.metrics ? pct(item.metrics.net_return_pct) : item.status} detail={item.metrics ? `DD ${pct(item.metrics.max_drawdown_pct)} · ${item.metrics.trade_count} trades` : 'Insufficient history'} />)}</div></section>}
+      {metrics && <>
+        <div className="workspace-summary-grid">
+          {[
+            ['Net return', metrics.net_return_pct == null ? '—' : pct(metrics.net_return_pct)],
+            ['Gross return', metrics.gross_return_pct == null ? '—' : pct(metrics.gross_return_pct)],
+            ['Max drawdown', pct(metrics.max_drawdown_pct)],
+            ['Profit factor', metrics.profit_factor ?? '—'],
+            ['Win rate', pct(metrics.win_rate_pct)],
+            ['Sharpe', metrics.sharpe_ratio == null ? '—' : num(metrics.sharpe_ratio)?.toFixed(2) ?? '—'],
+            ['Trades', String(metrics.trade_count ?? 0)],
+            ['Exposure', pct(metrics.exposure_pct)],
+            ['Buy & hold', metrics.benchmark_buy_hold_return_pct == null ? '—' : pct(metrics.benchmark_buy_hold_return_pct)],
+            ['Average winner', money(num(metrics.average_winning_trade))],
+            ['Average loser', money(num(metrics.average_losing_trade))],
+            ['Average reward / risk', metrics.average_reward_risk == null ? '—' : `${num(metrics.average_reward_risk)?.toFixed(2) ?? '—'}R`],
+          ].map(([label,value]) => <SummaryCard key={label} label={label} value={String(value)} />)}
+        </div>
+        <p className="workspace-note">Execution assumptions: next-bar open entry, conservative stop-first intrabar exit, taker fees, spread and slippage. Funding is omitted unless a rate is explicitly supplied. Research results do not guarantee future performance.</p>
+        <section className="workspace-panel"><h2>Equity curve</h2><svg viewBox="0 0 600 180" role="img" aria-label="Backtest marked-to-market equity curve" className="strategy-equity-chart"><polyline points={curvePoints} fill="none" stroke="currentColor" strokeWidth="2" /></svg><p className="workspace-note">Costs · fees {money(num(metrics.costs?.fees))} · spread {money(num(metrics.costs?.spread))} · slippage {money(num(metrics.costs?.slippage))} · funding {money(num(metrics.costs?.funding))}</p></section>
+        <Table>
+          <TableHead labels={['Trade','Side','Entry','Exit','Net P&L','Exit reason']} />
+          <tbody>{(result.trades ?? []).map((trade: any) => <tr key={trade.trade_id} onClick={() => setSelectedTrade(trade)}><td>{trade.trade_id}</td><td>{trade.side}</td><td>{price(num(trade.entry_fill))}</td><td>{price(num(trade.exit_fill))}</td><td>{money(num(trade.net_pnl))}</td><td>{trade.close_reason}</td></tr>)}</tbody>
+        </Table>
+        {selectedTrade && <DetailCard label="Selected trade details" value={JSON.stringify(selectedTrade, null, 2)} />}
+        <details><summary>Equity curve data ({result.equity_curve?.length ?? 0} points)</summary><pre>{JSON.stringify(result.equity_curve, null, 2)}</pre></details>
+      </>}
+    </div>
   )
 }

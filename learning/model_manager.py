@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
+from learning.model_lifecycle import sha256_file, verify_model_artifact
 
 from config import (
     MIN_VALIDATION_ACCURACY,
@@ -130,12 +131,14 @@ class ModelManager:
         metrics: dict,
         parent_version: str | None = None
     ) -> ModelRegistryModel:
-        """Register a new challenger model."""
+        """Register a challenger with immutable artifact digest metadata."""
+        recorded_metrics = dict(metrics or {})
+        recorded_metrics["artifact_sha256"] = sha256_file(file_path)
         model = ModelRegistryModel(
             version=version,
             model_type=model_type,
             file_path=file_path,
-            metrics=json.dumps(metrics),
+            metrics=json.dumps(recorded_metrics),
             status="CHALLENGER",
             is_active=False,
             is_champion=False,
@@ -304,8 +307,18 @@ class ModelManager:
         # Get champion for comparison
         with self.repo._get_session() as session:
             challenger = session.get(ModelRegistryModel, challenger_version)
-            if not challenger:
-                logger.error(f"Challenger {challenger_version} not found")
+            if not challenger or challenger.model_type != evaluation.model_type:
+                logger.error("Challenger missing or model family mismatch")
+                return False
+            try:
+                registered_metrics = json.loads(challenger.metrics or "{}")
+            except (TypeError, json.JSONDecodeError):
+                return False
+            artifact_ok, artifact_status = verify_model_artifact(
+                challenger.file_path, registered_metrics.get("artifact_sha256", "")
+            )
+            if not artifact_ok:
+                logger.error("Promotion blocked: artifact verification failed (%s)", artifact_status)
                 return False
 
             # Compare with champion
@@ -352,16 +365,10 @@ class ModelManager:
                 logger.warning(f"No champion to rollback for {model_type}")
                 return False
 
-            # Demote current
-            current.is_champion = False
-            current.is_active = False
-            current.status = "ROLLED_BACK"
-
-            # Find target
+            # Resolve and verify target before mutating the current champion.
             if target_version:
                 target = session.get(ModelRegistryModel, target_version)
             else:
-                # Find previous checkpoint
                 target = session.execute(
                     session.query(ModelRegistryModel)
                     .filter_by(model_type=model_type, rollback_checkpoint=True)
@@ -369,11 +376,23 @@ class ModelManager:
                     .order_by(ModelRegistryModel.trained_at.desc())
                     .limit(1)
                 ).scalar()
-
-            if not target:
-                logger.error(f"No rollback target found for {model_type}")
+            if not target or target.version == current.version or target.model_type != model_type or not target.file_path:
+                logger.error("Rollback blocked: compatible target missing for %s", model_type)
+                return False
+            try:
+                target_metrics = json.loads(target.metrics or "{}")
+            except (TypeError, json.JSONDecodeError):
+                return False
+            artifact_ok, artifact_status = verify_model_artifact(
+                target.file_path, target_metrics.get("artifact_sha256", "")
+            )
+            if not artifact_ok:
+                logger.error("Rollback blocked: target artifact verification failed (%s)", artifact_status)
                 return False
 
+            current.is_champion = False
+            current.is_active = False
+            current.status = "ROLLED_BACK"
             target.is_champion = True
             target.is_active = True
             target.status = "CHAMPION"

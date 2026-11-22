@@ -12,6 +12,10 @@ from . import (
     risk,
     activity,
     settings,
+    assistant,
+    backup,
+    research,
+    community,
 )
 
 __all__ = [
@@ -25,4 +29,8 @@ __all__ = [
     "risk",
     "activity",
     "settings",
+    "assistant",
+    "backup",
+    "research",
+    "community",
 ]

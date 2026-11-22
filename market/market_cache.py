@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import threading
+import math
 from datetime import datetime, timezone
 from collections import defaultdict
 
 from .candle_manager import CandleManager
+from market.data_reliability import MarketDataState, valid_price, valid_volume
 
 
 class MarketCache:
@@ -19,6 +21,7 @@ class MarketCache:
         self._oi: dict[str, dict[str, float]] = defaultdict(dict)
         self._updated_at: dict[str, dict[str, datetime]] = defaultdict(dict)
         self._ticker_updated_at: dict[str, dict[str, datetime]] = defaultdict(dict)
+        self._sources: dict[str, dict[str, str]] = defaultdict(dict)
         self._candle_manager = CandleManager()
 
     @property
@@ -29,14 +32,21 @@ class MarketCache:
         with self._lock:
             self._prices[market][symbol] = price
 
-    def update_ticker(self, market: str, symbol: str, price: float, volume: float, change_pct: float) -> None:
+    def update_ticker(self, market: str, symbol: str, price: float, volume: float, change_pct: float, source: str = "REST") -> None:
+        try:
+            change_value = float(change_pct)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not valid_price(price) or not valid_volume(volume) or not math.isfinite(change_value):
+            return
         with self._lock:
-            self._prices[market][symbol] = price
-            self._volumes[market][symbol] = volume
-            self._changes[market][symbol] = change_pct
+            self._prices[market][symbol] = float(price)
+            self._volumes[market][symbol] = float(volume)
+            self._changes[market][symbol] = change_value
             now = datetime.now(timezone.utc)
             self._updated_at[market][symbol] = now
             self._ticker_updated_at[market][symbol] = now
+            self._sources[market][symbol] = source.upper()
 
     def update_mark(self, market: str, symbol: str, mark: float, funding: float | None = None) -> None:
         with self._lock:
@@ -83,6 +93,7 @@ class MarketCache:
                 "symbol": symbol,
                 "market": market,
                 "timestamp": self._ticker_updated_at.get(market, {}).get(symbol),
+                "data_source": self._sources.get(market, {}).get(symbol, "UNKNOWN"),
                 "price": price,
                 "volume_24h": self._volumes.get(market, {}).get(symbol),
                 "price_change_24h": self._changes.get(market, {}).get(symbol),
@@ -113,6 +124,24 @@ class MarketCache:
                 }
                 for symbol, price in self._prices.get(market, {}).items()
             ]
+
+
+    def get_data_status(self, market: str, stale_after_seconds: float = 120.0) -> dict:
+        """Return aggregate ticker freshness and source metadata."""
+        with self._lock:
+            timestamps = self._ticker_updated_at.get(market, {})
+            if not timestamps:
+                return {"market": market, "state": MarketDataState.UNAVAILABLE.value,
+                        "last_success": None, "last_exchange_event": None,
+                        "data_source": "NONE", "age_seconds": None}
+            symbol, timestamp = max(timestamps.items(), key=lambda item: item[1])
+            age = max(0.0, (datetime.now(timezone.utc) - timestamp).total_seconds())
+            state = (MarketDataState.STALE if age >= stale_after_seconds else
+                     MarketDataState.DELAYED if age >= 30 else MarketDataState.LIVE)
+            return {"market": market, "state": state.value,
+                    "last_success": timestamp.isoformat(), "last_exchange_event": None,
+                    "data_source": self._sources.get(market, {}).get(symbol, "UNKNOWN"),
+                    "latest_symbol": symbol, "age_seconds": age}
 
     def top_movers(self, market: str, n: int = 20) -> list[tuple[str, float]]:
         with self._lock:

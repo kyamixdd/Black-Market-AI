@@ -1220,7 +1220,7 @@ async def test_futures_margin_is_reserved_and_released_on_close():
         "market": "FUTURES",
         "direction": "LONG",
         "entry": 100.0,
-        "stop_loss": 90.0,
+        "stop_loss": 96.0,
         "take_profit": [120.0],
         "leverage": 2.0,
         "order_type": "LIMIT",
@@ -1245,6 +1245,10 @@ async def test_futures_margin_is_reserved_and_released_on_close():
 async def test_concurrent_futures_entries_cannot_allocate_same_margin_twice():
     simulator = Simulator(EventBus())
     simulator.futures_balance = 100.0
+    simulator.risk_manager.max_risk_pct = 2.0
+    simulator.risk_manager.max_open_risk_pct = 5.0
+    simulator.risk_manager.max_position_size_pct = 100.0
+    simulator.risk_manager.max_asset_exposure_pct = 100.0
     simulator.validate_new_position = lambda *_args: (True, "OK")
     signal = {
         "signal_id": "CONCURRENT-MARGIN",
@@ -1320,7 +1324,7 @@ async def test_partial_close_rejects_full_or_excess_quantity_without_mutation():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("market,leverage,collateral_key,available_key,collateral", [
     ("SPOT", 1.0, "reserved_notional", "spot_available_balance", 100.0),
-    ("FUTURES", 5.0, "reserved_margin", "futures_available_balance", 20.0),
+    ("FUTURES", 3.0, "reserved_margin", "futures_available_balance", 100.0 / 3.0),
 ])
 async def test_opening_position_at_entry_price_preserves_portfolio_equity(
     market, leverage, collateral_key, available_key, collateral
@@ -1330,6 +1334,7 @@ async def test_opening_position_at_entry_price_preserves_portfolio_equity(
     simulator = Simulator(EventBus())
     simulator.fee_calc.calculate = lambda *_args: 0.0
     simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
+    simulator.risk_manager.max_risk_pct = 2.0
     simulator.validate_new_position = lambda *_args: (True, "OK")
     simulator._calculate_order_quantity = lambda *_args: (1.0, leverage)
 
@@ -1345,7 +1350,7 @@ async def test_opening_position_at_entry_price_preserves_portfolio_equity(
         "market": market,
         "direction": "LONG",
         "entry": 100.0,
-        "stop_loss": 90.0,
+        "stop_loss": 96.0,
         "take_profit": [120.0],
         "leverage": leverage,
     }
@@ -1429,3 +1434,93 @@ def test_daily_equity_risk_state_rejects_corrupt_file(tmp_path):
     path.write_text("{invalid", encoding="utf-8")
     with pytest.raises(RuntimeError, match="daily equity risk state"):
         load_daily_equity_state(path)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_limit_order_never_fills_and_duplicate_cancel_is_noop():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-CANCEL-REGRESSION",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    cancelled = await simulator.cancel_limit_order(order_id)
+    assert cancelled is not None
+    assert cancelled["status"] == "CANCELLED"
+    assert order_id not in simulator.open_orders
+    assert await simulator.cancel_limit_order(order_id) is None
+
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 48000.0)
+    assert simulator.spot_positions == {}
+    assert simulator.spot_balance == pytest.approx(simulator.initial_spot_balance)
+
+
+@pytest.mark.asyncio
+async def test_order_id_makes_execution_idempotent_and_blocks_reexecution_after_close():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-IDEMPOTENT-ORDER",
+        "order_id": "ORD-IDEMPOTENT-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    first_position_id = await simulator.execute_signal(signal)
+    assert first_position_id is not None
+    balance_after_open = simulator.spot_balance
+    duplicate_position_id = await simulator.execute_signal(signal)
+    assert duplicate_position_id == first_position_id
+    assert len(simulator.spot_positions) == 1
+    assert simulator.spot_balance == pytest.approx(balance_after_open)
+
+    position = simulator.spot_positions[first_position_id]
+    assert await simulator._close_position(position, 51000.0, "TEST") is True
+    balance_after_close = simulator.spot_balance
+    assert await simulator.execute_signal(signal) is None
+    assert simulator.spot_positions == {}
+    assert len(simulator.closed_trades) == 1
+    assert simulator.spot_balance == pytest.approx(balance_after_close)
+
+    restored = Simulator(EventBus())
+    restored.restore_state(simulator.get_state_snapshot())
+    restored_balance = restored.spot_balance
+    assert await restored.execute_signal(signal) is None
+    assert restored.spot_balance == pytest.approx(restored_balance)
+    assert len(restored.closed_trades) == 1
+
+
+@pytest.mark.asyncio
+async def test_order_cancellation_emits_trade_cancelled_event():
+    bus = EventBus()
+    simulator = Simulator(bus)
+    signal = {
+        "signal_id": "SIG-CANCEL-EVENT",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    await simulator.cancel_limit_order(order_id)
+
+    events = []
+    while bus.pending:
+        events.append(bus._queue.get_nowait())
+    assert any(event.event_type == "TRADE_CANCELLED" for event in events)

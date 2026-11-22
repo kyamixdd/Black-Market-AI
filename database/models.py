@@ -270,6 +270,119 @@ class SystemEventModel(Base):
     payload = Column(Text, nullable=False)
 
 
+
+class SavedStrategyModel(Base):
+    """Versioned user-authored strategy definitions."""
+    __tablename__ = "saved_strategies"
+
+    strategy_id = Column(String(64), primary_key=True)
+    name = Column(String(120), nullable=False)
+    strategy_key = Column(String(64), nullable=False)
+    description = Column(Text, nullable=False, default="")
+    definition_json = Column(Text, nullable=False)
+    tags_json = Column(Text, nullable=False, default="[]")
+    version = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class BacktestReportModel(Base):
+    """Immutable saved research report and its full configuration/results."""
+    __tablename__ = "backtest_reports"
+
+    report_id = Column(String(64), primary_key=True)
+    strategy_id = Column(String(64), nullable=True, index=True)
+    strategy_name = Column(String(120), nullable=False)
+    symbol = Column(String(32), nullable=False, index=True)
+    market = Column(String(16), nullable=False)
+    timeframe = Column(String(8), nullable=False)
+    status = Column(String(32), nullable=False)
+    config_json = Column(Text, nullable=False)
+    report_json = Column(Text, nullable=False)
+    origin = Column(String(32), nullable=False, default="USER_SUBMITTED")
+    created_at = Column(DateTime, default=now_utc, nullable=False, index=True)
+
+
+class WorkspaceModel(Base):
+    """User-saved dashboard/workspace state with schema versioning."""
+    __tablename__ = "workspaces"
+
+    workspace_id = Column(String(64), primary_key=True)
+    name = Column(String(120), nullable=False)
+    owner_key = Column(String(64), nullable=False, default="local", index=True)
+    schema_version = Column(Integer, nullable=False, default=1)
+    payload_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+
+
+class PublicStrategyModel(Base):
+    """Public community entry; deliberately stores only publication-safe data."""
+    __tablename__ = "public_strategies"
+
+    public_id = Column(String(64), primary_key=True)
+    owner_key = Column(String(64), nullable=False, index=True)
+    name = Column(String(120), nullable=False, index=True)
+    description = Column(Text, nullable=False, default="")
+    strategy_key = Column(String(64), nullable=False, index=True)
+    rules_json = Column(Text, nullable=False)
+    assets_json = Column(Text, nullable=False, default="[]")
+    timeframes_json = Column(Text, nullable=False, default="[]")
+    risk_json = Column(Text, nullable=False, default="{}")
+    limitations_json = Column(Text, nullable=False, default="[]")
+    report_json = Column(Text, nullable=False, default="{}")
+    report_sha256 = Column(String(64), nullable=False, default="")
+    source_report_id = Column(String(64), nullable=True)
+    report_provenance = Column(String(32), nullable=False, default="USER_SUBMITTED")
+    version = Column(Integer, nullable=False, default=1)
+    visibility = Column(String(16), nullable=False, default="PUBLIC")
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class PublicStrategyVersionModel(Base):
+    """Immutable publication snapshots for community version history."""
+    __tablename__ = "public_strategy_versions"
+
+    version_id = Column(String(64), primary_key=True)
+    public_id = Column(String(64), nullable=False, index=True)
+    owner_key = Column(String(64), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    snapshot_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+
+
+class StrategyFavoriteModel(Base):
+    __tablename__ = "strategy_favorites"
+
+    owner_key = Column(String(64), primary_key=True)
+    public_id = Column(String(64), primary_key=True)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+
+
+class StrategyReportFlagModel(Base):
+    __tablename__ = "strategy_report_flags"
+
+    flag_id = Column(String(64), primary_key=True)
+    public_id = Column(String(64), nullable=False, index=True)
+    reporter_key = Column(String(64), nullable=False, index=True)
+    reason = Column(String(32), nullable=False)
+    details = Column(Text, nullable=False, default="")
+    status = Column(String(16), nullable=False, default="OPEN")
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+
+
 def create_all(db_path: str) -> None:
     engine = create_engine(db_path, future=True)
     Base.metadata.create_all(engine)
+
+class ShareableAnalysisModel(Base):
+    """Immutable publication-safe analysis snapshot; contains no account identity."""
+    __tablename__ = "shareable_analysis"
+
+    share_id = Column(String(32), primary_key=True)
+    payload_json = Column(Text, nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=now_utc, nullable=False, index=True)

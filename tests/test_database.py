@@ -15,6 +15,100 @@ def test_database_init(tmp_path):
     assert db.integrity_check() == "ok"
 
 
+
+def test_database_initialization_and_additive_migration_are_idempotent(tmp_path):
+    import sqlite3
+
+    db_file = tmp_path / "legacy.db"
+    connection = sqlite3.connect(db_file)
+    connection.execute("CREATE TABLE paper_positions (position_id VARCHAR(64) PRIMARY KEY)")
+    connection.execute("CREATE TABLE trade_history (id INTEGER PRIMARY KEY)")
+    connection.commit()
+    connection.close()
+
+    db = Database(f"sqlite:///{db_file}")
+    db.init_db()
+    db.init_db()
+    with db.engine.connect() as connection:
+        position_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(paper_positions)")}
+        trade_columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(trade_history)")}
+    assert {"reserved_notional", "reserved_margin", "order_id", "strategy"} <= position_columns
+    assert "order_id" in trade_columns
+    assert db.integrity_check() == "ok"
+    assert db.foreign_key_check() == []
+    with db.engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).scalar_one() == 2
+    db.close()
+
+
+def test_corrupt_sqlite_database_is_detected_before_init(tmp_path):
+    db_file = tmp_path / "corrupt.db"
+    db_file.write_bytes(b"not a sqlite database")
+    db = Database(f"sqlite:///{db_file}")
+    import pytest
+    with pytest.raises(RuntimeError, match="integrity check|could not be opened"):
+        db.init_db()
+    db.close()
+
+
+def test_strategy_report_workspace_persist_across_database_restart(tmp_path):
+    db_file = tmp_path / "research.db"
+    db = Database(f"sqlite:///{db_file}")
+    db.init_db()
+    repository = Repository(db.session_maker())
+
+    strategy = repository.save_strategy_definition({
+        "strategy_id": "strategy-001", "name": "Momentum test",
+        "strategy_key": "momentum", "description": "saved config",
+        "definition": {"risk_per_trade_pct": 0.5, "strategy_parameters": {"min_score": 2}},
+        "tags": ["lab"], "version": 1,
+    })
+    report = repository.save_backtest_report({
+        "report_id": "report-001", "strategy_id": strategy["strategy_id"],
+        "strategy_name": "momentum", "symbol": "BTCUSDT", "market": "SPOT",
+        "timeframe": "1h", "status": "completed",
+        "config": {"start_date": "2026-01-01T00:00:00Z"},
+        "report": {"metrics": {"net_return_pct": 3.2}, "trades": []},
+    })
+    workspace = repository.save_workspace({
+        "workspace_id": "workspace-001", "owner_key": "local",
+        "name": "Test workspace", "schema_version": 1,
+        "payload": {"symbol": "BTCUSDT", "dashboardData": {"signals": []}},
+    })
+    db.close()
+
+    restarted = Database(f"sqlite:///{db_file}")
+    restarted.init_db()
+    repo_after_restart = Repository(restarted.session_maker())
+    assert repo_after_restart.get_strategy_definition("strategy-001")["definition"]["risk_per_trade_pct"] == 0.5
+    assert repo_after_restart.get_backtest_report("report-001")["report"]["metrics"]["net_return_pct"] == 3.2
+    restored = repo_after_restart.get_workspace("workspace-001", "local")
+    assert restored["payload"]["symbol"] == "BTCUSDT"
+    assert repo_after_restart.get_workspace("workspace-001", "other-user") is None
+    assert len(repo_after_restart.list_strategy_definitions()) == 1
+    assert len(repo_after_restart.list_backtest_reports()) == 1
+    assert len(repo_after_restart.list_workspaces("local")) == 1
+    assert repo_after_restart.delete_strategy_definition("strategy-001")
+    assert repo_after_restart.delete_backtest_report("report-001")
+    assert repo_after_restart.delete_workspace("workspace-001", "local")
+    restarted.close()
+
+
+def test_research_repository_rejects_non_json_numbers(tmp_path):
+    import pytest
+
+    db = Database(f"sqlite:///{tmp_path / 'badjson.db'}")
+    db.init_db()
+    repository = Repository(db.session_maker())
+    with pytest.raises(ValueError):
+        repository.save_workspace({
+            "workspace_id": "bad-json", "name": "Bad", "owner_key": "local",
+            "payload": {"not_finite": float("nan")},
+        })
+    db.close()
+
 def test_symbol_repository(tmp_path):
     db_file = tmp_path / "test.db"
     db = Database(f"sqlite:///{db_file}")

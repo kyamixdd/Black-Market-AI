@@ -14,6 +14,8 @@ from config import (
     MAX_SPOT_POSITIONS,
     RISK_MAX_DAILY_LOSS_PCT,
     RISK_MAX_LEVERAGE,
+    RISK_MAX_POSITION_SIZE_PCT,
+    RISK_MAX_ASSET_EXPOSURE_PCT,
     RISK_MAX_TOTAL_OPEN_PCT,
     RISK_PER_TRADE_PCT,
     SPOT_INITIAL_BALANCE,
@@ -62,6 +64,8 @@ class Simulator:
             max_leverage=RISK_MAX_LEVERAGE,
             max_spot_positions=MAX_SPOT_POSITIONS,
             max_futures_positions=MAX_FUTURES_POSITIONS,
+            max_position_size_pct=RISK_MAX_POSITION_SIZE_PCT,
+            max_asset_exposure_pct=RISK_MAX_ASSET_EXPOSURE_PCT,
         )
 
     def get_balance(self, market: str) -> float:
@@ -158,14 +162,16 @@ class Simulator:
 
     def _get_total_risk(self) -> float:
         total = 0.0
-        for pos in self.spot_positions.values():
-            if pos.get("stop_loss"):
-                risk = abs(pos["entry_price"] - pos["stop_loss"]) * pos["amount"]
-                total += risk
-        for pos in self.futures_positions.values():
-            if pos.get("stop_loss"):
-                risk = abs(pos["entry_price"] - pos["stop_loss"]) * pos["amount"]
-                total += risk
+        groups = (self.spot_positions, self.futures_positions)
+        for positions in groups:
+            for pos in positions.values():
+                if pos.get("status", "OPEN") not in ("OPEN", "CLOSING") or not pos.get("stop_loss"):
+                    continue
+                total += abs(float(pos["entry_price"]) - float(pos["stop_loss"])) * float(pos["amount"])
+        for order in self.open_orders.values():
+            if order.get("status") != "OPEN" or not order.get("stop_loss"):
+                continue
+            total += abs(float(order["entry_price"]) - float(order["stop_loss"])) * float(order["amount"])
         return total
 
     def _get_volume_24h(self, market: str, symbol: str) -> float:
@@ -224,16 +230,39 @@ class Simulator:
     def validate_new_position(self, signal: dict[str, Any], quantity_override: float | None = None) -> tuple[bool, str]:
         market = signal["market"]
         direction = signal["direction"]
+        if market not in ("SPOT", "FUTURES") or signal.get("direction") not in ("BUY", "SELL", "LONG", "SHORT"):
+            return False, "Unsupported market or direction"
+        entry = float(signal.get("entry", 0.0))
+        stop = float(signal.get("stop_loss", 0.0))
+        if not math.isfinite(entry) or not math.isfinite(stop) or entry <= 0 or stop <= 0:
+            return False, "Entry and stop-loss must be finite positive prices"
+        direction = signal["direction"]
+        if direction in ("BUY", "LONG") and stop >= entry:
+            return False, "Long stop-loss must be below entry"
+        if direction in ("SELL", "SHORT") and stop <= entry:
+            return False, "Short stop-loss must be above entry"
+        targets = signal.get("take_profit") or []
+        if targets:
+            target = float(targets[0])
+            if not math.isfinite(target) or target <= 0:
+                return False, "Take-profit must be a finite positive price"
+            if direction in ("BUY", "LONG") and target <= entry:
+                return False, "Long take-profit must be above entry"
+            if direction in ("SELL", "SHORT") and target >= entry:
+                return False, "Short take-profit must be below entry"
         positions = self._get_positions(market)
+        pending = {
+            order_id: order for order_id, order in self.open_orders.items()
+            if order.get("market") == market and order.get("status") == "OPEN"
+        }
+        occupied = {**positions, **pending}
 
-        # Check total position limit using risk manager
-        max_positions = MAX_SPOT_POSITIONS if market == "SPOT" else MAX_FUTURES_POSITIONS
-        if not self.risk_manager.check_position_limit(positions, max_positions):
+        # Pending limit orders reserve slots and symbol exposure until filled or cancelled.
+        max_positions = self.risk_manager.max_spot_positions if market == "SPOT" else self.risk_manager.max_futures_positions
+        if not self.risk_manager.check_position_limit(occupied, max_positions):
             return False, f"Max {market} positions reached"
-
-        # Check per-symbol position limit
-        if not self.risk_manager.check_symbol_exposure(positions, signal["symbol"]):
-            return False, f"Position already open for {signal['symbol']} on {market}"
+        if not self.risk_manager.check_symbol_exposure(occupied, signal["symbol"]):
+            return False, f"Position already open or pending for {signal['symbol']} on {market}"
 
         # Daily loss is total mark-to-market equity drawdown from the fixed
         # UTC-day opening baseline, not merely closed-trade P&L.
@@ -249,6 +278,8 @@ class Simulator:
         if risk_amount <= 0:
             return False, "Invalid stop loss"
         qty, leverage = self._calculate_order_quantity(signal, balance)
+        if leverage < 1.0:
+            return False, "Invalid leverage"
         if quantity_override is not None:
             if quantity_override <= 0 or quantity_override > qty + 1e-9:
                 return False, "Requested quantity exceeds risk-sized maximum"
@@ -265,7 +296,18 @@ class Simulator:
             required_margin = qty * entry / leverage
             if required_margin + fee > balance + 1e-9:
                 return False, "Insufficient available Futures balance for margin and fees"
-        # Total open risk
+        # Enforce notional limits on actual intended entry and aggregate asset exposure.
+        notional = qty * float(signal["entry"])
+        if not self.risk_manager.check_position_notional(notional, total_balance):
+            return False, "Maximum position size exceeded"
+        exposure_positions = {
+            **self.spot_positions, **self.futures_positions,
+            **{oid: order for oid, order in self.open_orders.items() if order.get("status") == "OPEN"},
+        }
+        if not self.risk_manager.check_asset_exposure(
+            exposure_positions, signal["symbol"], notional, total_balance,
+        ):
+            return False, "Maximum asset exposure exceeded"
         total_risk = self._get_total_risk()
         new_risk = risk_amount * qty
         if not self.risk_manager.check_total_risk(total_risk, new_risk, total_balance):
@@ -278,7 +320,27 @@ class Simulator:
             return await self._execute_signal_locked(signal, quantity_override)
 
     async def _execute_signal_locked(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
-        """Execute a signal while holding the account allocation lock."""
+        """Execute a signal while holding the account allocation lock.
+
+        An order ID is the simulator's idempotency key. If recovery or a retry
+        submits the same order again, return its existing open position and
+        refuse to execute an already completed order a second time.
+        """
+        order_id = signal.get("order_id")
+        if order_id:
+            existing_position = next(
+                (
+                    position for position in (*self.spot_positions.values(), *self.futures_positions.values())
+                    if position.get("order_id") == order_id and position.get("status") == "OPEN"
+                ),
+                None,
+            )
+            if existing_position is not None:
+                return existing_position["position_id"]
+            if any(trade.get("order_id") == order_id for trade in self.closed_trades):
+                logger.warning("Order %s has already executed; duplicate execution blocked", order_id)
+                return None
+
         ok, reason = self.validate_new_position(signal, quantity_override)
         if not ok:
             logger.warning("Signal %s risk check failed: %s", signal["signal_id"], reason)
@@ -286,6 +348,10 @@ class Simulator:
         market = signal["market"]
         balance = self.get_balance(market)
         qty, leverage = self._calculate_order_quantity(signal, balance)
+        leverage = self.risk_manager.validate_leverage(market, signal.get("leverage", 1.0))
+        if leverage < 1.0 or (market == "SPOT" and leverage != 1.0):
+            logger.warning("Order %s rejected: invalid market leverage", signal.get("signal_id"))
+            return None
         if quantity_override is not None:
             qty = float(quantity_override)
         if qty <= 0:
@@ -299,15 +365,60 @@ class Simulator:
             qty, leverage, volume_24h
         )
 
+        # Adjust auto-sized orders for slippage-induced stop-distance changes.
+        equity = self.get_account_equity_breakdown()["total_equity"]
+        stop_price = float(signal["stop_loss"])
+        actual_distance = abs(fill_price - stop_price)
+        risk_budget = equity * self.risk_manager.max_risk_pct / 100.0 * 0.999
+        if quantity_override is None and actual_distance > 0 and qty * actual_distance > risk_budget:
+            qty = risk_budget / actual_distance
+            fill_price = self.fee_calc.get_fill_price(
+                market, signal["direction"], order_type, signal["entry"],
+                qty, leverage, volume_24h
+            )
+        actual_risk = abs(fill_price - stop_price) * qty
+        actual_notional = qty * fill_price
+        risk_equity = self.get_account_equity_breakdown()["total_equity"]
+        if not self.risk_manager.check_trade_risk(actual_risk, risk_equity):
+            logger.warning("Order %s rejected: actual fill exceeds per-trade risk budget", signal.get("signal_id"))
+            return None
+        if not self.risk_manager.check_total_risk(self._get_total_risk(), actual_risk, risk_equity):
+            logger.warning("Order %s rejected: actual fill exceeds aggregate open-risk cap", signal.get("signal_id"))
+            return None
+        if not self.risk_manager.check_position_notional(actual_notional, equity):
+            logger.warning("Order %s rejected: actual fill exceeds position-size cap", signal.get("signal_id"))
+            return None
+        exposure_positions = {
+            **self.spot_positions, **self.futures_positions,
+            **{oid: order for oid, order in self.open_orders.items() if order.get("status") == "OPEN"},
+        }
+        if not self.risk_manager.check_asset_exposure(exposure_positions, signal["symbol"], actual_notional, equity):
+            logger.warning("Order %s rejected: actual fill exceeds asset-exposure cap", signal.get("signal_id"))
+            return None
+
         # Deduct fees upfront
         fee = self.fee_calc.calculate(market, signal["direction"], qty, fill_price, leverage)
         reserved_notional = qty * fill_price if market == "SPOT" else 0.0
         reserved_margin = qty * fill_price / leverage if market == "FUTURES" else 0.0
-        if market == "FUTURES" and reserved_margin + fee > self.futures_balance + 1e-9:
-            logger.warning("Futures order %s exceeds available margin after fees", signal["signal_id"])
+        pending_collateral = 0.0
+        for pending in self.open_orders.values():
+            if pending.get("status") != "OPEN" or pending.get("market") != market:
+                continue
+            pending_notional = float(pending["entry_price"]) * float(pending["amount"])
+            pending_leverage = max(float(pending.get("leverage", 1.0)), 1.0)
+            pending_fee = self.fee_calc.calculate(
+                market, pending["side"], float(pending["amount"]),
+                float(pending["entry_price"]), pending_leverage
+            )
+            pending_collateral += (
+                pending_notional if market == "SPOT" else pending_notional / pending_leverage
+            ) + pending_fee
+        available_after_reservations = balance - pending_collateral
+        if market == "FUTURES" and reserved_margin + fee > available_after_reservations + 1e-9:
+            logger.warning("Futures order %s exceeds available margin after pending-order reservations", signal["signal_id"])
             return None
-        if market == "SPOT" and reserved_notional + fee > self.spot_balance + 1e-9:
-            logger.warning("Spot order %s exceeds available cash after fees", signal["signal_id"])
+        if market == "SPOT" and reserved_notional + fee > available_after_reservations + 1e-9:
+            logger.warning("Spot order %s exceeds available cash after pending-order reservations", signal["signal_id"])
             return None
 
         position_id = f"POS-{uuid.uuid4().hex[:8].upper()}"
@@ -368,6 +479,27 @@ class Simulator:
 
     async def update_prices(self, market: str, symbol: str, price: float,
                         mark_price: float | None = None, funding_rate: float | None = None) -> None:
+        try:
+            current = float(price)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not math.isfinite(current) or current <= 0:
+            return
+        try:
+            mark = float(mark_price) if mark_price is not None else current
+        except (TypeError, ValueError, OverflowError):
+            mark = current
+        if not math.isfinite(mark) or mark <= 0:
+            mark = current
+        if funding_rate is not None:
+            try:
+                funding_rate = float(funding_rate)
+            except (TypeError, ValueError, OverflowError):
+                funding_rate = None
+            if funding_rate is not None and not math.isfinite(funding_rate):
+                funding_rate = None
+        price = current
+        mark_price = mark
         positions = self._get_positions(market)
         # Iterate over a copy to avoid "dictionary changed size during iteration"
         for pos in list(positions.values()):
@@ -413,17 +545,20 @@ class Simulator:
             margin_ratio = self.liquidation.get_margin_ratio(position, mark_price)
             logger.warning("Margin call risk for %s %s: margin_ratio=%.4f, mark=%.4f",
                           position["symbol"], position["side"], margin_ratio, mark_price)
-            await self.event_bus.publish(make_event(
-                EventType.RISK_ALERT, "simulator",
-                symbol=position["symbol"], market=position["market"],
-                payload={
-                    "alert_type": "MARGIN_RISK",
-                    "message": f"Position {position['symbol']} near liquidation",
-                    "margin_ratio": margin_ratio,
-                    "mark_price": mark_price,
-                    "liquidation_price": self.liquidation.calculate_liquidation_price(position),
-                }
-            ))
+            try:
+                await self.event_bus.publish(make_event(
+                    EventType.RISK_ALERT, "simulator",
+                    symbol=position["symbol"], market=position["market"],
+                    payload={
+                        "alert_type": "MARGIN_RISK",
+                        "message": f"Position {position['symbol']} near liquidation",
+                        "margin_ratio": margin_ratio,
+                        "mark_price": mark_price,
+                        "liquidation_price": self.liquidation.calculate_liquidation_price(position),
+                    }
+                ))
+            except Exception:
+                logger.exception("Could not publish pre-liquidation alert for %s", position["position_id"])
 
         if position.get("status") == "OPEN" and self.liquidation.check_liquidation(position, mark_price):
             liq_price = self.liquidation.calculate_liquidation_price(position)
@@ -599,6 +734,15 @@ class Simulator:
             fee = float(self.fee_calc.calculate(market, position["side"], position["amount"], fill_price, position["leverage"]))
             balance_delta = pnl - fee
             trade_pnl = pnl - position.get("fees_paid", 0.0) - fee
+            if reason == "LIQUIDATION" and market == "FUTURES":
+                reserved_margin = float(position.get(
+                    "reserved_margin",
+                    position["entry_price"] * position["amount"] / max(float(position.get("leverage", 1.0)), 1.0),
+                ))
+                if balance_delta < -reserved_margin:
+                    balance_delta = -reserved_margin
+                    pnl = balance_delta + fee
+                    trade_pnl = balance_delta - float(position.get("fees_paid", 0.0))
             if not all(math.isfinite(value) for value in (pnl, fee, balance_delta, trade_pnl)):
                 raise ValueError("Close accounting produced a non-finite value.")
         except Exception:
@@ -687,7 +831,12 @@ class Simulator:
 
     # --- Limit Order Handling ---
     async def place_limit_order(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
-        """Place a simulated limit order."""
+        """Serialize risk validation and pending-order reservation."""
+        async with self._account_lock:
+            return await self._place_limit_order_locked(signal, quantity_override)
+
+    async def _place_limit_order_locked(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
+        """Place a simulated limit order while holding the account lock."""
         ok, reason = self.validate_new_position(signal, quantity_override)
         if not ok:
             logger.warning("Limit order %s risk check failed: %s", signal["signal_id"], reason)
@@ -699,6 +848,27 @@ class Simulator:
         if quantity_override is not None:
             qty = float(quantity_override)
         if qty <= 0:
+            return None
+
+        # Pending limit orders reserve available cash/margin as well as risk and slots.
+        pending_collateral = 0.0
+        for pending in self.open_orders.values():
+            if pending.get("status") != "OPEN" or pending.get("market") != market:
+                continue
+            pending_notional = float(pending["entry_price"]) * float(pending["amount"])
+            pending_leverage = max(float(pending.get("leverage", 1.0)), 1.0)
+            pending_fee = self.fee_calc.calculate(
+                market, pending["side"], float(pending["amount"]),
+                float(pending["entry_price"]), pending_leverage
+            )
+            pending_collateral += (
+                pending_notional if market == "SPOT" else pending_notional / pending_leverage
+            ) + pending_fee
+        notional = float(signal["entry"]) * qty
+        fee = self.fee_calc.calculate(market, signal["direction"], qty, float(signal["entry"]), leverage)
+        required_collateral = (notional if market == "SPOT" else notional / max(leverage, 1.0)) + fee
+        if pending_collateral + required_collateral > balance + 1e-9:
+            logger.warning("Limit order %s rejected: pending orders exceed available balance", signal["signal_id"])
             return None
 
         # Limit orders don't fill immediately - they go to open_orders

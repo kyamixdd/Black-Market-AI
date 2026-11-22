@@ -2356,7 +2356,7 @@
   html,
   body,
   #root {
-    min-width: 360px;
+    min-width: 320px;
     min-height: 100%;
     height: auto;
   }
@@ -2366,7 +2366,7 @@
   }
 
   .terminal {
-    min-width: 360px;
+    min-width: 320px;
     min-height: 100vh;
     overflow: visible;
   }
@@ -2703,4 +2703,38 @@ button, input, select, textarea { min-width: 0; }
 @keyframes startup-pulse { 50% { opacity: .35; } }
 @media (max-width: 540px) {
   .startup-toast { top: 60px; right: 8px; width: calc(100vw - 16px); padding: 8px 9px; }
+}
+
+
+/* Stage 14 community library and shared research panels */
+.workspace-panel {
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--border-panel);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+}
+.workspace-panel h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.workspace-panel h3 { margin: 10px 0 5px; font-size: 11px; }
+.workspace-panel p { overflow-wrap: anywhere; }
+.workspace-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.workspace-toolbar > * { min-width: 0; }
+.workspace-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 9px; margin: 10px 0; }
+.workspace-summary-grid > article { margin: 0; }
+.workspace-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.workspace-form label { display: flex; min-width: 0; flex-direction: column; gap: 5px; color: var(--text-secondary); font-size: 10px; }
+.workspace-form label:nth-last-child(-n+3) { grid-column: 1 / -1; }
+.workspace-form textarea { min-height: 54px; padding: 7px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 10px; }
+.workspace-form input, .workspace-form select { width: 100%; }
+.workspace-code { max-width: 100%; overflow: auto; padding: 9px; border: 1px solid var(--border-panel); background: var(--bg-terminal); font-size: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-panel ul { padding-left: 18px; }
+@media (max-width: 720px) {
+  .workspace-panel { padding: 9px; }
+  .workspace-form { grid-template-columns: minmax(0, 1fr); }
+  .workspace-form label { grid-column: 1 / -1; }
+  .workspace-toolbar { align-items: stretch; }
+  .workspace-toolbar .workspace-search { flex: 1 1 100%; }
+  .workspace-summary-grid { grid-template-columns: minmax(0, 1fr); }
 }

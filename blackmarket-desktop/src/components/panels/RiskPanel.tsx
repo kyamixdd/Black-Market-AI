@@ -14,6 +14,8 @@ interface RiskData {
   risk_per_trade_pct: number;
   max_daily_loss_pct: number;
   max_total_open_pct: number;
+  max_position_size_pct: number;
+  max_asset_exposure_pct: number;
 }
 
 export const RiskPanel: React.FC = () => {
@@ -171,7 +173,7 @@ export const RiskPanel: React.FC = () => {
         {/* Risk Limits */}
         <div className="pt-2 border-t border-gray-700">
           <div className="text-xs text-muted mb-2">Risk Parameters</div>
-          <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-center">
             <div className="metric-card py-2">
               <div className="text-xs text-muted">Per Trade</div>
               <div className="font-mono text-lg">{data.risk_per_trade_pct}%</div>
@@ -181,8 +183,16 @@ export const RiskPanel: React.FC = () => {
               <div className="font-mono text-lg">{data.max_daily_loss_pct}%</div>
             </div>
             <div className="metric-card py-2">
-              <div className="text-xs text-muted">Total Open</div>
+              <div className="text-xs text-muted">Total Open Risk</div>
               <div className="font-mono text-lg">{data.max_total_open_pct}%</div>
+            </div>
+            <div className="metric-card py-2">
+              <div className="text-xs text-muted">Max Position</div>
+              <div className="font-mono text-lg">{data.max_position_size_pct}% equity</div>
+            </div>
+            <div className="metric-card py-2">
+              <div className="text-xs text-muted">Max Asset Exposure</div>
+              <div className="font-mono text-lg">{data.max_asset_exposure_pct}% equity</div>
             </div>
           </div>
         </div>

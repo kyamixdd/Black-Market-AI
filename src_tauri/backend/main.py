@@ -7,8 +7,10 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import sys
 import time
+import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,6 +31,7 @@ load_dotenv(config_path if config_path.is_file() else PROJECT_ROOT / ".env")
 
 from config import DATABASE_URL, LOG_LEVEL
 from core.config_validator import validate_config_or_exit
+from core.observability import configure_structured_logging, log_event
 from core.orchestrator import Orchestrator
 from database.connection import Database
 
@@ -43,6 +46,11 @@ from src_tauri.backend.api.routes import (
     risk,
     activity,
     settings,
+    assistant,
+    backup,
+    research,
+    community,
+    share_challenges,
 )
 from src_tauri.backend.api.routes.schemas import (
     HealthResponse,
@@ -94,6 +102,8 @@ def _api_host() -> str:
     if _REMOTE_API_ENABLED:
         if not _api_token:
             raise RuntimeError("BLACKMARKET_API_TOKEN is required when remote API mode is enabled.")
+        if len(_api_token.encode("utf-8")) < 32:
+            raise RuntimeError("BLACKMARKET_API_TOKEN must be at least 32 bytes when remote API mode is enabled.")
         if host not in {"0.0.0.0", "::"} and not _is_loopback(host):
             raise RuntimeError("Remote API host must be 0.0.0.0, ::, or loopback.")
         return host
@@ -109,7 +119,8 @@ async def lifespan(app: FastAPI):
     event_task: asyncio.Task | None = None
     orchestrator_task: asyncio.Task | None = None
 
-    logger.info("Starting BlackMarket AI Backend Adapter...")
+    configure_structured_logging(LOG_LEVEL)
+    log_event(logger, logging.INFO, "backend_starting", component="api")
 
     # Validate configuration
     validate_config_or_exit()
@@ -134,12 +145,12 @@ async def lifespan(app: FastAPI):
     event_task = asyncio.create_task(orchestrator.event_bus.run(), name="blackmarket-event-bus")
     orchestrator_task = asyncio.create_task(orchestrator.run(), name="blackmarket-orchestrator")
 
-    logger.info("BlackMarket AI Backend Adapter started")
+    log_event(logger, logging.INFO, "backend_started", component="api", database="sqlite")
 
     try:
         yield
     finally:
-        logger.info("Shutting down BlackMarket AI Backend Adapter...")
+        log_event(logger, logging.INFO, "backend_shutdown_started", component="api")
         if orchestrator:
             await orchestrator.stop()
         if orchestrator_task and not orchestrator_task.done():
@@ -152,7 +163,7 @@ async def lifespan(app: FastAPI):
             await ws_manager.shutdown()
         if db:
             db.close()
-        logger.info("BlackMarket AI Backend Adapter stopped")
+        log_event(logger, logging.INFO, "backend_stopped", component="api")
 
 
 app = FastAPI(
@@ -183,6 +194,42 @@ def _rate_limit_exceeded(key: str, limit: int, now: float | None = None) -> bool
 
 
 @app.middleware("http")
+async def request_observability(request: Request, call_next):
+    """Log API request outcome without query strings, bodies, or credentials."""
+    request_id = request.headers.get("x-request-id", "")
+    if not request_id or len(request_id) > 80 or not request_id.isascii():
+        request_id = uuid.uuid4().hex
+    request.state.request_id = request_id
+    started = time.perf_counter()
+    route = request.scope.get("route")
+    safe_path = getattr(route, "path", None) or ("/api/unmatched" if request.url.path.startswith("/api") else request.url.path)
+    status_code = 500
+    try:
+        response = await call_next(request)
+        route = request.scope.get("route")
+        safe_path = getattr(route, "path", None) or safe_path
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except Exception:
+        log_event(
+            logger, logging.ERROR, "api_request_failed",
+            request_id=request_id, method=request.method,
+            path=safe_path, status_code=500,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        raise
+    finally:
+        log_event(
+            logger, logging.INFO if status_code < 500 else logging.WARNING,
+            "api_request",
+            request_id=request_id, method=request.method,
+            path=safe_path, status_code=status_code,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+
+
+@app.middleware("http")
 async def require_local_api_auth(request: Request, call_next):
     client_host = request.client.host if request.client else "unknown"
     if request.url.path.startswith("/api/") and _rate_limit_exceeded(f"api:{client_host}", _API_RATE_LIMIT):
@@ -191,6 +238,17 @@ async def require_local_api_auth(request: Request, call_next):
     client_host = request.client.host if request.client else None
     if not _is_loopback(client_host) and not _REMOTE_API_ENABLED:
         return JSONResponse(status_code=403, content={"detail": "Remote API access is disabled"})
+
+    public_read = (
+        request.method == "GET"
+        and (
+            request.url.path == "/api/community/challenges"
+            or request.url.path.startswith("/api/community/challenges/")
+            or re.fullmatch(r"/api/community/share/analysis/[a-f0-9]{32}", request.url.path)
+        )
+    )
+    if public_read:
+        return await call_next(request)
 
     if request.url.path == "/api" or request.url.path.startswith("/api/"):
         if request.method != "OPTIONS":
@@ -218,6 +276,11 @@ for router in (
     risk.router,
     activity.router,
     settings.router,
+    assistant.router,
+    backup.router,
+    research.router,
+    community.router,
+    share_challenges.router,
 ):
     app.include_router(router, prefix="/api")
 
@@ -401,7 +464,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.exception(
         "Unhandled API exception for %s %s",
         request.method,
-        request.url.path,
+        getattr(request.scope.get("route"), "path", None) or ("/api/unmatched" if request.url.path.startswith("/api") else request.url.path),
         exc_info=(type(exc), exc, exc.__traceback__),
     )
     return JSONResponse(
@@ -413,10 +476,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 if __name__ == "__main__":
     import uvicorn
 
-    logging.basicConfig(
-        level=getattr(logging, LOG_LEVEL),
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    )
+    configure_structured_logging(LOG_LEVEL)
 
     server = uvicorn.Server(
         uvicorn.Config(
@@ -425,6 +485,7 @@ if __name__ == "__main__":
             port=int(os.environ.get("BLACKMARKET_API_PORT", "8765")),
             reload=False,
             log_level=LOG_LEVEL.lower(),
+            log_config=None,
         )
     )
     _request_server_shutdown = lambda: setattr(server, "should_exit", True)

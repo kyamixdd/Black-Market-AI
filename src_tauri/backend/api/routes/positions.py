@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import math
+import logging
 from fastapi import APIRouter, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
+from core.observability import log_event
 from .schemas import (
     PositionListResponse, PositionResponse, PositionUpdateRequest,
     PartialCloseRequest, ManualActionResponse,
@@ -12,6 +14,7 @@ from .schemas import (
 from .trades import _validated_snapshot_price
 
 router = APIRouter(prefix="/positions", tags=["positions"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=PositionListResponse)
@@ -48,6 +51,7 @@ async def close_position(position_id: str):
     closed = await simulator._close_position(position, price, "MANUAL")
     if not closed:
         raise HTTPException(409, "Position is already closing or has been closed.")
+    log_event(logger, logging.INFO, "paper_position_closed", symbol=position["symbol"], market=position["market"])
     return ManualActionResponse(success=True, id=position_id, message="Paper position closed.")
 
 

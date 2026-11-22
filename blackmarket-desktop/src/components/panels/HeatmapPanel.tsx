@@ -8,18 +8,26 @@ interface HeatmapItem {
   volume_24h: number;
   price: number;
   regime: string;
+  relative_strength_pct?: number | null;
+  volatility_24h_pct?: number | null;
+  atr_24h_pct?: number | null;
+  data_freshness?: string;
 }
 
 export const HeatmapPanel: React.FC = () => {
   const [heatmap, setHeatmap] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
       const response = await fetch('/api/markets/heatmap');
+      if (!response.ok) throw new Error(`Heatmap API returned HTTP ${response.status}`);
       const data = await response.json();
       setHeatmap(data.heatmap || []);
+      setError(null);
     } catch (e) {
+      setError(e instanceof Error ? e.message : 'Market heatmap unavailable');
       console.error('Failed to load heatmap', e);
     } finally {
       setLoading(false);
@@ -58,6 +66,7 @@ export const HeatmapPanel: React.FC = () => {
     <div className="panel h-full">
       <div className="panel-header">Market Heatmap</div>
       <div className="p-2">
+        {error && <p className="text-xs text-amber-400 mb-2">Refresh failed: {error}</p>}
         <div className="grid grid-cols-7 gap-1">
           {heatmap.slice(0, 35).map((item: any) => (
             <div

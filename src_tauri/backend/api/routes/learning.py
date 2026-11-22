@@ -1,9 +1,14 @@
 """Learning API routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+import re
+import uuid
+
+from fastapi import APIRouter, Query, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
+from database.connection import get_session_maker
+from database.repositories import Repository
 from .schemas import (
     LearningStatusResponse,
     PredictionListResponse,
@@ -153,9 +158,158 @@ async def get_strategy_comparison(
     return result
 
 
+
+@router.get("/strategy-dna")
+async def get_strategy_dna():
+    """Build auditable strategy profiles from saved backtests and closed paper trades."""
+    from learning.strategy_dna import build_strategy_dna
+
+    repository = Repository(get_session_maker())
+    reports = repository.list_backtest_reports(limit=500)
+    bridge = get_bridge()
+    trades = bridge.get_recent_trades(limit=10000)
+    simulator = bridge.simulator
+    capital = (
+        float(getattr(simulator, "initial_spot_balance", 0) or 0)
+        + float(getattr(simulator, "initial_futures_balance", 0) or 0)
+    )
+    return build_strategy_dna(reports, trades, capital=capital)
+
 @router.get("/models", response_model=ModelRegistryListResponse)
 async def get_models():
     """Get model registry."""
     bridge = get_bridge()
     models = bridge.get_model_registry()
     return ModelRegistryListResponse(models=[ModelRegistryResponse(**m) for m in models])
+
+
+def _save_lab_report(strategy_name: str, payload: dict, report: dict) -> str:
+    """Persist every completed Strategy Lab result before returning it to the client."""
+    repository = Repository(get_session_maker())
+    report_id = uuid.uuid4().hex
+    record = {
+        "report_id": report_id,
+        "strategy_id": payload.get("strategy_id") if isinstance(payload.get("strategy_id"), str) else None,
+        "strategy_name": strategy_name,
+        "symbol": str(payload.get("symbol", "BTCUSDT")).upper(),
+        "market": str(payload.get("market", "SPOT")).upper(),
+        "timeframe": str(payload.get("timeframe", "1h")),
+        "status": report.get("status", "completed"),
+        "config": payload,
+        "report": report,
+        "origin": "LOCAL_BACKTEST",
+    }
+    repository.save_backtest_report(record)
+    return report_id
+
+
+@router.post("/strategy-lab")
+async def run_strategy_lab(payload: dict):
+    """Run a deterministic historical simulation using completed candle data."""
+    from datetime import datetime
+    from learning.strategy_lab import LabConfig, STRATEGIES, run_strategy_lab
+
+    symbol = str(payload.get("symbol", "BTCUSDT")).upper()
+    market = str(payload.get("market", "SPOT")).upper()
+    timeframe = str(payload.get("timeframe", "1h"))
+    strategy = str(payload.get("strategy", "momentum")).lower()
+    if not re.fullmatch(r"[A-Z0-9]{3,20}", symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol")
+    if strategy not in STRATEGIES:
+        raise HTTPException(status_code=422, detail="Unsupported strategy")
+    try:
+        start = datetime.fromisoformat(str(payload["start_date"]).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(payload["end_date"]).replace("Z", "+00:00"))
+        if start.tzinfo is None or end.tzinfo is None or start >= end:
+            raise ValueError("Date range must be timezone-aware and start before end")
+        config = LabConfig(
+            symbol=symbol, market=market, timeframe=timeframe,
+            start_time=int(start.timestamp() * 1000), end_time=int(end.timestamp() * 1000),
+            initial_capital=payload.get("initial_capital", 1000),
+            sizing_mode=payload.get("sizing_mode", "risk_pct"),
+            risk_per_trade_pct=payload.get("risk_per_trade_pct", 1),
+            fixed_notional=payload.get("fixed_notional", 100),
+            max_position_pct=payload.get("max_position_pct", 50),
+            fee_rate=payload.get("fee_rate"), slippage_bps=payload.get("slippage_bps"),
+            spread_bps=payload.get("spread_bps"), funding_rate=payload.get("funding_rate"),
+            strategy_parameters=payload.get("strategy_parameters", {}),
+        )
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid backtest configuration: {exc}") from exc
+    bridge = get_bridge()
+    candles = []
+    cursor = config.end_time
+    page_limit = 1000 if market == "SPOT" else 1500
+    # Walk backward so user-selected ranges longer than one exchange page are supported.
+    # Bound requests to 20 pages (20k Spot / 30k Futures candles) to prevent unbounded work.
+    for _ in range(20):
+        page = await bridge.get_candles(symbol, market, timeframe, limit=page_limit, end_time=cursor)
+        page = [row for row in page if int(row.get("close_time", 0)) <= cursor]
+        if not page:
+            break
+        candles.extend(page)
+        earliest = min(int(row["open_time"]) for row in page)
+        if earliest <= config.start_time:
+            break
+        cursor = earliest - 1
+    candles = [row for row in candles if config.start_time <= int(row.get("open_time", 0))
+               and int(row.get("close_time", row.get("open_time", 0))) <= config.end_time]
+    candles.sort(key=lambda row: int(row["open_time"]))
+    try:
+        result = run_strategy_lab(candles, config, strategy)
+        # Attach regime-conditioned metrics using only completed candles available
+        # before each trade entry (no future-candle lookahead).
+        from market.regime_radar import classify_market_regime
+        from learning.regime_performance import performance_by_regime
+
+        observations = []
+        trade_rows = result.get("trades", []) if isinstance(result, dict) else []
+        entry_times = sorted({
+            int(item["entry_time"]) for item in trade_rows
+            if item.get("status") == "CLOSED" and item.get("entry_time") is not None
+        })
+        for entry_time in entry_times:
+            prior = [
+                row for row in candles
+                if int(row.get("close_time", row.get("open_time", 0))) < entry_time
+            ][-100:]
+            if len(prior) < 50:
+                continue
+            classification = classify_market_regime(
+                prior, symbol=symbol, market=market, timeframe=timeframe,
+                expected_candles=100,
+            )
+            if classification.get("status") == "READY":
+                observations.append({
+                    "timestamp": entry_time,
+                    "regime": classification["regime"],
+                })
+        result["regime_performance"] = performance_by_regime(
+            trade_rows, observations, minimum_sample=5,
+            initial_capital=float(config.initial_capital),
+        )
+        report_id = _save_lab_report(strategy, payload, result)
+        result["report_id"] = report_id
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/strategy-lab/compare")
+async def compare_strategy_lab(payload: dict):
+    """Compare selected strategies on the same symbol, timeframe and candle window."""
+    from learning.strategy_lab import STRATEGIES
+    names = payload.get("strategies", list(STRATEGIES))
+    if not isinstance(names, list) or not names or any(name not in STRATEGIES for name in names):
+        raise HTTPException(status_code=422, detail="Select one or more supported strategies")
+    results = []
+    for name in names:
+        config = dict(payload)
+        config["strategy"] = name
+        results.append(await run_strategy_lab(config))
+    comparison = {"status": "ok", "conditions": {k: payload.get(k) for k in
+            ("symbol", "market", "timeframe", "start_date", "end_date", "initial_capital")},
+            "results": results}
+    report_id = _save_lab_report("strategy-comparison", payload, comparison)
+    comparison["report_id"] = report_id
+    return comparison

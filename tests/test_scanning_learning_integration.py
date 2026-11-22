@@ -68,7 +68,7 @@ async def test_stream_handler_updates_only_originating_market(monkeypatch):
     monkeypatch.setattr("config.MAX_CONCURRENT_SCANS", 2)
     class Cache:
         def __init__(self): self.updated = []
-        def update_ticker(self, *args): self.updated.append(args)
+        def update_ticker(self, *args, **kwargs): self.updated.append(args)
         def get_market_tickers(self, market): return []
     cache = Cache()
     scanner = Scanner(SimpleNamespace(), FakeRegistry(), cache, object(), object())

@@ -54,9 +54,14 @@ class DatabaseBackupManager:
     def create_backup(self, description: str = "scheduled") -> Path:
         """Create a verified database backup."""
         with self._lock:
-            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            db_name = self._extract_db_name()
-            backup_name = f"{db_name}_{timestamp}_{description}"
+            safe_description = "".join(
+                char.lower() if char.isalnum() else "_" for char in str(description)
+            ).strip("_")[:40] or "manual"
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+            db_name = "".join(
+                char.lower() if char.isalnum() else "_" for char in self._extract_db_name()
+            ).strip("_")[:40] or "blackmarket"
+            backup_name = f"{db_name}_{timestamp}_{safe_description}"
             backup_path = self.config.backup_dir / backup_name
 
             if self.config.compress:
@@ -73,11 +78,92 @@ class DatabaseBackupManager:
                     backup_path.unlink(missing_ok=True)
                     raise RuntimeError("Backup verification failed")
 
-            # Prune old backups
-            self._prune_old_backups()
+            settings_backup_path = Path(str(backup_path) + ".settings.json")
+            settings_metadata = {"settings_backup_file": None, "settings_sha256": None, "settings_size_bytes": None}
+            try:
+                from core.runtime_settings_store import SETTINGS_PATH
+                if SETTINGS_PATH.is_file():
+                    settings_data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+                    if not isinstance(settings_data, dict):
+                        raise RuntimeError("Runtime settings backup must be a JSON object")
+                    settings_backup_path.write_text(json.dumps(settings_data, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8")
+                    try:
+                        os.chmod(settings_backup_path, 0o600)
+                    except OSError:
+                        pass
+                    settings_metadata = {
+                        "settings_backup_file": settings_backup_path.name,
+                        "settings_sha256": self._sha256_file(settings_backup_path),
+                        "settings_size_bytes": settings_backup_path.stat().st_size,
+                    }
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                backup_path.unlink(missing_ok=True)
+                settings_backup_path.unlink(missing_ok=True)
+                raise RuntimeError(f"Could not safely include runtime settings in backup: {exc}") from exc
 
-            logger.info(f"Backup created: {backup_path}")
+            metadata_path = Path(str(backup_path) + ".json")
+            metadata = {
+                "format_version": 1,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "description": safe_description,
+                "database_name": db_name,
+                "compressed": self.config.compress,
+                "backup_file": backup_path.name,
+                "backup_size_bytes": backup_path.stat().st_size,
+                "sha256": self._sha256_file(backup_path),
+                "integrity_check": "ok" if self._verify_backup(backup_path) else "not_verified",
+                **settings_metadata,
+            }
+            if metadata["integrity_check"] != "ok":
+                backup_path.unlink(missing_ok=True)
+                raise RuntimeError("Backup metadata validation failed")
+            metadata_tmp = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
+            try:
+                metadata_tmp.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+                os.replace(metadata_tmp, metadata_path)
+            finally:
+                metadata_tmp.unlink(missing_ok=True)
+
+            self._prune_old_backups()
+            logger.info("Backup created: %s", backup_path)
             return backup_path
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def validate_backup(self, backup_path: Path) -> dict[str, Any]:
+        """Validate archive readability, SQLite integrity, and optional manifest hash."""
+        backup_path = Path(backup_path)
+        if not backup_path.is_file() or not self._verify_backup(backup_path):
+            raise RuntimeError("Backup is missing, unreadable, or fails SQLite integrity_check")
+        metadata_path = Path(str(backup_path) + ".json")
+        if metadata_path.exists():
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if metadata.get("backup_file") != backup_path.name:
+                raise RuntimeError("Backup metadata filename does not match")
+            if metadata.get("sha256") != self._sha256_file(backup_path):
+                raise RuntimeError("Backup checksum does not match metadata")
+            if metadata.get("backup_size_bytes") != backup_path.stat().st_size:
+                raise RuntimeError("Backup size does not match metadata")
+            settings_name = metadata.get("settings_backup_file")
+            if settings_name:
+                settings_path = Path(str(backup_path) + ".settings.json")
+                if settings_path.name != settings_name or not settings_path.is_file():
+                    raise RuntimeError("Runtime settings backup is missing or mismatched")
+                if metadata.get("settings_sha256") != self._sha256_file(settings_path):
+                    raise RuntimeError("Runtime settings backup checksum does not match")
+                if metadata.get("settings_size_bytes") != settings_path.stat().st_size:
+                    raise RuntimeError("Runtime settings backup size does not match")
+                parsed_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+                if not isinstance(parsed_settings, dict):
+                    raise RuntimeError("Runtime settings backup is not a JSON object")
+            return metadata
+        return {"format_version": 0, "legacy_backup": True, "integrity_check": "ok"}
 
     def _extract_db_name(self) -> str:
         """Extract database name from URL."""
@@ -166,13 +252,15 @@ class DatabaseBackupManager:
     def _prune_old_backups(self) -> None:
         """Remove old backups beyond max_backups."""
         backups = sorted(
-            self.config.backup_dir.glob("*.db*"),
+            (p for p in self.config.backup_dir.glob("*.db*") if not p.name.endswith(".json")),
             key=lambda p: p.stat().st_mtime,
-            reverse=True
+            reverse=True,
         )
-        for old_backup in backups[self.config.max_backups:]:
+        for old_backup in backups[max(1, self.config.max_backups):]:
             old_backup.unlink(missing_ok=True)
-            logger.info(f"Pruned old backup: {old_backup}")
+            Path(str(old_backup) + ".json").unlink(missing_ok=True)
+            Path(str(old_backup) + ".settings.json").unlink(missing_ok=True)
+            logger.info("Pruned old backup: %s", old_backup)
 
     def restore_backup(self, backup_path: Path, target_path: Optional[Path] = None) -> bool:
         """Restore a verified SQLite backup atomically and reopen the live database."""
@@ -180,16 +268,26 @@ class DatabaseBackupManager:
             if not backup_path.exists():
                 logger.error("Backup not found: %s", backup_path)
                 return False
+            try:
+                metadata = self.validate_backup(backup_path)
+            except Exception as exc:
+                logger.error("Restore validation failed: %s", exc)
+                return False
             if target_path is None:
                 target_path = Path(self._get_source_path())
             target_path = Path(target_path)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path: Path | None = None
+            settings_tmp: Path | None = None
+            rollback_path: Path | None = None
+            settings_original: bytes | None = None
+            settings_replaced = False
+            live_target = target_path.resolve() == Path(self._get_source_path()).resolve()
             try:
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".restore.db", dir=target_path.parent, delete=False) as tmp:
                     tmp_path = Path(tmp.name)
-                if self.config.compress:
+                if metadata.get("compressed", self.config.compress):
                     with gzip.open(backup_path, "rb") as source, open(tmp_path, "wb") as dest:
                         shutil.copyfileobj(source, dest)
                 else:
@@ -203,7 +301,23 @@ class DatabaseBackupManager:
                 finally:
                     check.close()
 
-                live_target = target_path.resolve() == Path(self._get_source_path()).resolve()
+                metadata = self.validate_backup(backup_path)
+                settings_restore_path = None
+                if live_target and metadata.get("settings_backup_file"):
+                    from core.runtime_settings_store import SETTINGS_PATH
+                    settings_restore_path = SETTINGS_PATH
+                    settings_restore_path.parent.mkdir(parents=True, exist_ok=True)
+                    settings_original = settings_restore_path.read_bytes() if settings_restore_path.exists() else None
+                    with tempfile.NamedTemporaryFile(prefix=".runtime-settings-restore-", suffix=".tmp", dir=settings_restore_path.parent, delete=False) as staged:
+                        settings_tmp = Path(staged.name)
+                        staged.write(Path(str(backup_path) + ".settings.json").read_bytes())
+                        staged.flush()
+                        os.fsync(staged.fileno())
+                    try:
+                        os.chmod(settings_tmp, 0o600)
+                    except OSError:
+                        pass
+
                 if live_target:
                     try:
                         with self.db.engine.connect() as connection:
@@ -211,6 +325,10 @@ class DatabaseBackupManager:
                     except Exception:
                         logger.debug("WAL checkpoint before restore skipped", exc_info=True)
                     self.db.close()
+                    if target_path.is_file():
+                        with tempfile.NamedTemporaryFile(prefix=".database-rollback-", suffix=".db", dir=target_path.parent, delete=False) as rollback:
+                            rollback_path = Path(rollback.name)
+                        shutil.copy2(target_path, rollback_path)
 
                 for suffix in ("-wal", "-shm"):
                     Path(str(target_path) + suffix).unlink(missing_ok=True)
@@ -218,14 +336,43 @@ class DatabaseBackupManager:
                 tmp_path = None
                 if live_target:
                     self.db.init_db()
-                logger.info("Restored database from %s", backup_path)
+                    if settings_tmp is not None and settings_restore_path is not None:
+                        os.replace(settings_tmp, settings_restore_path)
+                        settings_tmp = None
+                        settings_replaced = True
+                    if rollback_path is not None:
+                        rollback_path.unlink(missing_ok=True)
+                        rollback_path = None
+                logger.info("Restored database and settings from %s", backup_path)
                 return True
             except Exception as exc:
                 logger.error("Restore failed: %s", exc, exc_info=True)
+                if live_target and rollback_path is not None and rollback_path.exists():
+                    try:
+                        self.db.close()
+                        os.replace(rollback_path, target_path)
+                        rollback_path = None
+                        if settings_replaced and settings_restore_path is not None:
+                            if settings_original is None:
+                                settings_restore_path.unlink(missing_ok=True)
+                            else:
+                                settings_restore_path.write_bytes(settings_original)
+                        self.db.init_db()
+                    except Exception:
+                        logger.critical("Database rollback after failed restore was unsuccessful", exc_info=True)
+                elif live_target and self.db._engine is None:
+                    try:
+                        self.db.init_db()
+                    except Exception:
+                        logger.critical("Database could not be reopened after failed restore", exc_info=True)
                 return False
             finally:
                 if tmp_path is not None:
                     tmp_path.unlink(missing_ok=True)
+                if settings_tmp is not None:
+                    settings_tmp.unlink(missing_ok=True)
+                if rollback_path is not None:
+                    rollback_path.unlink(missing_ok=True)
 
 
 class IdempotentEventProcessor:

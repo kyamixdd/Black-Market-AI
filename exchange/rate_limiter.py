@@ -41,4 +41,5 @@ class RateLimiter:
         return self._buckets[name]
 
     async def acquire(self, name: str, tokens: float = 1.0, timeout: float = 30.0) -> None:
-        await self.bucket(name, 60.0).acquire(tokens, timeout)
+        rate = 20.0 if name.startswith("spot") else 35.0 if name.startswith("futures") else 5.0
+        await self.bucket(name, rate).acquire(tokens, timeout)

@@ -1,5 +1,6 @@
 """Tests for Phase 21 Disaster Recovery and Long-Run Stability."""
 import asyncio
+import json
 import gzip
 import tempfile
 import os
@@ -108,6 +109,69 @@ class TestDatabaseBackupManager:
 
         backups = list(backup_manager.config.backup_dir.glob("*.gz"))
         assert len(backups) <= backup_manager.config.max_backups
+
+
+    def test_backup_manifest_checksum_and_integrity_validation(self, backup_manager):
+        backup_path = backup_manager.create_backup("metadata test")
+        metadata_path = Path(str(backup_path) + ".json")
+        assert metadata_path.exists()
+        metadata = backup_manager.validate_backup(backup_path)
+        assert metadata["integrity_check"] == "ok"
+        assert metadata["sha256"]
+        assert metadata["backup_size_bytes"] == backup_path.stat().st_size
+
+    def test_corrupt_backup_is_rejected_without_changing_target(self, backup_manager, temp_db):
+        backup_path = backup_manager.create_backup("corrupt test")
+        backup_path.write_bytes(b"not a sqlite gzip backup")
+        target = Path(backup_manager._get_source_path())
+        before = target.read_bytes()
+        assert backup_manager.restore_backup(backup_path, target_path=target) is False
+        assert target.read_bytes() == before
+
+    def test_failed_restore_of_missing_backup_is_safe(self, backup_manager, temp_db):
+        target = Path(backup_manager._get_source_path())
+        before = target.read_bytes()
+        missing = backup_manager.config.backup_dir / "missing.db.gz"
+        assert backup_manager.restore_backup(missing, target_path=target) is False
+        assert target.read_bytes() == before
+
+    def test_backup_retention_prunes_manifest_with_backup(self, backup_manager):
+        for index in range(8):
+            backup_manager.create_backup(f"retention {index}")
+        backups = list(backup_manager.config.backup_dir.glob("*.db.gz"))
+        manifests = list(backup_manager.config.backup_dir.glob("*.db.gz.json"))
+        assert len(backups) <= backup_manager.config.max_backups
+        assert len(manifests) == len(backups)
+
+
+    def test_backup_contains_runtime_settings_and_restore_recovers_them(self, backup_manager, temp_db, monkeypatch, tmp_path):
+        from core import runtime_settings_store
+
+        settings_path = tmp_path / "runtime_settings.json"
+        settings_path.write_text('{"risk_per_trade_pct": 0.75, "spot_enabled": true}', encoding="utf-8")
+        monkeypatch.setattr(runtime_settings_store, "SETTINGS_PATH", settings_path)
+
+        backup_path = backup_manager.create_backup("settings recovery")
+        metadata = backup_manager.validate_backup(backup_path)
+        assert metadata["settings_backup_file"] == backup_path.name + ".settings.json"
+        assert metadata["settings_sha256"]
+
+        settings_path.write_text('{"risk_per_trade_pct": 9.0, "spot_enabled": false}', encoding="utf-8")
+        assert backup_manager.restore_backup(backup_path) is True
+        restored = json.loads(settings_path.read_text(encoding="utf-8"))
+        assert restored == {"risk_per_trade_pct": 0.75, "spot_enabled": True}
+
+    def test_settings_sidecar_checksum_corruption_rejects_restore(self, backup_manager, temp_db, monkeypatch, tmp_path):
+        from core import runtime_settings_store
+
+        settings_path = tmp_path / "runtime_settings.json"
+        settings_path.write_text('{"max_daily_loss_pct": 2}', encoding="utf-8")
+        monkeypatch.setattr(runtime_settings_store, "SETTINGS_PATH", settings_path)
+        backup_path = backup_manager.create_backup("settings checksum")
+        sidecar = Path(str(backup_path) + ".settings.json")
+        sidecar.write_text('{"max_daily_loss_pct": 99}', encoding="utf-8")
+        with pytest.raises(RuntimeError, match="checksum"):
+            backup_manager.validate_backup(backup_path)
 
     def test_restore_backup(self, backup_manager, temp_db):
         """Test restoring from backup."""

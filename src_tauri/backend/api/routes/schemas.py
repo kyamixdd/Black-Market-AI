@@ -412,6 +412,8 @@ class RiskMetricsResponse(BaseModel):
     risk_per_trade_pct: float
     max_daily_loss_pct: float
     max_total_open_pct: float
+    max_position_size_pct: float
+    max_asset_exposure_pct: float
     unmeasured_positions: int = 0
 
 
@@ -469,13 +471,29 @@ class MarketHeatmapResponse(BaseModel):
     heatmap: list[MarketHeatmapItemResponse]
 
 
-class MarketBreadthResponse(BaseModel):
+class MarketBreadthMarketResponse(BaseModel):
     advancing: int
     declining: int
     neutral: int
-    total_volume: float
+    sample_size: int
+    advance_pct: float | None = None
+    decline_pct: float | None = None
+    neutral_pct: float | None = None
+    advance_decline_ratio: float | None = None
+    status: str
+    total_quote_volume_24h: float | None = None
+    sample_coverage: int
+
+
+class MarketBreadthResponse(BaseModel):
+    markets: dict[str, MarketBreadthMarketResponse]
+    sample_size: int
+    scope: str
+    total_quote_volume_24h: float | None = None
     avg_spread_bps: float | None = None
     avg_orderbook_imbalance: float | None = None
+    spread_status: str | None = None
+    orderbook_status: str | None = None
 
 
 class VolumeResponse(BaseModel):
@@ -489,6 +507,8 @@ class VolumeResponse(BaseModel):
     sell_volume_7d_avg: float | None = None
     average_daily_quote_volume_7d: float | None = None
     volume_change_vs_7d_avg_pct: float | None = None
+    daily_baseline_count: int = 0
+    daily_baseline_status: str = "INSUFFICIENT_DATA"
     comparison_period: str | None = None
     data_timestamp: datetime | None = None
     data_age_seconds: float | None = None
@@ -549,6 +569,8 @@ class SettingsRequest(BaseModel):
     risk_max_daily_loss_pct: float | None = Field(default=None, gt=0, le=25, allow_inf_nan=False)
     risk_max_total_open_pct: float | None = Field(default=None, gt=0, le=50, allow_inf_nan=False)
     risk_max_leverage: float | None = Field(default=None, ge=1, le=125, allow_inf_nan=False)
+    risk_max_position_size_pct: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
+    risk_max_asset_exposure_pct: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
     max_spot_positions: int | None = Field(default=None, ge=1, le=100)
     max_futures_positions: int | None = Field(default=None, ge=1, le=100)
     telegram_enabled: bool | None = None
@@ -585,6 +607,8 @@ class SettingsResponse(BaseModel):
     risk_max_daily_loss_pct: float
     risk_max_total_open_pct: float
     risk_max_leverage: float
+    risk_max_position_size_pct: float
+    risk_max_asset_exposure_pct: float
     max_spot_positions: int
     max_futures_positions: int
     telegram_enabled: bool
