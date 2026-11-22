@@ -1,7 +1,9 @@
 """Learning API routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+import re
+
+from fastapi import APIRouter, Query, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
 from .schemas import (
