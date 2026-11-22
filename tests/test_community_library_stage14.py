@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from database.connection import Database
 from database.repositories import Repository
-from src_tauri.backend.api.routes import community
+from src_tauri.backend.api.routes import community, learning
 
 
 def owner():
@@ -120,3 +120,41 @@ def test_public_record_contains_no_account_or_trade_history_fields(monkeypatch, 
     assert not (forbidden & set(public))
     assert "trade_history" not in json.dumps(public).lower()
     db.close()
+
+def test_local_backtest_report_is_distinguished_and_summary_is_server_derived(monkeypatch, tmp_path):
+    db, repo = setup_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(learning, "get_session_maker", db.session_maker)
+    report_id = learning._save_lab_report(
+        "momentum",
+        {"symbol": "BTCUSDT", "market": "SPOT", "timeframe": "15m",
+         "start_date": "2026-01-01T00:00:00Z", "end_date": "2026-02-01T00:00:00Z"},
+        {"status": "completed", "metrics": {"trade_count": 12, "win_rate_pct": 58.0,
+         "net_return_pct": 3.2, "max_drawdown_pct": 2.1, "profit_factor": 1.4}, "trades": []},
+    )
+    request = community.PublishRequest(name="Local result", strategy_key="momentum",
+        rules={"entry": "documented"}, supported_timeframes=["15m"], source_report_id=report_id)
+    published = community.publish_strategy(request, owner())
+    assert published["report_provenance"] == "LOCAL_BACKTEST"
+    assert published["source_report_id"] == report_id
+    assert published["backtest_report"]["total_trades"] == 12
+    assert published["backtest_report"]["win_rate_pct"] == 58.0
+    assert published["verification_status"] == "NOT_VERIFIED"
+    assert published["reproducibility_status"] == "NOT_REPLAYED"
+    db.close()
+
+
+def test_user_saved_report_cannot_claim_application_generated_provenance(monkeypatch, tmp_path):
+    db, repo = setup_db(monkeypatch, tmp_path)
+    user_report = repo.save_backtest_report({
+        "report_id": uuid.uuid4().hex, "strategy_name": "momentum", "symbol": "BTCUSDT",
+        "market": "SPOT", "timeframe": "15m", "status": "completed",
+        "config": {}, "report": {"metrics": {"win_rate_pct": 99}},
+    })
+    assert user_report["origin"] == "USER_SUBMITTED"
+    request = community.PublishRequest(name="Submitted", strategy_key="momentum",
+        rules={"entry": "provided"}, supported_timeframes=["15m"],
+        source_report_id=user_report["report_id"])
+    with pytest.raises(HTTPException):
+        community.publish_strategy(request, owner())
+    db.close()
+
