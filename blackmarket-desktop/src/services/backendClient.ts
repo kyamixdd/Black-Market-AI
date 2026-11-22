@@ -121,9 +121,26 @@ export const backendWebSocketUrl = () => {
 
 import { getApiAuthorization } from './localAuth.js'
 
+function localCommunityOwner() {
+  try {
+    let value = localStorage.getItem('bm_community_owner')
+    if (!value || !/^[a-f0-9-]{36}$/i.test(value)) {
+      value = crypto.randomUUID()
+      localStorage.setItem('bm_community_owner', value)
+    }
+    return value
+  } catch {
+    return undefined
+  }
+}
+
 const client = createBackendClient({
   baseUrl: backendBaseUrl(),
-  authorization: () => isDesktopRuntime() ? getApiAuthorization() : undefined,
+  authorization: () => {
+    if (!isDesktopRuntime()) return undefined
+    const owner = localCommunityOwner()
+    return { ...getApiAuthorization(), ...(owner ? { 'X-BM-Community-Owner': owner } : {}) }
+  },
 })
 
 export const validateBackendConnection = () => client.healthCheck()
