@@ -74,7 +74,7 @@ def performance_by_regime(
             "net_pnl": sum(pnls),
             "max_drawdown": max_drawdown,
             "win_rate_pct": len(wins) / count * 100.0,
-            "profit_factor": gross_profit / gross_loss if gross_loss else (None if not gross_profit else math.inf),
+            "profit_factor": gross_profit / gross_loss if gross_loss else None,
             "average_holding_hours": sum(row["holding_hours"] for row in rows) / count,
             "limitations": ["Historical regime association; not a forecast.",
                             "Regime observations must be calculated without future candles."],
