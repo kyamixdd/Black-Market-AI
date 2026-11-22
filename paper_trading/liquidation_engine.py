@@ -53,13 +53,20 @@ class LiquidationEngine:
         if position["market"] != "FUTURES":
             return 1.0
 
-        leverage = position.get("leverage", 1.0)
-        entry_price = position["entry_price"]
+        try:
+            leverage = float(position.get("leverage", 0.0))
+            entry_price = float(position.get("entry_price", 0.0))
+            price = float(mark_price)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        if (not all(math.isfinite(value) for value in (leverage, entry_price, price))
+                or leverage < 1.0 or entry_price <= 0 or price <= 0):
+            return 0.0
 
         if position["side"] == "LONG":
-            pnl_pct = (mark_price - entry_price) / entry_price
+            pnl_pct = (price - entry_price) / entry_price
         else:
-            pnl_pct = (entry_price - mark_price) / entry_price
+            pnl_pct = (entry_price - price) / entry_price
 
         # Margin ratio = (1 + pnl_pct) * leverage
         # If this drops below MMR, liquidation triggers
@@ -67,5 +74,9 @@ class LiquidationEngine:
 
     def is_at_risk(self, position: dict, mark_price: float, threshold: float = 1.2) -> bool:
         """Check if position is close to liquidation (margin ratio < threshold * MMR)."""
-        margin_ratio = self.get_margin_ratio(position, mark_price)
-        return margin_ratio < (threshold * self.DEFAULT_MMR)
+        try:
+            ratio = float(self.get_margin_ratio(position, mark_price))
+            limit = float(threshold) * self.DEFAULT_MMR
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return math.isfinite(ratio) and math.isfinite(limit) and ratio < limit
