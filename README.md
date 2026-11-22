@@ -12,7 +12,7 @@
 - **Latest GitHub Actions run observed for the branch head:** CI run #343 — success
 - **Current release assessment:** Desktop beta candidate; not yet a broadly supported public release. The hosted website remains a private-preview path.
 
-The score and readiness notes in [RELEASE_READINESS.md](RELEASE_READINESS.md) are an engineering assessment, not a guarantee of trading performance or security certification.
+See [RELEASE_READINESS.md](RELEASE_READINESS.md) for the release criteria and audit methodology.
 
 ## What it does
 
@@ -31,7 +31,7 @@ BlackMarket AI combines public exchange market data, multi-timeframe analysis, s
 - SQLite persistence, integrity checks, backup/recovery, and a Textual terminal dashboard.
 - Optional Telegram notifications.
 
-**Important:** An implemented strategy or a passing backtest is not evidence of future profitability. Market metrics can be unavailable when the required history is missing; the UI should show that state rather than invent a value.
+Strategy signals and backtest results are not evidence of future profitability. Metrics requiring unavailable or insufficient history are reported as unavailable.
 
 ## Supported product paths
 
@@ -39,7 +39,7 @@ BlackMarket AI combines public exchange market data, multi-timeframe analysis, s
 
 The primary user experience is the Tauri desktop application with its supervised local backend. The Windows installer pipeline now builds a bundled backend executable; a clean-installer CI smoke test installs and starts the app with Python removed from `PATH`.
 
-For users, install the published Windows NSIS release artifact when one is available. Do not use an intermediate CI artifact as a stable public release.
+The Windows NSIS installer is the distribution package. CI artifacts are validation outputs and are not tagged releases.
 
 For developers, build from a Windows environment with the required Rust/Tauri, Node/npm, MSVC C++ build tools, Windows SDK, and WebView2 prerequisites:
 
@@ -51,7 +51,7 @@ The installer is produced under:
 
 `blackmarket-desktop/src-tauri/target/release/bundle/nsis/`
 
-The installer workflow and clean-machine smoke test are covered by CI. Before a public stable release, verify the exact release artifact, version, signing status, upgrade/uninstall behavior, and supported Windows versions.
+The installer workflow and clean-machine smoke test are covered by CI. Release acceptance covers artifact identity, version metadata, signing status, upgrade/uninstall behavior, and supported Windows versions.
 
 ### Website — private preview, not production-hosted service
 
@@ -66,7 +66,7 @@ The website requires server-side configuration:
 
 The backend host must explicitly enable remote API mode, require the same high-entropy bearer token, use HTTPS, and configure durable storage. Remote API mode is disabled by default.
 
-The website login is a **single-password private-preview gate**, not multi-user identity, role-based authorization, or a managed public SaaS account system. The hosted backend and deployment must pass end-to-end authentication, persistence, data-freshness, event-stream, portfolio, and rejected-order tests before being advertised as production-ready.
+The website login is a **single-password private-preview gate**, not multi-user identity, role-based authorization, or a managed public SaaS account system. Production deployment requires end-to-end verification of authentication, persistence, data freshness, event streaming, portfolio operations, and rejected-order handling.
 
 See [blackmarket-web/README.md](blackmarket-web/README.md) for deployment configuration.
 
