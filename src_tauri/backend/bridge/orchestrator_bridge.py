@@ -970,15 +970,15 @@ class OrchestratorBridge:
                 completed.append((close_time, quote_volume))
         completed.sort()
         values = [value for _, value in completed]
-        baseline = values[-7:] if len(values) >= 7 else values
-        avg_daily = sum(baseline) / len(baseline) if baseline else None
+        baseline = values[-7:] if len(values) >= 7 else []
+        avg_daily = sum(baseline) / 7 if len(baseline) == 7 else None
         current_24h = float(ticker["quoteVolume"])
         change = ((current_24h / avg_daily) - 1) * 100 if avg_daily and avg_daily > 0 else None
         result = {
             "symbol": symbol, "market": market, "buy_volume": buy_volume, "sell_volume": sell_volume,
             "total_volume": current_24h, "volume_change_24h": None,
             "buy_volume_7d_avg": None, "sell_volume_7d_avg": None,
-            "average_daily_quote_volume_7d": avg_daily, "volume_change_vs_7d_avg_pct": change,
+            "average_daily_quote_volume_7d": avg_daily, "volume_change_vs_7d_avg_pct": change,\n            "daily_baseline_count": len(baseline), "daily_baseline_status": "READY" if len(baseline) == 7 else "INSUFFICIENT_DATA",
             "comparison_period": "Current rolling 24h vs mean of up to 7 completed UTC daily candles",
             "data_timestamp": datetime.now(timezone.utc), "data_age_seconds": 0.0, "data_freshness": "LIVE",
             "flow_is_estimated": False, "flow_sample_size": len(trades),
