@@ -55,6 +55,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -64,6 +69,10 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+        working-directory: blackmarket-desktop
+
+      - name: Verify product version consistency
+        run: python ../scripts/verify_release_version.py
         working-directory: blackmarket-desktop
 
       - name: TypeScript and production build
@@ -212,6 +221,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
+      - name: Verify product version consistency
+        run: python scripts/verify_release_version.py
       - name: Build self-contained backend and NSIS installer
         shell: pwsh
         run: ./scripts/build_windows_installer.ps1
