@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from collections import defaultdict
 
 from .candle_manager import CandleManager
+from market.data_reliability import MarketDataState, valid_price, valid_volume
 
 
 class MarketCache:
@@ -20,6 +21,7 @@ class MarketCache:
         self._oi: dict[str, dict[str, float]] = defaultdict(dict)
         self._updated_at: dict[str, dict[str, datetime]] = defaultdict(dict)
         self._ticker_updated_at: dict[str, dict[str, datetime]] = defaultdict(dict)
+        self._sources: dict[str, dict[str, str]] = defaultdict(dict)
         self._candle_manager = CandleManager()
 
     @property
