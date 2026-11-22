@@ -1220,7 +1220,7 @@ async def test_futures_margin_is_reserved_and_released_on_close():
         "market": "FUTURES",
         "direction": "LONG",
         "entry": 100.0,
-        "stop_loss": 90.0,
+        "stop_loss": 96.0,
         "take_profit": [120.0],
         "leverage": 2.0,
         "order_type": "LIMIT",
@@ -1245,6 +1245,10 @@ async def test_futures_margin_is_reserved_and_released_on_close():
 async def test_concurrent_futures_entries_cannot_allocate_same_margin_twice():
     simulator = Simulator(EventBus())
     simulator.futures_balance = 100.0
+    simulator.risk_manager.max_risk_pct = 2.0
+    simulator.risk_manager.max_open_risk_pct = 5.0
+    simulator.risk_manager.max_position_size_pct = 100.0
+    simulator.risk_manager.max_asset_exposure_pct = 100.0
     simulator.validate_new_position = lambda *_args: (True, "OK")
     signal = {
         "signal_id": "CONCURRENT-MARGIN",
@@ -1320,7 +1324,7 @@ async def test_partial_close_rejects_full_or_excess_quantity_without_mutation():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("market,leverage,collateral_key,available_key,collateral", [
     ("SPOT", 1.0, "reserved_notional", "spot_available_balance", 100.0),
-    ("FUTURES", 5.0, "reserved_margin", "futures_available_balance", 20.0),
+    ("FUTURES", 3.0, "reserved_margin", "futures_available_balance", 100.0 / 3.0),
 ])
 async def test_opening_position_at_entry_price_preserves_portfolio_equity(
     market, leverage, collateral_key, available_key, collateral
