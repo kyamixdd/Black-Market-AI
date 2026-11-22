@@ -142,3 +142,62 @@ async def cancel_order(order_id: str):
         raise HTTPException(409, "Order state changed before cancellation could complete.")
     log_event(logger, logging.INFO, "paper_order_cancelled", order_id=order_id)
     return ManualActionResponse(success=True, id=order_id, message="Order cancelled.")
+
+
+@router.get("/{position_id}/review")
+async def review_closed_paper_trade(position_id: str):
+    """Review an actual closed paper trade; never infer quality from its P&L."""
+    import json
+    from datetime import datetime, timezone
+    from learning.trade_review import build_trade_review
+    from market.regime_radar import classify_market_regime
+
+    bridge = get_bridge()
+    trade = next(
+        (item for item in bridge._all_closed_trades()
+         if str(item.get("position_id", "")) == position_id),
+        None,
+    )
+    if trade is None:
+        raise HTTPException(404, "Closed paper trade not found.")
+
+    signal = None
+    signal_id = trade.get("signal_id")
+    if signal_id:
+        row = bridge.repo.get_signal(signal_id)
+        if row is not None:
+            signal = {
+                "signal_id": row.signal_id, "strategy": row.strategy,
+                "direction": row.direction, "entry": row.entry,
+                "stop_loss": row.stop_loss, "take_profit": row.take_profit,
+                "reasons": row.reasons, "status": row.status,
+                "timeframe": row.timeframe,
+            }
+            for key in ("take_profit", "reasons"):
+                if isinstance(signal[key], str):
+                    try:
+                        signal[key] = json.loads(signal[key])
+                    except (ValueError, TypeError):
+                        pass
+
+    regime = None
+    opened_at = trade.get("opened_at")
+    try:
+        if isinstance(opened_at, str):
+            opened_at = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+        if isinstance(opened_at, datetime):
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+            end_ms = int(opened_at.timestamp() * 1000)
+            candles = await bridge.get_candles(
+                trade["symbol"], trade["market"], "1h", limit=100, end_time=end_ms,
+            )
+            regime = classify_market_regime(
+                candles, symbol=trade["symbol"], market=trade["market"],
+                timeframe="1h", expected_candles=100,
+            )
+            regime["as_of_entry"] = opened_at.isoformat()
+    except (KeyError, TypeError, ValueError, OverflowError):
+        regime = None
+
+    return build_trade_review(trade, signal, regime)
