@@ -1425,9 +1425,25 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
         setPersistenceMessage('Unable to restore this workspace. Check the backend connection and try again.')
         return
       }
+      if (typeof workspace !== 'object' || workspace.schema_version !== 1 || !workspace.payload || typeof workspace.payload !== 'object') {
+        setPersistenceMessage('Unsupported workspace schema or invalid payload. Nothing was restored.')
+        return
+      }
+      const savedLab = workspace.payload.strategyLab
+      if (savedLab != null && (typeof savedLab !== 'object' || Array.isArray(savedLab))) {
+        setPersistenceMessage('Invalid Strategy Lab workspace data. Nothing was restored.')
+        return
+      }
+      if (savedLab && typeof savedLab === 'object' && savedLab.start != null && savedLab.end != null) {
+        const startTime = Date.parse(String(savedLab.start) + 'T00:00:00Z')
+        const endTime = Date.parse(String(savedLab.end) + 'T00:00:00Z')
+        if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime >= endTime) {
+          setPersistenceMessage('Invalid saved backtest date range. Nothing was restored.')
+          return
+        }
+      }
       setLoadedWorkspace(workspace)
       onWorkspaceLoad(workspace)
-      const savedLab = workspace.payload?.strategyLab
       if (savedLab && typeof savedLab === 'object') {
         if (typeof savedLab.strategy === 'string') setStrategy(savedLab.strategy)
         if (typeof savedLab.symbol === 'string') setSymbol(savedLab.symbol)
