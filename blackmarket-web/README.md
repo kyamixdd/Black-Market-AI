@@ -24,7 +24,22 @@ Copy `.env.example` to `.env.local` and configure these server-only variables:
 
 Session secrets, password hashes, and backend tokens must remain server-side and must not be included in client bundles or public build variables. The hosted preview uses a single shared password and does not provide individual user identity or user-owned data isolation.
 
-## Hosted authentication setup\n\nGenerate a high-entropy session secret locally, and generate the password hash without writing the plaintext password to a file:\n\n```bash\n# Linux/macOS shell\nexport PREVIEW_PASSWORD='your-long-unique-password'\nnode scripts/hash-preview-password.mjs\nunset PREVIEW_PASSWORD\n```\n\nStore the resulting hash in `BLACKMARKET_WEB_PASSWORD_HASH` and the random session secret in `BLACKMARKET_SESSION_SECRET`. Hosted sessions are signed, HttpOnly, SameSite=Strict cookies with a 30-minute expiry. Logout revokes the session in the current Node process and clears the cookie. Revocation is process-local; on multi-instance or serverless deployments, a session issued on one instance may not be revoked on another until expiry. Rotating the session secret invalidates all sessions.\n\nThe login and proxy rate limits are also process-local and reset on restart. Configure platform-level protection for any internet-accessible preview.\n\n## Backend requirements for remote preview
+## Hosted authentication setup
+
+Generate a high-entropy session secret locally, and generate the password hash without writing the plaintext password to a file:
+
+```bash
+# Linux/macOS shell
+export PREVIEW_PASSWORD='your-long-unique-password'
+node scripts/hash-preview-password.mjs
+unset PREVIEW_PASSWORD
+```
+
+Store the resulting hash in `BLACKMARKET_WEB_PASSWORD_HASH` and the random session secret in `BLACKMARKET_SESSION_SECRET`. Hosted sessions are signed, HttpOnly, SameSite=Strict cookies with a 30-minute expiry. Logout revokes the session in the current Node process and clears the cookie. Revocation is process-local; on multi-instance or serverless deployments, a session issued on one instance may not be revoked on another until expiry. Rotating the session secret invalidates all sessions.
+
+The login and proxy rate limits are also process-local and reset on restart. Configure platform-level protection for any internet-accessible preview.
+
+## Backend requirements for remote preview
 
 Set on the backend host:
 
