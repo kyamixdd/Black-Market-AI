@@ -35,8 +35,12 @@ def test_price_change_exact_period_boundary_and_invalid_data():
 
 
 def test_return_correlation_aligned_returns_and_constant_series():
-    left = [100 * (1.01 ** i) for i in range(30)]
-    right = [50 * (1.01 ** i) for i in range(30)]
+    returns = [0.005, 0.012, -0.004, 0.02, -0.01, 0.008, 0.003, -0.006] * 4
+    left = [100.0]
+    right = [50.0]
+    for value in returns:
+        left.append(left[-1] * math.exp(value))
+        right.append(right[-1] * math.exp(value))
     assert return_correlation(left, right, minimum_returns=20) == pytest.approx(1.0)
     assert return_correlation(left[:15], right[:15], minimum_returns=20) is None
     assert return_correlation(left, [50] * 30, minimum_returns=20) is None
