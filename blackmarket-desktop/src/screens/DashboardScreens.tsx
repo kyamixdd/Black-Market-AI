@@ -1143,18 +1143,21 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   }
   const saveWorkspaceSnapshot = async () => {
     try {
-    const saved = await mutateJson<any>('/research/workspaces', 'POST', {
-      name: `Workspace ${new Date().toLocaleString()}`,
-      schema_version: 1,
-      payload: {
-        screen, symbol: dashboardSymbol, marketType, preferences,
-        dashboardData: data,
-        strategyLab: { strategy, symbol, market, timeframe, start, end, capital, risk, mode, notional, maxPosition, minScore, feeRate, slippage, spread, funding, result, comparison },
-      },
-    })
-    setChosenWorkspaceId(saved.workspace_id)
-    setPersistenceMessage('Workspace snapshot saved.')
-    await reloadSaved()
+      const saved = await mutateJson<any>('/research/workspaces', 'POST', {
+        name: `Workspace ${new Date().toLocaleString()}`,
+        schema_version: 1,
+        payload: {
+          screen, symbol: dashboardSymbol, marketType, preferences,
+          dashboardData: data,
+          strategyLab: { strategy, symbol, market, timeframe, start, end, capital, risk, mode, notional, maxPosition, minScore, feeRate, slippage, spread, funding, result, comparison },
+        },
+      })
+      setChosenWorkspaceId(saved.workspace_id)
+      setPersistenceMessage('Workspace snapshot saved.')
+      await reloadSaved()
+    } catch (reason) {
+      setPersistenceMessage(reason instanceof Error ? reason.message : String(reason))
+    }
   }
   const loadChosenWorkspace = async () => {
     if (!chosenWorkspaceId) return
