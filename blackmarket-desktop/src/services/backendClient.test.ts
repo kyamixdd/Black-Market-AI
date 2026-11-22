@@ -32,7 +32,7 @@ test('portfolio refresh returns updated balance after paper order', async () => 
   const client = createBackendClient({
     baseUrl: '/api/backend',
     fetcher: async (url, init) => {
-      if (String(url).endsWith('/paper-orders') && init?.method === 'POST') {
+      if (String(url).endsWith('/trades') && init?.method === 'POST') {
         balance -= 25
         return response(200, { status: 'accepted', order_id: 'paper-1' })
       }
@@ -40,7 +40,7 @@ test('portfolio refresh returns updated balance after paper order', async () => 
       return response(404, { detail: 'Not found' })
     },
   })
-  assert.deepEqual(await client.post('/paper-orders', { symbol: 'BTCUSDT' }), { status: 'accepted', order_id: 'paper-1' })
+  assert.deepEqual(await client.post('/trades', { symbol: 'BTCUSDT' }), { status: 'accepted', order_id: 'paper-1' })
   assert.deepEqual(await client.get('/portfolio/balance'), { total_balance: 475 })
 })
 
@@ -49,5 +49,5 @@ test('rejected paper order retains backend rejection reason', async () => {
     baseUrl: '/api/backend',
     fetcher: async () => response(422, { detail: 'Insufficient available balance' }),
   })
-  await assert.rejects(client.post('/paper-orders', { symbol: 'BTCUSDT', quantity: 100000 }), /Insufficient available balance/)
+  await assert.rejects(client.post('/trades', { symbol: 'BTCUSDT', quantity: 100000 }), /Insufficient available balance/)
 })
