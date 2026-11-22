@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { FormEvent } from 'react'
 import { DataTable as Table, DetailCard, EmptyState, ScreenHeader, SummaryCard, TableHead } from '../components/ui/TerminalPrimitives'
 
 export type ScreenName =
@@ -1063,7 +1064,7 @@ function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
   const [error, setError] = useState('')
   const [result, setResult] = useState<any>(null)
   const [selectedTrade, setSelectedTrade] = useState<any>(null)
-  const run = async (event: React.FormEvent) => {
+  const run = async (event: FormEvent) => {
     event.preventDefault()
     setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
     try {
@@ -1093,7 +1094,7 @@ function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
           <label>End date<input type="date" value={end} onChange={e => setEnd(e.target.value)} required /></label>
           <label>Starting capital<input type="number" min="1" step="any" value={capital} onChange={e => setCapital(e.target.value)} required /></label>
           <label>Position sizing<select value={mode} onChange={e => setMode(e.target.value)}><option value="risk_pct">Risk % per trade</option><option value="fixed_notional">Fixed notional</option></select></label>
-          <label>Risk per trade (%)<input type="number" min="0.01" max="100" step="any" value={risk} onChange={e => setRisk(e.target.value} /></label>
+          <label>Risk per trade (%)<input type="number" min="0.01" max="100" step="any" value={risk} onChange={e => setRisk(e.target.value)} /></label>
           <label>Fixed notional<input type="number" min="0.01" step="any" value={notional} onChange={e => setNotional(e.target.value)} /></label>
           <label>Max position (% equity)<input type="number" min="0.01" max="100" step="any" value={maxPosition} onChange={e => setMaxPosition(e.target.value)} /></label>
         </div>
