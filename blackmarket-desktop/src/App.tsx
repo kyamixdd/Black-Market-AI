@@ -1120,11 +1120,11 @@ function App() {
               </div>
             )}
             {popup === 'chart' && (
-              <div className="settings-options">
-                <button onClick={() => setPreferences((current) => ({ ...current, autoScale: !current.autoScale }))}><span>Auto-scale price</span><b>{preferences.autoScale ? 'ON' : 'OFF'}</b></button>
-                <button onClick={() => setPreferences((current) => ({ ...current, crosshair: !current.crosshair }))}><span>Crosshair</span><b>{preferences.crosshair ? 'ON' : 'OFF'}</b></button>
+              <div className="settings-options" id="chart-settings-menu" role="group" aria-label="Chart settings">
+                <button type="button" aria-pressed={preferences.autoScale} onClick={() => setPreferences((current) => ({ ...current, autoScale: !current.autoScale }))}><span>Auto-scale price</span><b>{preferences.autoScale ? 'ON' : 'OFF'}</b></button>
+                <button type="button" aria-pressed={preferences.crosshair} onClick={() => setPreferences((current) => ({ ...current, crosshair: !current.crosshair }))}><span>Crosshair</span><b>{preferences.crosshair ? 'ON' : 'OFF'}</b></button>
                 {(['SMA20', 'EMA20'] as const).map((indicator) => (
-                  <button key={indicator} onClick={() => indicatorToggle(indicator)}>
+                  <button type="button" key={indicator} aria-pressed={indicators.includes(indicator)} onClick={() => indicatorToggle(indicator)}>
                     <span>{indicator} indicator</span><b>{indicators.includes(indicator) ? <Check size={12} /> : 'OFF'}</b>
                   </button>
                 ))}
@@ -1161,9 +1161,9 @@ function App() {
                 <span className={`connection-state ${visibleConnection}`}><i />{connectionText}</span>
               </div>
               <div className="instrument-actions">
-                <button className={`market-switch ${marketType === 'SPOT' ? 'selected' : ''}`} onClick={() => setMarketType('SPOT')}>SPOT</button>
-                <button className={`market-switch ${marketType === 'FUTURES' ? 'selected' : ''}`} onClick={() => setMarketType('FUTURES')}>FUTURES</button>
-                <button className="icon-button" aria-label="Chart settings" onClick={() => setPopup((current) => current === 'chart' ? null : 'chart')}><Settings2 size={14} /></button>
+                <button type="button" className={`market-switch ${marketType === 'SPOT' ? 'selected' : ''}`} aria-pressed={marketType === 'SPOT'} onClick={() => setMarketType('SPOT')}>SPOT</button>
+                <button type="button" className={`market-switch ${marketType === 'FUTURES' ? 'selected' : ''}`} aria-pressed={marketType === 'FUTURES'} onClick={() => setMarketType('FUTURES')}>FUTURES</button>
+                <button type="button" className="icon-button" aria-label="Chart settings" aria-expanded={popup === 'chart'} aria-controls="chart-settings-menu" onClick={() => setPopup((current) => current === 'chart' ? null : 'chart')}><Settings2 size={14} /></button>
                 <button className="icon-button chart-expand" aria-label="Open detailed market analysis" onClick={() => changeNavigation('Market Analysis')}><SearchCheck size={13} /></button>
               </div>
             </div>
@@ -1188,7 +1188,7 @@ function App() {
                     {item}
                   </button>
                 ))}
-                <button className="icon-button chart-tools" aria-label="Chart options" onClick={() => setPopup((current) => current === 'chart' ? null : 'chart')}><SlidersHorizontal size={13} /></button>
+                <button type="button" className="icon-button chart-tools" aria-label="Chart options" aria-expanded={popup === 'chart'} aria-controls="chart-settings-menu" onClick={() => setPopup((current) => current === 'chart' ? null : 'chart')}><SlidersHorizontal size={13} /></button>
               </div>
             </div>
             <div className="live-chart-wrap">
