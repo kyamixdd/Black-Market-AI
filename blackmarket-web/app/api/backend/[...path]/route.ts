@@ -78,7 +78,7 @@ async function proxy(request: NextRequest, context: Context) {
     const responseType = upstream.headers.get("content-type") || "application/json";
     return new NextResponse(text, {
       status: upstream.status,
-      headers: { "Content-Type": responseType, " Cache-Control": "no-store" },
+      headers: { "Content-Type": responseType, "Cache-Control": "no-store" },
     });
   } catch {
     return NextResponse.json({ error: "Backend is unreachable" }, { status: 502 });
