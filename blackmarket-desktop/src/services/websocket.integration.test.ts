@@ -25,6 +25,8 @@ class MockSocket {
 
 test('WebSocket reconnects and authenticates again after a disconnect', async () => {
   const original = globalThis.WebSocket
+  const originalWindow = globalThis.window
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { __TAURI_INTERNALS__: {} } })
   MockSocket.instances = []
   globalThis.WebSocket = MockSocket as unknown as typeof WebSocket
   setApiToken('integration-token')
@@ -47,6 +49,7 @@ test('WebSocket reconnects and authenticates again after a disconnect', async ()
     service.disconnect()
     setApiToken(null)
     globalThis.WebSocket = original
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow })
   }
 })
 
