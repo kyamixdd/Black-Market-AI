@@ -1,7 +1,5 @@
 """Stage 6 paper-trading risk and execution integrity regressions."""
 import asyncio
-from datetime import datetime, timezone
-
 import pytest
 
 from core.event_bus import EventBus
@@ -85,3 +83,32 @@ def test_risk_manager_rejects_nonfinite_or_negative_risk_inputs():
     assert not manager.check_total_risk(float("nan"), 1, 1000)
     assert not manager.check_total_risk(-1, 1, 1000)
     assert not manager.check_trade_risk(float("inf"), 1000)
+
+@pytest.mark.asyncio
+async def test_restart_restores_daily_loss_baseline_and_blocks_new_risk():
+    sim = Simulator(EventBus())
+    sim.daily_start_equity = 1000.0
+    sim.daily_pnl_date = datetime.now(timezone.utc).date()
+    sim.spot_balance -= 30.0
+    state = sim.get_state_snapshot()
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+    assert restored.get_daily_pnl() <= -30.0
+    assert await restored.execute_signal(signal("RECOVERYUSDT", signal_id="RECOVER-RISK")) is None
+
+
+@pytest.mark.asyncio
+async def test_extreme_futures_gap_cannot_drive_simulated_account_below_zero():
+    sim = Simulator(EventBus())
+    request = signal("GAPFUTUSDT", "FUTURES", "LONG", 1000, 900, 3, "FUT-GAP")
+    position_id = await sim.execute_signal(request)
+    assert position_id is not None
+    position = sim.futures_positions[position_id]
+    reserved_margin = position["reserved_margin"]
+
+    await sim.update_prices("FUTURES", "GAPFUTUSDT", 1.0, mark_price=1.0)
+    assert not sim.futures_positions
+    assert sim.futures_balance >= -1e-8
+    assert sim.closed_trades[-1]["close_reason"] == "LIQUIDATION"
+    assert sim.closed_trades[-1]["pnl"] >= -reserved_margin - position["fees_paid"] - 1e-6
