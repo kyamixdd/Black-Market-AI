@@ -552,10 +552,25 @@ function App() {
       const requestGeneration = ++marketRequestGeneration
       const marketQuery = `?market=${marketType}`
       const candleQuery = `?market=${marketType}&timeframe=${timeframe}&limit=1000`
-      const [snapshotPayload, candlePayload] = await Promise.all([
-        requestJson<MarketSnapshot>(`/markets/${encodeURIComponent(symbol)}${marketQuery}`),
-        requestJson<unknown>(`/markets/${encodeURIComponent(symbol)}/candles${candleQuery}`),
-      ])
+      let snapshotPayload: MarketSnapshot | null = null
+      let candlePayload: unknown = null
+      try {
+        ;[snapshotPayload, candlePayload] = await Promise.all([
+          requestJson<MarketSnapshot>(`/markets/${encodeURIComponent(symbol)}${marketQuery}`),
+          requestJson<unknown>(`/markets/${encodeURIComponent(symbol)}/candles${candleQuery}`),
+        ])
+      } catch {
+        // Network/API failures must not leave the chart looking live with old
+        // data. Ignore failures from stale refreshes and report only the latest.
+        if (!active || requestGeneration !== marketRequestGeneration) return
+        setData((current) => ({ ...current, market: null, candles: [] }))
+        setMarketDataStatus('error')
+        setMarketDataStatusKey(marketKey)
+        loadedMarketKeyRef.current = ''
+        setLoadedMarketKey('')
+        setConnection('offline')
+        return
+      }
       // Polling and websocket-triggered refreshes can overlap. Only the newest
       // request for this market key may update the visible quote and candles.
       if (!active || requestGeneration !== marketRequestGeneration) return
