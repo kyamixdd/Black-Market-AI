@@ -75,3 +75,15 @@ def test_market_cache_reports_source_and_freshness():
     assert status["state"] == "LIVE"
     assert status["data_source"] == "WEBSOCKET"
     assert status["latest_symbol"] == "BTCUSDT"
+
+def test_websocket_manager_exposes_offline_and_reconnecting_state():
+    from exchange.rate_limiter import RateLimiter
+    from exchange.websocket_manager import WebSocketManager
+
+    manager = WebSocketManager(RateLimiter())
+    assert manager.status_snapshot()["state"] == "OFFLINE"
+    manager._running = True
+    manager._tasks = [__import__("asyncio").create_task(__import__("asyncio").sleep(10))]
+    assert manager.status_snapshot()["state"] == "RECONNECTING"
+    manager._tasks[0].cancel()
+    manager._running = False
