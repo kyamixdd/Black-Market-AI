@@ -70,8 +70,6 @@ class RiskManager:
             return 0.0
         if not math.isfinite(value) or value < 1.0:
             return 0.0
-        if market == "SPOT":
-            return 1.0 if value == 1.0 else 0.0
         if market == "FUTURES" and value > self.max_leverage:
             return self.max_leverage
         return value
