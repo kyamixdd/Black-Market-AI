@@ -1149,6 +1149,7 @@ function CommunityLibraryScreen() {
 
   return <div className="screen-stack">
     <ScreenHeader title="Community Strategy Library" description="Browse and share strategy research · simulator-only · no live execution" />
+    <p className="workspace-note">Listings are shared only with clients connected to this backend. Desktop local mode keeps its own library; it does not automatically sync to the hosted community.</p>
     <section className="workspace-panel">
       <div className="workspace-toolbar">
         <input className="workspace-search" aria-label="Search strategies" placeholder="Search strategy name or description" value={query} onChange={event => setQuery(event.target.value)} />
