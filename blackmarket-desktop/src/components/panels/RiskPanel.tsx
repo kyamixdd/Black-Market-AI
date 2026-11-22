@@ -105,12 +105,15 @@ export const RiskPanel: React.FC = () => {
         <span className={`risk-status ${statusTone}`} role="status">{statusLabel(status)}</span>
       </div>
       <div className="risk-content">
-        <div className="risk-dial" aria-label={`Risk capacity used ${percent(data.used_risk_capacity_pct)}`}>
-          <div className="risk-dial-track">
-            <div className="risk-dial-value" style={{ width: `${usedCapacity}%` }} />
+        <div
+          className="risk-dial"
+          aria-label={`Risk capacity used ${percent(data.used_risk_capacity_pct)}`}
+          style={{ background: `conic-gradient(var(--text-secondary) ${usedCapacity}%, var(--border-subtle) 0)` }}
+        >
+          <div>
+            <strong className="risk-digit">{percent(data.current_exposure_pct)}</strong>
+            <span className="risk-caption">Exposure</span>
           </div>
-          <div className="risk-digit">{percent(data.current_exposure_pct)}</div>
-          <div className="risk-caption">Exposure</div>
         </div>
         <div className="risk-stats">
           <div className="risk-stat"><span>Capacity used</span><b>{percent(data.used_risk_capacity_pct)}</b></div>
