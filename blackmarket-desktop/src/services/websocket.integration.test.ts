@@ -4,6 +4,10 @@ import { setApiToken } from './localAuth.ts'
 import { WebSocketService } from './websocket.ts'
 
 class MockSocket {
+  static CONNECTING = 0
+  static OPEN = 1
+  static CLOSING = 2
+  static CLOSED = 3
   static instances: MockSocket[] = []
   readyState = 0
   onopen: ((event: Event) => void) | null = null
