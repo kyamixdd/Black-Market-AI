@@ -15,9 +15,14 @@
     "incremental": true,
     "plugins": [{ "name": "next" }],
     "baseUrl": ".",
+    "types": ["react", "react-dom", "node"],
     "typeRoots": ["./node_modules/@types"],
     "paths": {
       "@/*": ["./*"],
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/*": ["./node_modules/@types/react/*"],
+      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"],
       "*": ["./node_modules/*"]
     }
   },
