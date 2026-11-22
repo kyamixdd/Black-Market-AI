@@ -1082,7 +1082,7 @@ function CommunityLibraryScreen() {
     const result = await requestJson<{ strategies: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
     if (result) setItems(result.strategies ?? [])
   }
-  useEffect(() => { void load() }, [query, strategyKey, sort])
+  useEffect(() => { void load() }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
 
   const publish = async (event: FormEvent) => {
     event.preventDefault()
