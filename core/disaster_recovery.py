@@ -536,10 +536,37 @@ class PositionRecoveryManager:
             ))
             self.simulator.futures_balance -= reserved_margin + float(position.get("fees_paid", 0.0))
 
-        # Preserve a saved same-day baseline across restart. If none exists or
-        # it belongs to a prior UTC day, start the day from recovered equity.
+        # Reconstruct today's mark-to-market P&L from durable trade records.
+        # Closed trades above contribute realized net P&L. Today's still-open
+        # positions contribute unrealized P&L less their entry fees.
+        for position in (
+            list(self.simulator.spot_positions.values())
+            + list(self.simulator.futures_positions.values())
+        ):
+            opened_at = position.get("opened_at")
+            if isinstance(opened_at, str):
+                try:
+                    opened_at = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+                except ValueError:
+                    opened_at = None
+            if isinstance(opened_at, datetime):
+                if opened_at.tzinfo is None:
+                    opened_at = opened_at.replace(tzinfo=timezone.utc)
+                if opened_at.astimezone(timezone.utc).date() == today:
+                    self.simulator.daily_pnl += (
+                        float(position.get("unrealized_pnl", 0.0))
+                        - float(position.get("fees_paid", 0.0))
+                    )
+
+        # Preserve the persisted same-day baseline when available. On a first
+        # recovery without a saved baseline, reconstruct it from current equity
+        # minus the recovered daily P&L; setting it to current equity would
+        # erase losses and incorrectly report zero daily drawdown.
         if not self.simulator.daily_equity_state_loaded:
-            self.simulator.daily_start_equity = self.simulator.get_account_equity_breakdown()["total_equity"]
+            current_equity = self.simulator.get_account_equity_breakdown()["total_equity"]
+            self.simulator.daily_start_equity = current_equity - self.simulator.daily_pnl
+            if self.simulator.daily_start_equity <= 0:
+                raise RuntimeError("Recovered daily equity baseline is non-positive.")
             self.simulator.daily_equity_state_loaded = True
             self.simulator._persist_daily_equity_baseline()
 
