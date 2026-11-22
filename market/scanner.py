@@ -99,22 +99,48 @@ class Scanner:
         if not prioritized:
             return
 
+        status = self._scan_status[market]
+        status.update({"state": "SCANNING", "started_at": datetime.now(timezone.utc).isoformat(),
+                       "symbols_selected": len(prioritized), "refresh_successes": 0,
+                       "refresh_failures": 0, "last_error": None})
         semaphore = Semaphore(self.max_concurrent_scans)
 
-        async def refresh(symbol: str, timeframe: str) -> None:
+        async def refresh(symbol: str, timeframe: str) -> bool:
             async with semaphore:
-                await self.candle_manager.collect_historical(
-                    self.spot_client, self.futures_client, market, symbol, timeframe, limit=200,
-                )
+                try:
+                    await self.candle_manager.collect_historical(
+                        self.spot_client, self.futures_client, market, symbol, timeframe, limit=200,
+                    )
+                    collection = self.candle_manager.get_collection_status(market, symbol, timeframe)
+                    if collection and collection.get("state") == "FAILED":
+                        status["refresh_failures"] += 1
+                        status["last_error"] = f"{symbol} {timeframe}: {collection.get('error')}"
+                        return False
+                    return bool(collection and collection.get("state") == "SUCCESS")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    status["refresh_failures"] += 1
+                    status["last_error"] = f"{symbol} {timeframe}: {type(exc).__name__}"
+                    logger.warning("Candle refresh failed for %s %s %s: %s", market, symbol, timeframe, exc)
+                    return False
 
-        # Populate every configured timeframe for each rotating symbol batch with
-        # bounded concurrency; one slow endpoint cannot block the entire scan.
-        await asyncio.gather(*(
+        results = await asyncio.gather(*(
             refresh(symbol, timeframe)
             for _market, symbol in prioritized
             for timeframe in self.analysis_timeframes
-        ))
-        await self.intelligence.run_prioritized_scan(prioritized)
+        ), return_exceptions=True)
+        status["refresh_successes"] = sum(result is True for result in results)
+        status["refresh_failures"] += sum(isinstance(result, BaseException) for result in results)
+        try:
+            await self.intelligence.run_prioritized_scan(prioritized)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            status["last_error"] = f"strategy scan: {type(exc).__name__}"
+            logger.exception("Strategy scan batch failed for %s", market)
+        status["completed_at"] = datetime.now(timezone.utc).isoformat()
+        status["state"] = "DEGRADED" if status["refresh_failures"] or status["last_error"] else "COMPLETE"
 
     async def _handle_stream_message(self, market: str, message: dict) -> None:
         """Consume Binance combined-stream 24h ticker events into the shared cache."""
