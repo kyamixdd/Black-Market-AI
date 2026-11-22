@@ -188,7 +188,7 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
                 exit_fill = raw_exit * (1 + direction * (spread_bps + slip_bps) / 20000.0)
                 notional_exit = position["quantity"] * exit_fill
                 exit_fee = notional_exit * fee_rate
-                gross = (exit_fill - position["entry_fill"]) * position["quantity"] * (1 if long_side else -1)
+                gross = (raw_exit - position["entry_price"]) * position["quantity"] * (1 if long_side else -1)
                 funding = 0.0
                 if config.market == "FUTURES" and config.funding_rate is not None:
                     hours = (bar["open_time"] - position["entry_time"]) / 3600000.0
@@ -206,7 +206,8 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
                 position = None
                 bars_in_position = 0
         if position is None:
-            ohlc = {config.timeframe: _ohlc(candles[:index + 1])}
+            strategy_tf = "1h" if strategy_name == "trend_following" else "15m"
+            ohlc = {strategy_tf: _ohlc(candles[:index + 1])}
             try:
                 signal = strategy.analyze(config.symbol, config.market, ohlc)
             except (ValueError, IndexError, KeyError, TypeError, FloatingPointError):
@@ -251,7 +252,7 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
     if position:
         last = candles[-1]
         exit_fill = last["close"] * (1 - (spread_bps + slip_bps) / 20000.0 * (1 if position["side"] == "LONG" else -1))
-        gross = (exit_fill - position["entry_fill"]) * position["quantity"] * (1 if position["side"] == "LONG" else -1)
+        gross = (last["close"] - position["entry_price"]) * position["quantity"] * (1 if position["side"] == "LONG" else -1)
         exit_fee = position["quantity"] * exit_fill * fee_rate
         costs = position["entry_fee"] + exit_fee + position["entry_slippage"] + position["entry_spread"] + abs(exit_fill - last["close"]) * position["quantity"]
         net = gross - costs
