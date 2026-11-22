@@ -935,6 +935,9 @@ class OrchestratorBridge:
             }
         total_sample = sum(item["sample_coverage"] for item in by_market.values())
         return {
+            "advancing": sum(item["advancing"] for item in by_market.values()),
+            "declining": sum(item["declining"] for item in by_market.values()),
+            "neutral": sum(item["neutral"] for item in by_market.values()),
             "markets": by_market, "sample_size": total_sample,
             "scope": "cached eligible market tickers; SPOT and FUTURES counts are separate market listings",
             "total_quote_volume_24h": sum(
