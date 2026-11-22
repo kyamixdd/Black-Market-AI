@@ -70,9 +70,19 @@ class RiskManager:
             return 0.0
         if not math.isfinite(value) or value < 1.0:
             return 0.0
+        if market == "SPOT":
+            return 1.0 if value == 1.0 else 0.0
         if market == "FUTURES" and value > self.max_leverage:
             return self.max_leverage
         return value
+
+    def check_trade_risk(self, risk_amount: float, equity: float) -> bool:
+        try:
+            risk, total = float(risk_amount), float(equity)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return (math.isfinite(risk) and math.isfinite(total) and risk >= 0 and total > 0
+                and risk / total * 100 <= self.max_risk_pct)
 
     def check_position_notional(self, notional: float, equity: float) -> bool:
         try:
