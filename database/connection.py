@@ -63,7 +63,7 @@ class Database:
                     raise RuntimeError(f"SQLite database integrity check failed: {result}")
         Base.metadata.create_all(self.engine)
         self._migrate_paper_trading_columns()
-        logger.info("Database initialized at %s", self.url)
+        logger.info("Database initialized (dialect=%s)", self.engine.dialect.name)
 
     def _sqlite_path(self) -> str:
         if self.url.startswith("sqlite:///"):
