@@ -154,6 +154,8 @@ The recovery subsystem verifies database integrity and creates compressed backup
 
 - [Security policy and threat model](SECURITY.md)
 - [Development progress and historical implementation log](DEVELOPMENT_PROGRESS.md)
+- [Backup and recovery guide](BACKUP_GUIDE.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
 - [Release readiness audit and pre-release checklist](RELEASE_READINESS.md)
 - [Website deployment guide](blackmarket-web/README.md)
 
