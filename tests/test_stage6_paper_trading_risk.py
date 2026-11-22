@@ -69,13 +69,14 @@ async def test_invalid_leverage_is_rejected():
 async def test_auto_sizing_accounts_for_extreme_fill_gap():
     sim = Simulator(EventBus())
     sim.fee_calc.get_fill_price = lambda market, side, order_type, price, amount, *args: price * 1.5
+    initial_equity = sim.get_account_equity_breakdown()["total_equity"]
     request = signal("GAPUSDT", entry=100, stop=90, signal_id="GAP")
     position_id = await sim.execute_signal(request)
     assert position_id is not None
     position = sim.spot_positions[position_id]
     equity = sim.get_account_equity_breakdown()["total_equity"]
     risk = abs(position["entry_price"] - position["stop_loss"]) * position["amount"]
-    assert risk <= equity * sim.risk_manager.max_risk_pct / 100 + 1e-8
+    assert risk <= initial_equity * sim.risk_manager.max_risk_pct / 100 + 1e-8
 
 
 def test_risk_manager_rejects_nonfinite_or_negative_risk_inputs():
