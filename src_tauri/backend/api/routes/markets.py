@@ -51,6 +51,15 @@ async def get_heatmap():
     return MarketHeatmapResponse(heatmap=heatmap)
 
 
+@router.get("/scanner-status")
+async def get_scanner_status():
+    """Return configured scan coverage and last per-market scan outcome."""
+    scanner = getattr(get_bridge().orch, "scanner", None)
+    if scanner is None or not callable(getattr(scanner, "status_snapshot", None)):
+        return {"state": "UNAVAILABLE", "detail": "Scanner status is not available"}
+    return scanner.status_snapshot()
+
+
 @router.get("/breadth", response_model=MarketBreadthResponse)
 async def get_breadth():
     """Get market breadth statistics."""
