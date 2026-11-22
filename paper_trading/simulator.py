@@ -352,9 +352,18 @@ class Simulator:
             qty, leverage, volume_24h
         )
 
-        # Revalidate stop risk and exposure against the actual simulated fill.
+        # Adjust auto-sized orders for slippage-induced stop-distance changes.
         equity = self.get_account_equity_breakdown()["total_equity"]
-        actual_risk = abs(fill_price - float(signal["stop_loss"])) * qty
+        stop_price = float(signal["stop_loss"])
+        actual_distance = abs(fill_price - stop_price)
+        risk_budget = equity * self.risk_manager.max_risk_pct / 100.0
+        if quantity_override is None and actual_distance > 0 and qty * actual_distance > risk_budget:
+            qty = risk_budget / actual_distance
+            fill_price = self.fee_calc.get_fill_price(
+                market, signal["direction"], order_type, signal["entry"],
+                qty, leverage, volume_24h
+            )
+        actual_risk = abs(fill_price - stop_price) * qty
         actual_notional = qty * fill_price
         if not self.risk_manager.check_trade_risk(actual_risk, equity):
             logger.warning("Order %s rejected: actual fill exceeds per-trade risk budget", signal.get("signal_id"))
