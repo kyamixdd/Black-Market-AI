@@ -269,7 +269,7 @@ class DatabaseBackupManager:
                 logger.error("Backup not found: %s", backup_path)
                 return False
             try:
-                self.validate_backup(backup_path)
+                metadata = self.validate_backup(backup_path)
             except Exception as exc:
                 logger.error("Restore validation failed: %s", exc)
                 return False
@@ -287,7 +287,7 @@ class DatabaseBackupManager:
                 import tempfile
                 with tempfile.NamedTemporaryFile(suffix=".restore.db", dir=target_path.parent, delete=False) as tmp:
                     tmp_path = Path(tmp.name)
-                if self.config.compress:
+                if metadata.get("compressed", self.config.compress):
                     with gzip.open(backup_path, "rb") as source, open(tmp_path, "wb") as dest:
                         shutil.copyfileobj(source, dest)
                 else:
