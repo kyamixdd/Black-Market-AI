@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,6 +30,7 @@ load_dotenv(config_path if config_path.is_file() else PROJECT_ROOT / ".env")
 
 from config import DATABASE_URL, LOG_LEVEL
 from core.config_validator import validate_config_or_exit
+from core.observability import configure_structured_logging, log_event
 from core.orchestrator import Orchestrator
 from database.connection import Database
 
@@ -55,6 +57,7 @@ from src_tauri.backend.api.websocket.manager import WebSocketManager
 from src_tauri.backend.bridge.orchestrator_bridge import get_bridge
 
 logger = logging.getLogger(__name__)
+configure_structured_logging(LOG_LEVEL)
 
 # Global instances
 orchestrator: Orchestrator | None = None
@@ -114,7 +117,7 @@ async def lifespan(app: FastAPI):
     event_task: asyncio.Task | None = None
     orchestrator_task: asyncio.Task | None = None
 
-    logger.info("Starting BlackMarket AI Backend Adapter...")
+    log_event(logger, logging.INFO, "backend_starting", component="api")
 
     # Validate configuration
     validate_config_or_exit()
@@ -139,12 +142,12 @@ async def lifespan(app: FastAPI):
     event_task = asyncio.create_task(orchestrator.event_bus.run(), name="blackmarket-event-bus")
     orchestrator_task = asyncio.create_task(orchestrator.run(), name="blackmarket-orchestrator")
 
-    logger.info("BlackMarket AI Backend Adapter started")
+    log_event(logger, logging.INFO, "backend_started", component="api", database="sqlite")
 
     try:
         yield
     finally:
-        logger.info("Shutting down BlackMarket AI Backend Adapter...")
+        log_event(logger, logging.INFO, "backend_shutdown_started", component="api")
         if orchestrator:
             await orchestrator.stop()
         if orchestrator_task and not orchestrator_task.done():
@@ -157,7 +160,7 @@ async def lifespan(app: FastAPI):
             await ws_manager.shutdown()
         if db:
             db.close()
-        logger.info("BlackMarket AI Backend Adapter stopped")
+        log_event(logger, logging.INFO, "backend_stopped", component="api")
 
 
 app = FastAPI(
@@ -185,6 +188,38 @@ def _rate_limit_exceeded(key: str, limit: int, now: float | None = None) -> bool
         return True
     bucket.append(current)
     return False
+
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    """Log API request outcome without query strings, bodies, or credentials."""
+    request_id = request.headers.get("x-request-id", "")
+    if not request_id or len(request_id) > 80 or not request_id.isascii():
+        request_id = uuid.uuid4().hex
+    request.state.request_id = request_id
+    started = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except Exception:
+        log_event(
+            logger, logging.ERROR, "api_request_failed",
+            request_id=request_id, method=request.method,
+            path=request.url.path, status_code=500,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        raise
+    finally:
+        log_event(
+            logger, logging.INFO if status_code < 500 else logging.WARNING,
+            "api_request",
+            request_id=request_id, method=request.method,
+            path=request.url.path, status_code=status_code,
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
 
 
 @app.middleware("http")
