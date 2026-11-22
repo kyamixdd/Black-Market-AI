@@ -1,108 +1,94 @@
-// Market breadth panel.
+// Market breadth panel: cached eligible listings, separated by market.
 import { useEffect, useState } from 'react';
 
-interface BreadthData {
+interface MarketBreadth {
   advancing: number;
   declining: number;
   neutral: number;
-  total_volume: number;
-  avg_spread_bps: number;
-  avg_orderbook_imbalance: number;
+  sample_size: number;
+  advance_pct: number | null;
+  decline_pct: number | null;
+  neutral_pct: number | null;
+  advance_decline_ratio: number | null;
+  total_quote_volume_24h: number | null;
+  status: string;
 }
+interface BreadthData {
+  markets: Record<string, MarketBreadth>;
+  sample_size: number;
+  scope: string;
+  total_quote_volume_24h: number | null;
+  avg_spread_bps: number | null;
+  avg_orderbook_imbalance: number | null;
+  spread_status?: string;
+  orderbook_status?: string;
+}
+
+const money = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? 'Unavailable'
+    : value >= 1e9 ? `$${(value / 1e9).toFixed(2)}B`
+      : value >= 1e6 ? `$${(value / 1e6).toFixed(2)}M`
+        : `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 
 export const MarketBreadthPanel: React.FC = () => {
   const [data, setData] = useState<BreadthData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
       const response = await fetch('/api/markets/breadth');
-      const data = await response.json();
-      setData(data);
+      if (!response.ok) throw new Error(`Breadth API returned HTTP ${response.status}`);
+      setData(await response.json());
+      setError(null);
     } catch (e) {
-      console.error('Failed to load breadth data', e);
+      setError(e instanceof Error ? e.message : 'Breadth data unavailable');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
+    void fetchData();
+    const interval = setInterval(() => void fetchData(), 30000);
     return () => clearInterval(interval);
   }, []);
 
-  if (loading) {
-    return (
-      <div className="panel h-64 flex items-center justify-center">
-        <div className="spinner"></div>
+  if (loading) return <div className="panel h-64 flex items-center justify-center"><div className="spinner" /></div>;
+  if (!data) return <div className="panel p-4"><div className="panel-header">Market Breadth</div><p className="text-sm text-muted">{error || 'Market breadth unavailable'}. Retry after the market-data service reconnects.</p></div>;
+
+  const renderMarket = (name: string, item?: MarketBreadth) => {
+    if (!item || item.status !== 'READY') return <div className="metric-card"><div className="metric-label">{name}</div><div className="metric-value">Unavailable</div><div className="text-xs text-muted">No valid ticker sample</div></div>;
+    const total = item.sample_size;
+    return <div className="metric-card space-y-2">
+      <div className="metric-label">{name} · {total} listings</div>
+      <div className="flex justify-between text-xs"><span className="text-green-400">Adv {item.advancing}</span><span className="text-gray-400">Flat {item.neutral}</span><span className="text-red-400">Dec {item.declining}</span></div>
+      <div className="h-3 rounded overflow-hidden bg-gray-800 flex">
+        <div className="h-full bg-green-500" style={{ width: `${item.advance_pct ?? 0}%` }} />
+        <div className="h-full bg-gray-500" style={{ width: `${item.neutral_pct ?? 0}%` }} />
+        <div className="h-full bg-red-500" style={{ width: `${item.decline_pct ?? 0}%` }} />
       </div>
-    );
-  }
+      <div className="text-xs text-muted">24h quote volume: {money(item.total_quote_volume_24h)}</div>
+    </div>;
+  };
 
-  if (!data) return null;
-
-  const total = data.advancing + data.declining + data.neutral;
-  const advancePct = total > 0 ? (data.advancing / total * 100).toFixed(1) : '0.0';
-  const declinePct = total > 0 ? (data.declining / total * 100).toFixed(1) : '0.0';
-
-  return (
-    <div className="panel h-full">
-      <div className="panel-header">Market Breadth</div>
-      <div className="p-4 space-y-4">
-        {/* Summary Cards */}
-        <div className="grid grid-cols-3 gap-3">
-          <div className="metric-card">
-            <div className="metric-label">Advancing</div>
-            <div className="metric-value text-green-400">{data.advancing}</div>
-            <div className="text-xs text-muted mt-1">{advancePct}% of markets</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Declining</div>
-            <div className="metric-value text-red-400">{data.declining}</div>
-            <div className="text-xs text-muted mt-1">{declinePct}% of markets</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Neutral</div>
-            <div className="metric-value text-gray-400">{data.neutral}</div>
-            <div className="text-xs text-muted mt-1">{total > 0 ? ((data.neutral / total) * 100).toFixed(1) : '0.0'}% of markets</div>
-          </div>
-        </div>
-
-        {/* Volume & Spread */}
-        <div className="grid grid-cols-3 gap-3 pt-2 border-t border-gray-700">
-          <div className="metric-card">
-            <div className="metric-label">Total Volume (24h)</div>
-            <div className="metric-value text-xl">${(data.total_volume / 1e9).toFixed(2)}B</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Avg Spread</div>
-            <div className="metric-value text-xl">{data.avg_spread_bps.toFixed(1)} bps</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Orderbook Imbalance</div>
-            <div className="metric-value text-xl">{data.avg_orderbook_imbalance.toFixed(3)}</div>
-          </div>
-        </div>
-
-        {/* Advance/Decline Visual */}
-        <div className="pt-2 border-t border-gray-700">
-          <div className="text-xs text-muted mb-2">Advance/Decline Ratio</div>
-          <div className="h-4 rounded overflow-hidden bg-gray-800">
-            <div
-              className="h-full bg-green-500 transition-all duration-300"
-              style={{ width: `${(data.advancing / (total || 1)) * 100}%` }}
-            />
-          </div>
-          <div className="flex justify-between text-xs text-muted mt-1">
-            <span>Advancing: {data.advancing}</span>
-            <span>Neutral: {data.neutral}</span>
-            <span>Declining: {data.declining}</span>
-          </div>
-        </div>
+  return <div className="panel h-full">
+    <div className="panel-header">Market Breadth</div>
+    <div className="p-4 space-y-3">
+      <p className="text-xs text-muted">{data.scope}. This is ticker breadth, not order-book depth.</p>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {renderMarket('Spot', data.markets?.SPOT)}
+        {renderMarket('USDⓈ-M Futures', data.markets?.FUTURES)}
       </div>
+      <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-700">
+        <div className="metric-card"><div className="metric-label">Sampled listings</div><div className="metric-value">{data.sample_size}</div></div>
+        <div className="metric-card"><div className="metric-label">Combined quote volume</div><div className="metric-value text-lg">{money(data.total_quote_volume_24h)}</div><div className="text-xs text-muted">Spot + Futures listing totals</div></div>
+        <div className="metric-card"><div className="metric-label">Average spread</div><div className="metric-value">{data.avg_spread_bps == null ? 'Unavailable' : `${data.avg_spread_bps.toFixed(1)} bps`}</div><div className="text-xs text-muted">{data.spread_status}</div></div>
+        <div className="metric-card"><div className="metric-label">Order-book imbalance</div><div className="metric-value">{data.avg_orderbook_imbalance == null ? 'Unavailable' : data.avg_orderbook_imbalance.toFixed(3)}</div><div className="text-xs text-muted">{data.orderbook_status}</div></div>
+      </div>
+      {error && <p className="text-xs text-amber-400">Last refresh failed: {error}</p>}
     </div>
-  );
+  </div>;
 };
 
 export default MarketBreadthPanel;
