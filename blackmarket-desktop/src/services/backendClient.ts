@@ -41,7 +41,7 @@ export const backendBaseUrl = () =>
     ? 'http://127.0.0.1:8765/api'
     : '/api/backend'
 
-import { getApiAuthorization } from './localAuth'
+import { getApiAuthorization } from './localAuth.ts'
 
 const client = createBackendClient({
   baseUrl: backendBaseUrl(),
