@@ -1084,6 +1084,8 @@ type CommunityStrategy = {
 
 function CommunityLibraryScreen() {
   const [items, setItems] = useState<CommunityStrategy[]>([])
+  const listRequestId = useRef(0)
+  const [listLoading, setListLoading] = useState(false)
   const [query, setQuery] = useState('')
   const [strategyKey, setStrategyKey] = useState('')
   const [assetFilter, setAssetFilter] = useState('')
@@ -1109,22 +1111,50 @@ function CommunityLibraryScreen() {
   const [sourceReportId, setSourceReportId] = useState('')
 
   const load = async () => {
-    const params = new URLSearchParams({ q: query, sort, limit: '50' })
+    const requestId = ++listRequestId.current
+    const normalizedAsset = assetFilter.trim().toUpperCase()
+    const normalizedTimeframe = timeframeFilter.trim()
+    const validTimeframes = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d','1w']
+    if (normalizedAsset && !/^[A-Z0-9]{2,20}$/.test(normalizedAsset)) {
+      setNotice('Asset filter must be a valid market symbol, such as BTCUSDT.')
+      return
+    }
+    if (normalizedTimeframe && !validTimeframes.includes(normalizedTimeframe)) {
+      setNotice('Choose a supported timeframe: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, or 1w.')
+      return
+    }
+    if (!['recent','updated','name'].includes(sort)) {
+      setNotice('Unsupported sort order. Please select a valid option.')
+      return
+    }
+    const params = new URLSearchParams({ q: query.trim(), sort, limit: '50' })
     if (strategyKey) params.set('strategy_key', strategyKey)
-    if (assetFilter) params.set('asset', assetFilter.trim().toUpperCase())
-    if (timeframeFilter) params.set('timeframe', timeframeFilter.trim())
+    if (normalizedAsset) params.set('asset', normalizedAsset)
+    if (normalizedTimeframe) params.set('timeframe', normalizedTimeframe)
+    setListLoading(true)
     try {
       const result = await requestJson<{ strategies?: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
+      if (requestId !== listRequestId.current) return
       if (!result || !Array.isArray(result.strategies)) {
         setNotice('Community library returned an invalid response. Please refresh and try again.')
         return
       }
       setItems(result.strategies.filter(item => item && typeof item.public_id === 'string' && typeof item.name === 'string'))
+      setNotice('')
     } catch (error) {
+      if (requestId !== listRequestId.current) return
       setNotice(error instanceof Error ? error.message : 'Unable to load community strategies.')
+    } finally {
+      if (requestId === listRequestId.current) setListLoading(false)
     }
   }
-  useEffect(() => { void load() }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load() }, 250)
+    return () => {
+      window.clearTimeout(timer)
+      listRequestId.current += 1
+    }
+  }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
 
   const publish = async (event: FormEvent) => {
     event.preventDefault()
@@ -1282,6 +1312,7 @@ function CommunityLibraryScreen() {
         </select>
       </div>
       {notice && <p className="workspace-note" role="status">{notice}</p>}
+      {listLoading && <p className="workspace-note" role="status">Loading community strategies…</p>}
       <div className="workspace-summary-grid">
         {items.map(item => <article className="workspace-panel" key={item.public_id}>
           <h3>{item.name}</h3>
@@ -1296,7 +1327,7 @@ function CommunityLibraryScreen() {
           </div>
         </article>)}
       </div>
-      {!items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
+      {!listLoading && !items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
     </section>
     {selected && <section className="workspace-panel">
       <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => { detailRequestId.current += 1; setSelected(null) }}>Close</button></div>
