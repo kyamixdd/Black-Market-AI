@@ -254,10 +254,11 @@ def build_strategy_dna(reports: list[dict], paper_trades: list[dict], *, now: da
             closed = _dt(trade.get("closed_at"))
             if closed and closed >= cutoff:
                 paper.append(trade)
+        recorded_drawdowns = [m.get("max_drawdown_pct") for m in baseline_metrics
+                              if isinstance(m.get("max_drawdown_pct"), (int, float))]
         historical = _behavior(report_records, source="backtest", baseline_metrics={
-            "max_drawdown_pct": max((m.get("max_drawdown_pct", 0) for m in baseline_metrics
-                                    if isinstance(m.get("max_drawdown_pct"), (int,float))), default=0)
-        } if baseline_metrics else None,
+            "max_drawdown_pct": max(recorded_drawdowns) if recorded_drawdowns else None
+        } if recorded_drawdowns else None,
             period_days=sum(report_periods) if report_periods else None)
         current = _behavior(paper, source="paper_trading", capital=capital, period_days=PAPER_WINDOW_DAYS)
         evaluation = evaluate_degradation(historical, current)
