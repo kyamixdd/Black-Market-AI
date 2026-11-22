@@ -51,9 +51,26 @@ class Database:
         return self._session_maker
 
     def init_db(self) -> None:
+        if self.url.startswith("sqlite"):
+            source_path = Path(self._sqlite_path())
+            if source_path.exists() and source_path.stat().st_size > 0:
+                try:
+                    with self.engine.connect() as connection:
+                        result = connection.exec_driver_sql("PRAGMA quick_check").scalar_one()
+                except Exception as exc:
+                    raise RuntimeError(f"SQLite database could not be opened safely: {exc}") from exc
+                if str(result).lower() != "ok":
+                    raise RuntimeError(f"SQLite database integrity check failed: {result}")
         Base.metadata.create_all(self.engine)
         self._migrate_paper_trading_columns()
         logger.info("Database initialized at %s", self.url)
+
+    def _sqlite_path(self) -> str:
+        if self.url.startswith("sqlite:///"):
+            return self.url.replace("sqlite:///", "", 1)
+        if self.url.startswith("sqlite://"):
+            return self.url.replace("sqlite://", "", 1)
+        raise ValueError("Not a SQLite database")
 
     def _migrate_paper_trading_columns(self) -> None:
         """Add recovery fields to existing SQL databases without dropping data."""
@@ -94,6 +111,12 @@ class Database:
             raise RuntimeError("Database integrity checks require SQLite.")
         with self.engine.connect() as connection:
             return str(connection.exec_driver_sql("PRAGMA integrity_check").scalar_one())
+
+    def foreign_key_check(self) -> list[tuple]:
+        if self.engine.dialect.name != "sqlite":
+            raise RuntimeError("Foreign-key checks require SQLite.")
+        with self.engine.connect() as connection:
+            return list(connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall())
 
     def health(self) -> dict:
         try:
