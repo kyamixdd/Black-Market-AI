@@ -526,17 +526,20 @@ class Simulator:
             margin_ratio = self.liquidation.get_margin_ratio(position, mark_price)
             logger.warning("Margin call risk for %s %s: margin_ratio=%.4f, mark=%.4f",
                           position["symbol"], position["side"], margin_ratio, mark_price)
-            await self.event_bus.publish(make_event(
-                EventType.RISK_ALERT, "simulator",
-                symbol=position["symbol"], market=position["market"],
-                payload={
-                    "alert_type": "MARGIN_RISK",
-                    "message": f"Position {position['symbol']} near liquidation",
-                    "margin_ratio": margin_ratio,
-                    "mark_price": mark_price,
-                    "liquidation_price": self.liquidation.calculate_liquidation_price(position),
-                }
-            ))
+            try:
+                await self.event_bus.publish(make_event(
+                    EventType.RISK_ALERT, "simulator",
+                    symbol=position["symbol"], market=position["market"],
+                    payload={
+                        "alert_type": "MARGIN_RISK",
+                        "message": f"Position {position['symbol']} near liquidation",
+                        "margin_ratio": margin_ratio,
+                        "mark_price": mark_price,
+                        "liquidation_price": self.liquidation.calculate_liquidation_price(position),
+                    }
+                ))
+            except Exception:
+                logger.exception("Could not publish pre-liquidation alert for %s", position["position_id"])
 
         if position.get("status") == "OPEN" and self.liquidation.check_liquidation(position, mark_price):
             liq_price = self.liquidation.calculate_liquidation_price(position)
@@ -712,6 +715,15 @@ class Simulator:
             fee = float(self.fee_calc.calculate(market, position["side"], position["amount"], fill_price, position["leverage"]))
             balance_delta = pnl - fee
             trade_pnl = pnl - position.get("fees_paid", 0.0) - fee
+            if reason == "LIQUIDATION" and market == "FUTURES":
+                reserved_margin = float(position.get(
+                    "reserved_margin",
+                    position["entry_price"] * position["amount"] / max(float(position.get("leverage", 1.0)), 1.0),
+                ))
+                if balance_delta < -reserved_margin:
+                    balance_delta = -reserved_margin
+                    pnl = balance_delta + fee
+                    trade_pnl = balance_delta - float(position.get("fees_paid", 0.0))
             if not all(math.isfinite(value) for value in (pnl, fee, balance_delta, trade_pnl)):
                 raise ValueError("Close accounting produced a non-finite value.")
         except Exception:
