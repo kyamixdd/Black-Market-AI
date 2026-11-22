@@ -55,7 +55,7 @@ async def get_heatmap():
 async def get_symbol_analytics(
     symbol: str,
     market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
-    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|4h|1d|1w)$"),
+    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|2h|4h|6h|12h|1d|1w)$"),
 ):
     """Return supported interval changes and indicator completeness."""
     return await get_bridge().get_symbol_analytics(symbol.upper(), market, timeframe)
@@ -66,7 +66,7 @@ async def get_asset_correlation(
     symbol_a: str = Query(..., min_length=2, max_length=32),
     symbol_b: str = Query(..., min_length=2, max_length=32),
     market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
-    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|4h|1d|1w)$"),
+    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|2h|4h|6h|12h|1d|1w)$"),
     limit: int = Query(200, ge=21, le=1000),
 ):
     """Return Pearson correlation of aligned asset returns."""
@@ -120,7 +120,7 @@ async def get_long_short(symbol: str = Query("BTCUSDT", min_length=2, max_length
 async def get_candles(
     symbol: str,
     market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
-    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|4h|1d|1w)$"),
+    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|2h|4h|6h|12h|1d|1w)$"),
     limit: int = Query(200, ge=1, le=1000),
     end_time: int | None = Query(None, ge=1),
 ):
