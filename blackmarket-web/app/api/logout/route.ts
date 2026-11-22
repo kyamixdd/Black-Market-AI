@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sessionCookie, revokeCurrentSession } from "@/lib/session";
+import { communityOwnerCookie } from "@/lib/community-owner";
 import { sameOriginMutation } from "@/lib/request-security";
 
 export async function POST(request: NextRequest) {
@@ -8,6 +9,14 @@ export async function POST(request: NextRequest) {
   revokeCurrentSession(cookie);
   const response = NextResponse.json({ ok: true });
   response.cookies.set(sessionCookie, "", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: 0,
+  });
+  // The next authenticated user in this browser must receive a fresh community owner identity.
+  response.cookies.set(communityOwnerCookie, "", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "strict",
