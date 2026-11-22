@@ -52,6 +52,63 @@ def test_corrupt_sqlite_database_is_detected_before_init(tmp_path):
         db.init_db()
     db.close()
 
+
+def test_strategy_report_workspace_persist_across_database_restart(tmp_path):
+    db_file = tmp_path / "research.db"
+    db = Database(f"sqlite:///{db_file}")
+    db.init_db()
+    repository = Repository(db.session_maker())
+
+    strategy = repository.save_strategy_definition({
+        "strategy_id": "strategy-001", "name": "Momentum test",
+        "strategy_key": "momentum", "description": "saved config",
+        "definition": {"risk_per_trade_pct": 0.5, "strategy_parameters": {"min_score": 2}},
+        "tags": ["lab"], "version": 1,
+    })
+    report = repository.save_backtest_report({
+        "report_id": "report-001", "strategy_id": strategy["strategy_id"],
+        "strategy_name": "momentum", "symbol": "BTCUSDT", "market": "SPOT",
+        "timeframe": "1h", "status": "completed",
+        "config": {"start_date": "2026-01-01T00:00:00Z"},
+        "report": {"metrics": {"net_return_pct": 3.2}, "trades": []},
+    })
+    workspace = repository.save_workspace({
+        "workspace_id": "workspace-001", "owner_key": "local",
+        "name": "Test workspace", "schema_version": 1,
+        "payload": {"symbol": "BTCUSDT", "dashboardData": {"signals": []}},
+    })
+    db.close()
+
+    restarted = Database(f"sqlite:///{db_file}")
+    restarted.init_db()
+    repo_after_restart = Repository(restarted.session_maker())
+    assert repo_after_restart.get_strategy_definition("strategy-001")["definition"]["risk_per_trade_pct"] == 0.5
+    assert repo_after_restart.get_backtest_report("report-001")["report"]["metrics"]["net_return_pct"] == 3.2
+    restored = repo_after_restart.get_workspace("workspace-001", "local")
+    assert restored["payload"]["symbol"] == "BTCUSDT"
+    assert repo_after_restart.get_workspace("workspace-001", "other-user") is None
+    assert len(repo_after_restart.list_strategy_definitions()) == 1
+    assert len(repo_after_restart.list_backtest_reports()) == 1
+    assert len(repo_after_restart.list_workspaces("local")) == 1
+    assert repo_after_restart.delete_strategy_definition("strategy-001")
+    assert repo_after_restart.delete_backtest_report("report-001")
+    assert repo_after_restart.delete_workspace("workspace-001", "local")
+    restarted.close()
+
+
+def test_research_repository_rejects_non_json_numbers(tmp_path):
+    import pytest
+
+    db = Database(f"sqlite:///{tmp_path / 'badjson.db'}")
+    db.init_db()
+    repository = Repository(db.session_maker())
+    with pytest.raises(ValueError):
+        repository.save_workspace({
+            "workspace_id": "bad-json", "name": "Bad", "owner_key": "local",
+            "payload": {"not_finite": float("nan")},
+        })
+    db.close()
+
 def test_symbol_repository(tmp_path):
     db_file = tmp_path / "test.db"
     db = Database(f"sqlite:///{db_file}")
