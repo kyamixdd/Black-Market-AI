@@ -48,6 +48,7 @@ from src_tauri.backend.api.routes import (
     assistant,
     backup,
     research,
+    community,
 )
 from src_tauri.backend.api.routes.schemas import (
     HealthResponse,
