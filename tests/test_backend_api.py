@@ -635,3 +635,29 @@ def test_limit_order_cancel_route_dispatches_and_handles_non_open_orders(monkeyp
     assert response.json()["success"] is True
     assert calls == ["limit-1"]
     assert filling.status_code == 409
+
+
+def test_remote_api_requires_strong_token_and_safe_bind(monkeypatch):
+    from src_tauri.backend import main
+
+    monkeypatch.setattr(main, "_REMOTE_API_ENABLED", True)
+    monkeypatch.setattr(main, "_api_token", "too-short")
+    monkeypatch.setenv("BLACKMARKET_API_HOST", "0.0.0.0")
+    with pytest.raises(RuntimeError, match="at least 32 bytes"):
+        main._api_host()
+
+    monkeypatch.setattr(main, "_api_token", "remote-test-token-" + "x" * 32)
+    assert main._api_host() == "0.0.0.0"
+
+    monkeypatch.setenv("BLACKMARKET_API_HOST", "192.0.2.10")
+    with pytest.raises(RuntimeError, match="Remote API host"):
+        main._api_host()
+
+
+def test_remote_api_disabled_rejects_non_loopback_bind(monkeypatch):
+    from src_tauri.backend import main
+
+    monkeypatch.setattr(main, "_REMOTE_API_ENABLED", False)
+    monkeypatch.setenv("BLACKMARKET_API_HOST", "0.0.0.0")
+    with pytest.raises(RuntimeError, match="loopback"):
+        main._api_host()
