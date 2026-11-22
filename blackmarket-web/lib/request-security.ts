@@ -38,9 +38,5 @@ export async function readLimitedBody(request: NextRequest, maxBytes: number): P
 }
 
 export function sameOriginMutation(request: NextRequest): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) return false;
-  try {
-    return new URL(origin).origin === request.nextUrl.origin;
-  } catch { return false; }
+  return isSameOriginMutation(request.headers.get("origin"), request.nextUrl.toString());
 }
