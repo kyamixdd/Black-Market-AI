@@ -232,6 +232,15 @@ class Simulator:
         direction = signal["direction"]
         if market not in ("SPOT", "FUTURES") or signal.get("direction") not in ("BUY", "SELL", "LONG", "SHORT"):
             return False, "Unsupported market or direction"
+        entry = float(signal.get("entry", 0.0))
+        stop = float(signal.get("stop_loss", 0.0))
+        if not math.isfinite(entry) or not math.isfinite(stop) or entry <= 0 or stop <= 0:
+            return False, "Entry and stop-loss must be finite positive prices"
+        direction = signal["direction"]
+        if direction in ("BUY", "LONG") and stop >= entry:
+            return False, "Long stop-loss must be below entry"
+        if direction in ("SELL", "SHORT") and stop <= entry:
+            return False, "Short stop-loss must be above entry"
         positions = self._get_positions(market)
         pending = {
             order_id: order for order_id, order in self.open_orders.items()
@@ -282,9 +291,12 @@ class Simulator:
         notional = qty * float(signal["entry"])
         if not self.risk_manager.check_position_notional(notional, total_balance):
             return False, "Maximum position size exceeded"
+        exposure_positions = {
+            **self.spot_positions, **self.futures_positions,
+            **{oid: order for oid, order in self.open_orders.items() if order.get("status") == "OPEN"},
+        }
         if not self.risk_manager.check_asset_exposure(
-            self.spot_positions, signal["symbol"], notional, total_balance,
-            other_positions=self.futures_positions,
+            exposure_positions, signal["symbol"], notional, total_balance,
         ):
             return False, "Maximum asset exposure exceeded"
         total_risk = self._get_total_risk()
@@ -339,6 +351,24 @@ class Simulator:
             market, signal["direction"], order_type, signal["entry"],
             qty, leverage, volume_24h
         )
+
+        # Revalidate stop risk and exposure against the actual simulated fill.
+        equity = self.get_account_equity_breakdown()["total_equity"]
+        actual_risk = abs(fill_price - float(signal["stop_loss"])) * qty
+        actual_notional = qty * fill_price
+        if not self.risk_manager.check_trade_risk(actual_risk, equity):
+            logger.warning("Order %s rejected: actual fill exceeds per-trade risk budget", signal.get("signal_id"))
+            return None
+        if not self.risk_manager.check_position_notional(actual_notional, equity):
+            logger.warning("Order %s rejected: actual fill exceeds position-size cap", signal.get("signal_id"))
+            return None
+        exposure_positions = {
+            **self.spot_positions, **self.futures_positions,
+            **{oid: order for oid, order in self.open_orders.items() if order.get("status") == "OPEN"},
+        }
+        if not self.risk_manager.check_asset_exposure(exposure_positions, signal["symbol"], actual_notional, equity):
+            logger.warning("Order %s rejected: actual fill exceeds asset-exposure cap", signal.get("signal_id"))
+            return None
 
         # Deduct fees upfront
         fee = self.fee_calc.calculate(market, signal["direction"], qty, fill_price, leverage)
