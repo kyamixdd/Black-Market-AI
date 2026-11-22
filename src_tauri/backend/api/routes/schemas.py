@@ -412,6 +412,8 @@ class RiskMetricsResponse(BaseModel):
     risk_per_trade_pct: float
     max_daily_loss_pct: float
     max_total_open_pct: float
+    max_position_size_pct: float
+    max_asset_exposure_pct: float
     unmeasured_positions: int = 0
 
 
