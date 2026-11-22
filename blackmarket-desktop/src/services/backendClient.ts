@@ -39,3 +39,19 @@ export const backendBaseUrl = () =>
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
     ? 'http://127.0.0.1:8765/api'
     : '/api/backend'
+
+import { getApiAuthorization } from './localAuth'
+
+const client = createBackendClient({
+  baseUrl: backendBaseUrl(),
+  authorization: () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window ? getApiAuthorization() : undefined,
+})
+
+export const requestJson = <T>(path: string, api = true): Promise<T | null> =>
+  api ? client.get<T>(path).catch((error: unknown) => {
+    console.error(`Unable to load ${path}`, error)
+    return null
+  }) : client.requestJson<T>(`http://127.0.0.1:8765${path}`).catch(() => null)
+
+export const mutateJson = <T>(path: string, method: 'POST' | 'PATCH' | 'DELETE', body?: unknown): Promise<T> =>
+  client.requestJson<T>(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
