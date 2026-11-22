@@ -752,28 +752,38 @@ class OrchestratorBridge:
     # ===== Market Heatmap =====
 
     def _volatility_metrics(self, market: str, symbol: str) -> tuple[float | None, float | None]:
-        """Calculate 24h realized volatility and ATR as percentages from 1h candles."""
-        candle_manager = getattr(self, "candles", None)
-        get_series = getattr(candle_manager, "get_series", None)
+        """Return 24 hourly-return realized volatility and 14-period ATR as price percentages."""
+        get_series = getattr(getattr(self, "candles", None), "get_series", None)
         if not callable(get_series):
             return None, None
-        candles = get_series(market, symbol, "1h", limit=25)
-        if len(candles) < 3:
-            return None, None
-        closes = [float(row["close"]) for row in candles[-25:] if float(row.get("close") or 0) > 0]
-        returns = [math.log(closes[index] / closes[index - 1]) for index in range(1, len(closes))]
-        realized = None
-        if len(returns) >= 2:
-            mean = sum(returns) / len(returns)
-            variance = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
-            realized = math.sqrt(max(0.0, variance)) * math.sqrt(len(returns)) * 100
-        tr_values, previous_close = [], None
-        for row in candles[-24:]:
-            high, low, close = float(row["high"]), float(row["low"]), float(row["close"])
-            tr_values.append(high - low if previous_close is None else max(high - low, abs(high - previous_close), abs(low - previous_close)))
-            previous_close = close
-        last_close = float(candles[-1]["close"])
-        atr_pct = sum(tr_values) / len(tr_values) / last_close * 100 if tr_values and last_close > 0 else None
+        rows = get_series(market, symbol, "1h", limit=26)
+        now_ms = int(time.time() * 1000)
+        completed = []
+        for row in rows:
+            try:
+                values = [float(row[key]) for key in ("open", "high", "low", "close", "volume")]
+                open_time, close_time = int(row["open_time"]), int(row["close_time"])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if (not all(math.isfinite(value) for value in values) or min(values[:4]) <= 0
+                    or values[4] < 0 or values[1] < max(values[0], values[3], values[2])
+                    or values[2] > min(values[0], values[3]) or close_time >= now_ms):
+                continue
+            completed.append(row)
+        completed = sorted({int(row["open_time"]): row for row in completed}.values(),
+                           key=lambda row: int(row["open_time"]))
+        closes = [float(row["close"]) for row in completed]
+        realized = historical_volatility(closes, window=24) if len(closes) >= 25 else None
+        atr_pct = None
+        if len(completed) >= 15:
+            ranges = []
+            for index in range(1, len(completed)):
+                row, previous = completed[index], completed[index - 1]
+                high, low, prev_close = float(row["high"]), float(row["low"]), float(previous["close"])
+                ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+            last_close = closes[-1]
+            if last_close > 0 and ranges:
+                atr_pct = sum(ranges[-14:]) / min(14, len(ranges)) / last_close * 100.0
         return realized, atr_pct
 
     def get_market_heatmap(self) -> list[dict]:
