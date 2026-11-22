@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import { LiveMarketChart } from './components/charts/LiveMarketChart'
 import { DashboardScreen } from './screens/DashboardScreens'
-import { setApiToken } from './services/localAuth'
+import { getApiAuthorization, setApiToken } from './services/localAuth'
 import { mutateJson, requestJson } from './services/backendClient'
 import {
   assessMarketData,
@@ -136,6 +136,8 @@ type StartupStatus = {
   details?: string | null
   logPath?: string | null
 }
+
+const API_ORIGIN = 'http://127.0.0.1:8765'
 
 async function invoke<T>(command: string): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
