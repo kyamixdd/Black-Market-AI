@@ -141,7 +141,7 @@ async function invoke<T>(command: string): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
   return tauriInvoke<T>(command)
 }
-const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
+const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '1w']
 const WEBSOCKET_CHANNELS: WebSocketChannel[] = [
   'market_updates',
   'price_updates',
