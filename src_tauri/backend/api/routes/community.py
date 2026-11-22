@@ -57,7 +57,7 @@ class ReportSummary(BaseModel):
     total_trades: int | None = Field(default=None, ge=0, le=1_000_000)
     win_rate_pct: float | None = Field(default=None, ge=0, le=100)
     net_return_pct: float | None = Field(default=None, ge=-100_000, le=100_000)
-    max_drawdown_pct: float | None = Field(default=None, ge=0, le=100)
+    max_drawdown_pct: float | None = Field(default=None, ge=0, le=100_000)
     profit_factor: float | None = Field(default=None, ge=0, le=1_000_000)
     sample_period: str = Field(default="", max_length=120)
 
