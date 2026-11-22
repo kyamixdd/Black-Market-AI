@@ -60,3 +60,16 @@ test('chart key changes for market type and timeframe switches', () => {
   assert.notEqual(spot, marketChartKey('BTCUSDT', 'FUTURES', '1h'))
   assert.notEqual(spot, marketChartKey('BTCUSDT', 'SPOT', '4h'))
 })
+
+test('stale market snapshots degrade readiness and never appear live', () => {
+  const staleSnapshot = {
+    symbol: 'BTCUSDT',
+    market: 'SPOT',
+    price: 101,
+    timestamp: new Date(now - 180_000).toISOString(),
+  }
+  const candles = { candles: [candle(1_735_689_600_000)] }
+  const result = assessMarketData(staleSnapshot, candles, 'BTCUSDT', 'SPOT', now)
+  assert.equal(result.state, 'degraded')
+  assert.equal(result.dataLoaded, true)
+})
