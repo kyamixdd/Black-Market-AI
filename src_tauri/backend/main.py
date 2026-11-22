@@ -448,7 +448,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.exception(
         "Unhandled API exception for %s %s",
         request.method,
-        request.url.path,
+        getattr(request.scope.get("route"), "path", None) or ("/api/unmatched" if request.url.path.startswith("/api") else request.url.path),
         exc_info=(type(exc), exc, exc.__traceback__),
     )
     return JSONResponse(
