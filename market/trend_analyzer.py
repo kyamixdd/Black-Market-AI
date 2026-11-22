@@ -22,8 +22,12 @@ class TrendAnalyzer:
         """Full multi-timeframe analysis."""
         results: dict[str, Any] = {}
         for tf in self.TIMEFRAMES:
-            if not self.candles.has_enough_data(market, symbol, tf, min_count=50):
-                results[tf] = {"status": "insufficient_data"}
+            available = len(self.candles.get_series(market, symbol, tf, limit=200))
+            if available < 200:
+                results[tf] = {
+                    "status": "insufficient_data", "available_candles": available,
+                    "required_candles": 200, "data_completeness_pct": available / 200 * 100,
+                }
                 continue
 
             ohlc = self.candles.get_ohlc(market, symbol, tf, limit=200)
