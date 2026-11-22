@@ -29,3 +29,10 @@ export function requestClientKey(request) {
   const address = request.headers.get("x-real-ip")?.trim() || nearest || "unknown";
   return address.slice(0, 128);
 }
+
+export function isSameOriginMutation(origin, requestUrl) {
+  if (typeof origin !== "string" || !origin) return false;
+  try {
+    return new URL(origin).origin === new URL(requestUrl).origin;
+  } catch { return false; }
+}
