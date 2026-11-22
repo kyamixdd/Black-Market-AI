@@ -1094,6 +1094,7 @@ function CommunityLibraryScreen() {
   const [selected, setSelected] = useState<CommunityStrategy | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
+  const [pendingItemActions, setPendingItemActions] = useState<Set<string>>(() => new Set())
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [key, setKey] = useState('momentum')
@@ -1196,22 +1197,47 @@ function CommunityLibraryScreen() {
     setNotice(`Editing your published strategy. Saving creates version ${item.version + 1}.`)
   }
 
+  const beginItemAction = (publicId: string) => {
+    if (pendingItemActions.has(publicId)) return false
+    setPendingItemActions(current => new Set(current).add(publicId))
+    return true
+  }
+  const finishItemAction = (publicId: string) => {
+    setPendingItemActions(current => {
+      const next = new Set(current)
+      next.delete(publicId)
+      return next
+    })
+  }
+
   const toggleFavorite = async (item: CommunityStrategy) => {
+    if (!beginItemAction(item.public_id)) return
+    const nextFavorite = !item.is_favorite
     try {
-      await mutateJson(`/community/strategies/${item.public_id}/favorite`, 'POST', { favorite: !item.is_favorite })
-      await load()
-      if (selected?.public_id === item.public_id) setSelected({ ...selected, is_favorite: !item.is_favorite })
+      await mutateJson(`/community/strategies/${item.public_id}/favorite`, 'POST', { favorite: nextFavorite })
+      setItems(current => current.map(entry => entry.public_id === item.public_id
+        ? { ...entry, is_favorite: nextFavorite, favorite_count: Math.max(0, entry.favorite_count + (nextFavorite ? 1 : -1)) }
+        : entry))
+      setSelected(current => current?.public_id === item.public_id
+        ? { ...current, is_favorite: nextFavorite, favorite_count: Math.max(0, current.favorite_count + (nextFavorite ? 1 : -1)) }
+        : current)
+      setNotice(nextFavorite ? 'Strategy saved to favorites.' : 'Strategy removed from favorites.')
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to update favorite.')
+    } finally {
+      finishItemAction(item.public_id)
     }
   }
 
   const reportItem = async (item: CommunityStrategy) => {
+    if (!beginItemAction(item.public_id)) return
     try {
       await mutateJson(`/community/strategies/${item.public_id}/report`, 'POST', { reason: 'misleading_results', details: 'Please review this strategy listing.' })
       setNotice('Report submitted for review.')
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to report listing.')
+    } finally {
+      finishItemAction(item.public_id)
     }
   }
 
@@ -1242,8 +1268,8 @@ function CommunityLibraryScreen() {
           <div className="workspace-actions">
             <button className="table-action" onClick={() => void openDetails(item)}>Details</button>
             {item.is_owner && <button className="table-action" onClick={() => editStrategy(item)}>Edit / new version</button>}
-            <button className="table-action" onClick={() => void toggleFavorite(item)}>{item.is_favorite ? '★ Saved' : '☆ Save'} · {item.favorite_count}</button>
-            <button className="table-action" onClick={() => void reportItem(item)}>Report</button>
+            <button className="table-action" disabled={pendingItemActions.has(item.public_id)} aria-pressed={item.is_favorite} onClick={() => void toggleFavorite(item)}>{pendingItemActions.has(item.public_id) ? 'Updating…' : item.is_favorite ? '★ Saved' : '☆ Save'} · {item.favorite_count}</button>
+            <button className="table-action" disabled={pendingItemActions.has(item.public_id)} onClick={() => void reportItem(item)}>{pendingItemActions.has(item.public_id) ? 'Submitting…' : 'Report'}</button>
           </div>
         </article>)}
       </div>
