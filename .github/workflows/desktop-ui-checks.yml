@@ -260,10 +260,19 @@ jobs:
           $uninstaller = Get-ChildItem $appRoot -Filter "uninstall.exe" -File -Recurse | Select-Object -First 1
           if ($uninstaller) { Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait }
           if (Get-Process BlackMarketBackend -ErrorAction SilentlyContinue) { throw "Backend remained running after uninstall." }
-      - name: Upload Windows installer artifact
+      - name: Verify installer version and write provenance manifest
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "blackmarket-desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced." }
+          ./scripts/write_release_manifest.ps1 -InstallerPath $installer.FullName -OutputDirectory "release-output"
+      - name: Upload Windows installer and release metadata
         uses: actions/upload-artifact@v4
         with:
           name: blackmarket-ai-windows-nsis
-          path: blackmarket-desktop/src-tauri/target/release/bundle/nsis/*.exe
+          path: |
+            blackmarket-desktop/src-tauri/target/release/bundle/nsis/*.exe
+            release-output/release-manifest.json
+            release-output/installer.sha256
           if-no-files-found: error
           retention-days: 7
