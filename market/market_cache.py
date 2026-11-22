@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import math
 from datetime import datetime, timezone
 from collections import defaultdict
 
@@ -19,6 +20,7 @@ class MarketCache:
         self._oi: dict[str, dict[str, float]] = defaultdict(dict)
         self._updated_at: dict[str, dict[str, datetime]] = defaultdict(dict)
         self._ticker_updated_at: dict[str, dict[str, datetime]] = defaultdict(dict)
+        self._sources: dict[str, dict[str, str]] = defaultdict(dict)
         self._candle_manager = CandleManager()
 
     @property
@@ -29,14 +31,23 @@ class MarketCache:
         with self._lock:
             self._prices[market][symbol] = price
 
-    def update_ticker(self, market: str, symbol: str, price: float, volume: float, change_pct: float) -> None:
+    def update_ticker(self, market: str, symbol: str, price: float, volume: float,
+                      change_pct: float, source: str = "REST") -> None:
+        try:
+            price_value, volume_value, change_value = float(price), float(volume), float(change_pct)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if (not all(math.isfinite(value) for value in (price_value, volume_value, change_value))
+                or price_value <= 0 or volume_value < 0):
+            return
         with self._lock:
-            self._prices[market][symbol] = price
-            self._volumes[market][symbol] = volume
-            self._changes[market][symbol] = change_pct
+            self._prices[market][symbol] = price_value
+            self._volumes[market][symbol] = volume_value
+            self._changes[market][symbol] = change_value
             now = datetime.now(timezone.utc)
             self._updated_at[market][symbol] = now
             self._ticker_updated_at[market][symbol] = now
+            self._sources[market][symbol] = source.upper()
 
     def update_mark(self, market: str, symbol: str, mark: float, funding: float | None = None) -> None:
         with self._lock:
@@ -83,6 +94,7 @@ class MarketCache:
                 "symbol": symbol,
                 "market": market,
                 "timestamp": self._ticker_updated_at.get(market, {}).get(symbol),
+                "data_source": self._sources.get(market, {}).get(symbol, "UNKNOWN"),
                 "price": price,
                 "volume_24h": self._volumes.get(market, {}).get(symbol),
                 "price_change_24h": self._changes.get(market, {}).get(symbol),
@@ -100,7 +112,8 @@ class MarketCache:
                 {
                     "symbol": symbol,
                     "market": market,
-                    "timestamp": self._updated_at.get(market, {}).get(symbol),
+                    "timestamp": self._ticker_updated_at.get(market, {}).get(symbol),
+                    "data_source": self._sources.get(market, {}).get(symbol, "UNKNOWN"),
                     "price": price,
                     "volume_24h": self._volumes.get(market, {}).get(symbol),
                     "price_change_24h": self._changes.get(market, {}).get(symbol),
