@@ -87,6 +87,12 @@ class Database:
             "trade_history": {
                 "order_id": "VARCHAR(64)",
             },
+            "backtest_reports": {
+                "origin": "VARCHAR(32) NOT NULL DEFAULT 'USER_SUBMITTED'",
+            },
+            "public_strategies": {
+                "source_report_id": "VARCHAR(64)",
+            },
         }
         with self.engine.begin() as connection:
             connection.exec_driver_sql(
