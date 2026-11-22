@@ -1429,3 +1429,62 @@ def test_daily_equity_risk_state_rejects_corrupt_file(tmp_path):
     path.write_text("{invalid", encoding="utf-8")
     with pytest.raises(RuntimeError, match="daily equity risk state"):
         load_daily_equity_state(path)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_limit_order_never_fills_and_duplicate_cancel_is_noop():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-CANCEL-REGRESSION",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    cancelled = await simulator.cancel_limit_order(order_id)
+    assert cancelled is not None
+    assert cancelled["status"] == "CANCELLED"
+    assert order_id not in simulator.open_orders
+    assert await simulator.cancel_limit_order(order_id) is None
+
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 48000.0)
+    assert simulator.spot_positions == {}
+    assert simulator.spot_balance == pytest.approx(simulator.initial_spot_balance)
+
+
+@pytest.mark.asyncio
+async def test_order_id_makes_execution_idempotent_and_blocks_reexecution_after_close():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-IDEMPOTENT-ORDER",
+        "order_id": "ORD-IDEMPOTENT-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    first_position_id = await simulator.execute_signal(signal)
+    assert first_position_id is not None
+    balance_after_open = simulator.spot_balance
+    duplicate_position_id = await simulator.execute_signal(signal)
+    assert duplicate_position_id == first_position_id
+    assert len(simulator.spot_positions) == 1
+    assert simulator.spot_balance == pytest.approx(balance_after_open)
+
+    position = simulator.spot_positions[first_position_id]
+    assert await simulator._close_position(position, 51000.0, "TEST") is True
+    balance_after_close = simulator.spot_balance
+    assert await simulator.execute_signal(signal) is None
+    assert simulator.spot_positions == {}
+    assert len(simulator.closed_trades) == 1
+    assert simulator.spot_balance == pytest.approx(balance_after_close)
