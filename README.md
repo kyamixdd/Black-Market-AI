@@ -140,6 +140,12 @@ Telegram is optional. Leave `TELEGRAM_ENABLED=false` to run the core application
    curl -s "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates" | jq '.result[0].message.chat.id'
    ```
 
+## Supported deployment target
+
+The supported primary product path is the **Tauri desktop application with its supervised local Python backend**. The desktop UI authenticates to the loopback API at `127.0.0.1:8765`; the backend is started and stopped by the desktop supervisor.
+
+The Next.js website and remote-backend configuration are an optional private-preview/deployment path, not the verified primary release target. A hosted deployment must not be described as production-ready until the selected host, backend API authentication, database persistence, market-data freshness, WebSocket/SSE updates, portfolio endpoints, and paper-order rejection paths have been exercised end to end. A successful frontend deployment alone does not verify the hosted backend.
+
 ## Running the Application
 
 ### Desktop Dashboard (Tauri)
