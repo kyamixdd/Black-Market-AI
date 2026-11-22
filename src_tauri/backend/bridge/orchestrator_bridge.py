@@ -242,8 +242,11 @@ class OrchestratorBridge:
                                  "historical_volatility_24h": 25, "atr_14": 15,
                                  "volume_comparison": 21},
             "data_completeness": {
-                key: "READY" if value is not None else "INSUFFICIENT_DATA"
-                for key, value in changes.items()
+                **{key: "READY" if value is not None else "INSUFFICIENT_DATA"
+                   for key, value in changes.items()},
+                "historical_volatility_24h": "READY" if vol is not None else "INSUFFICIENT_DATA",
+                "atr_14": "READY" if atr_pct is not None else "INSUFFICIENT_DATA",
+                "volume_comparison": volume_stats["status"],
             },
         }
 
