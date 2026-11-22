@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthenticated } from "@/lib/session";
+import { verifyCommunityOwnerToken, communityOwnerCookie } from "@/lib/community-owner";
 import { sameOriginMutation, rateLimited, requestClientKey, readLimitedBody } from "@/lib/request-security";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,6 +68,8 @@ async function proxy(request: NextRequest, context: Context) {
   request.nextUrl.searchParams.forEach((value, key) => target.searchParams.append(key, value));
 
   const headers = new Headers({ Authorization: "Bearer " + token, Accept: "application/json" });
+  const communityOwner = verifyCommunityOwnerToken(request.cookies.get(communityOwnerCookie)?.value);
+  if (communityOwner) headers.set("X-BM-Community-Owner", communityOwner);
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("Content-Type", contentType);
   const init: RequestInit = {
