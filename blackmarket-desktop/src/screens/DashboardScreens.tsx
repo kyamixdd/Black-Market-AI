@@ -1082,6 +1082,47 @@ type CommunityStrategy = {
   version_history?: { version: number; created_at: string | null; snapshot: Record<string, unknown> }[]
 }
 
+function normalizeCommunityStrategy(value: unknown): CommunityStrategy | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = value as Record<string, unknown>
+  if (typeof raw.public_id !== 'string' || !raw.public_id.trim() || typeof raw.name !== 'string') return null
+  const stringArray = (input: unknown): string[] => Array.isArray(input) ? input.filter((entry): entry is string => typeof entry === 'string') : []
+  const objectRecord = (input: unknown): Record<string, unknown> => input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : {}
+  const numeric = (input: unknown, fallback = 0): number => typeof input === 'number' && Number.isFinite(input) ? input : fallback
+  const history = Array.isArray(raw.version_history) ? raw.version_history.flatMap(entry => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const version = entry as Record<string, unknown>
+    if (!Number.isInteger(version.version) || Number(version.version) < 1) return []
+    return [{
+      version: Number(version.version),
+      created_at: typeof version.created_at === 'string' ? version.created_at : null,
+      snapshot: { ...objectRecord(version.snapshot) },
+    }]
+  }) : []
+  return {
+    public_id: raw.public_id,
+    name: raw.name,
+    description: typeof raw.description === 'string' ? raw.description : '',
+    strategy_key: typeof raw.strategy_key === 'string' ? raw.strategy_key : 'unknown',
+    rules: objectRecord(raw.rules),
+    supported_assets: stringArray(raw.supported_assets),
+    supported_timeframes: stringArray(raw.supported_timeframes),
+    risk_configuration: objectRecord(raw.risk_configuration) as Record<string, number>,
+    known_limitations: stringArray(raw.known_limitations),
+    backtest_report: objectRecord(raw.backtest_report),
+    report_provenance: typeof raw.report_provenance === 'string' ? raw.report_provenance : 'unknown',
+    report_sha256: typeof raw.report_sha256 === 'string' ? raw.report_sha256 : '',
+    source_report_id: typeof raw.source_report_id === 'string' ? raw.source_report_id : null,
+    reproducibility_status: typeof raw.reproducibility_status === 'string' ? raw.reproducibility_status : undefined,
+    verification_status: typeof raw.verification_status === 'string' ? raw.verification_status : undefined,
+    version: Number.isInteger(raw.version) && Number(raw.version) > 0 ? Number(raw.version) : 1,
+    favorite_count: Math.max(0, Math.floor(numeric(raw.favorite_count))),
+    is_favorite: raw.is_favorite === true,
+    is_owner: raw.is_owner === true,
+    version_history: history,
+  }
+}
+
 function CommunityLibraryScreen() {
   const [items, setItems] = useState<CommunityStrategy[]>([])
   const [query, setQuery] = useState('')
@@ -1119,7 +1160,7 @@ function CommunityLibraryScreen() {
         setNotice('Community library returned an invalid response. Please refresh and try again.')
         return
       }
-      setItems(result.strategies.filter(item => item && typeof item.public_id === 'string' && typeof item.name === 'string'))
+      setItems(result.strategies.flatMap(item => { const normalized = normalizeCommunityStrategy(item); return normalized ? [normalized] : [] }))
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to load community strategies.')
     }
@@ -1177,27 +1218,14 @@ function CommunityLibraryScreen() {
   const openDetails = async (item: CommunityStrategy) => {
     const requestId = ++detailRequestId.current
     try {
-      const detail = await requestJson<CommunityStrategy>(`/community/strategies/${item.public_id}`)
+      const response = await requestJson<unknown>(`/community/strategies/${item.public_id}`)
       if (requestId !== detailRequestId.current) return
-      const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
-      const history = detail?.version_history
-      const validHistory = history == null || (Array.isArray(history) && history.every(version =>
-        version && Number.isInteger(version.version) && version.version > 0 &&
-        (version.created_at == null || typeof version.created_at === 'string') &&
-        isRecord(version.snapshot) &&
-        (version.snapshot.name == null || typeof version.snapshot.name === 'string')))
-      if (!detail || detail.public_id !== item.public_id || typeof detail.name !== 'string' ||
-          typeof detail.description !== 'string' ||
-          !Array.isArray(detail.supported_assets) || !detail.supported_assets.every(value => typeof value === 'string') ||
-          !Array.isArray(detail.supported_timeframes) || !detail.supported_timeframes.every(value => typeof value === 'string') ||
-          !Array.isArray(detail.known_limitations) || !detail.known_limitations.every(value => typeof value === 'string') ||
-          !isRecord(detail.backtest_report) || !isRecord(detail.rules) || !isRecord(detail.risk_configuration) ||
-          typeof detail.report_provenance !== 'string' || typeof detail.report_sha256 !== 'string' ||
-          !validHistory) {
-        setNotice('Strategy details or version history are incomplete or invalid. The details panel was not opened.')
+      const detail = normalizeCommunityStrategy(response)
+      if (!detail || detail.public_id !== item.public_id) {
+        setNotice('Strategy details are incomplete or invalid. The details panel was not opened.')
         return
       }
-      setSelected({ ...detail, version_history: history ?? [] })
+      setSelected(detail)
     } catch (error) {
       if (requestId !== detailRequestId.current) return
       setNotice(error instanceof Error ? error.message : 'Unable to load strategy details.')
