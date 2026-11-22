@@ -162,6 +162,7 @@ const NAV_ITEMS: { label: ScreenName; shortLabel: string; icon: ReactNode }[] = 
   { label: 'Trade History', shortLabel: 'History', icon: <FileClock size={12} /> },
   { label: 'Intelligence', shortLabel: 'Intelligence', icon: <Network size={12} /> },
   { label: 'Learning', shortLabel: 'Learning', icon: <GraduationCap size={12} /> },
+  { label: 'Strategy Lab', shortLabel: 'Strategy Lab', icon: <CandlestickChart size={12} /> },
   { label: 'Risk Management', shortLabel: 'Risk', icon: <ShieldAlert size={12} /> },
   { label: 'Activity', shortLabel: 'Activity', icon: <Activity size={12} /> },
   { label: 'Settings', shortLabel: 'Settings', icon: <Settings2 size={12} /> },
@@ -1364,6 +1365,7 @@ function App() {
           data={data}
           preferences={preferences}
           onPreferencesChange={changePreferences}
+          onStrategyLabRun={async (payload) => mutateJson('/learning/strategy-lab', 'POST', payload)}
           onSettingsSave={async (payload) => {
             await mutateJson('/settings', 'POST', payload)
             refreshScreenDataRef.current?.()
