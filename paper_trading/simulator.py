@@ -400,11 +400,25 @@ class Simulator:
         fee = self.fee_calc.calculate(market, signal["direction"], qty, fill_price, leverage)
         reserved_notional = qty * fill_price if market == "SPOT" else 0.0
         reserved_margin = qty * fill_price / leverage if market == "FUTURES" else 0.0
-        if market == "FUTURES" and reserved_margin + fee > self.futures_balance + 1e-9:
-            logger.warning("Futures order %s exceeds available margin after fees", signal["signal_id"])
+        pending_collateral = 0.0
+        for pending in self.open_orders.values():
+            if pending.get("status") != "OPEN" or pending.get("market") != market:
+                continue
+            pending_notional = float(pending["entry_price"]) * float(pending["amount"])
+            pending_leverage = max(float(pending.get("leverage", 1.0)), 1.0)
+            pending_fee = self.fee_calc.calculate(
+                market, pending["side"], float(pending["amount"]),
+                float(pending["entry_price"]), pending_leverage
+            )
+            pending_collateral += (
+                pending_notional if market == "SPOT" else pending_notional / pending_leverage
+            ) + pending_fee
+        available_after_reservations = balance - pending_collateral
+        if market == "FUTURES" and reserved_margin + fee > available_after_reservations + 1e-9:
+            logger.warning("Futures order %s exceeds available margin after pending-order reservations", signal["signal_id"])
             return None
-        if market == "SPOT" and reserved_notional + fee > self.spot_balance + 1e-9:
-            logger.warning("Spot order %s exceeds available cash after fees", signal["signal_id"])
+        if market == "SPOT" and reserved_notional + fee > available_after_reservations + 1e-9:
+            logger.warning("Spot order %s exceeds available cash after pending-order reservations", signal["signal_id"])
             return None
 
         position_id = f"POS-{uuid.uuid4().hex[:8].upper()}"
