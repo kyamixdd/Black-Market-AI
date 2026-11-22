@@ -1,7 +1,6 @@
 """Deterministic regression tests for Stage 5 analytics."""
 import math
 
-import numpy as np
 
 from market.analytics import (
     breadth_summary, historical_volatility, price_change,
@@ -50,3 +49,13 @@ def test_breadth_sample_counts_only_advancing_declining_neutral():
 
 
 import pytest
+
+def test_candle_manager_rejects_bad_ohlcv_and_reports_missing_intervals():
+    from market.candle_manager import CandleManager
+
+    manager = CandleManager()
+    base = 1_700_000_000_000
+    assert manager.add_candle("SPOT", "BTCUSDT", "1m", base, 100, 102, 99, 101, 5)
+    assert not manager.add_candle("SPOT", "BTCUSDT", "1m", base + 60_000, 100, 98, 99, 101, 5)
+    assert manager.add_candle("SPOT", "BTCUSDT", "1m", base + 180_000, 101, 103, 100, 102, 5)
+    assert manager.detect_missing_candles("SPOT", "BTCUSDT", "1m") == [base + 60_000, base + 120_000]
