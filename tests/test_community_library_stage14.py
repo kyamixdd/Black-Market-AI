@@ -4,6 +4,7 @@ import json
 import uuid
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from database.connection import Database
@@ -100,7 +101,8 @@ def test_favorites_search_and_content_report(monkeypatch, tmp_path):
 
 def test_invalid_strategy_and_risk_fields_are_rejected():
     with pytest.raises(ValidationError):
-        payload().model_copy(update={"strategy_key": "arbitrary python"})
+        community.PublishRequest(name="Invalid", strategy_key="arbitrary python",
+            rules={"entry": "x"}, supported_timeframes=["15m"])
     with pytest.raises(ValidationError):
         community.PublishRequest(name="Bad", strategy_key="momentum",
             rules={"code": "not executable"}, risk_configuration={"account_balance": 999999},
