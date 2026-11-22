@@ -1166,7 +1166,7 @@ function CommunityLibraryScreen() {
           <h3>{item.name}</h3>
           <p>{item.description || 'No description supplied.'}</p>
           <p className="workspace-note">{item.strategy_key.replaceAll('_',' ')} · v{item.version} · {item.supported_timeframes.join(', ')}</p>
-          <p className="workspace-note">Report provenance: <b>USER SUBMITTED</b> · {item.backtest_report?.total_trades ?? '—'} reported trades</p>
+          <p className="workspace-note">Report provenance: <b>USER SUBMITTED</b> · {String(item.backtest_report?.total_trades ?? '—')} reported trades</p>
           <div className="workspace-actions">
             <button className="table-action" onClick={() => void openDetails(item)}>Details</button>
             {item.is_owner && <button className="table-action" onClick={() => editStrategy(item)}>Edit / new version</button>}
@@ -1175,7 +1175,7 @@ function CommunityLibraryScreen() {
           </div>
         </article>)}
       </div>
-      {!items.length && <EmptyState title="No public strategies found" description="Try a different search, or publish a strategy below." />}
+      {!items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
     </section>
     {selected && <section className="workspace-panel">
       <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => setSelected(null)}>Close</button></div>
