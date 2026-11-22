@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
-from ..assistant_intelligence import execute_tool, select_tool, summarize_result, validate_market, validate_symbol
+from ..assistant_intelligence import execute_tool, optional_provider_interpretation, select_tool, summarize_result, validate_market, validate_symbol
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -24,8 +24,12 @@ async def query_assistant(request: AssistantQuery):
         result = await execute_tool(get_bridge(), tool, symbol, market, request.timeframe)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    answer = summarize_result(request.query, result)
+    interpretation = await optional_provider_interpretation(request.query, result)
+    if interpretation:
+        answer += "\\n\\nOptional provider interpretation (not verified facts): " + interpretation
     return {
-        "answer": summarize_result(request.query, result),
+        "answer": answer,
         "tool": result.get("tool"),
         "status": result.get("status"),
         "sources": [result.get("source", "local backend")],
