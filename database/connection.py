@@ -89,6 +89,10 @@ class Database:
             },
         }
         with self.engine.begin() as connection:
+            connection.exec_driver_sql(
+                "CREATE TABLE IF NOT EXISTS schema_migrations "
+                "(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+            )
             inspector = inspect(connection)
             tables = set(inspector.get_table_names())
             preparer = connection.dialect.identifier_preparer
@@ -104,6 +108,10 @@ class Database:
                             f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_name} {definition}"
                         )
                         existing.add(name)
+            connection.exec_driver_sql(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) "
+                "VALUES (1, CURRENT_TIMESTAMP)"
+            )
 
 
     def integrity_check(self) -> str:
