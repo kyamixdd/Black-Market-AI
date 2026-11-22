@@ -1187,7 +1187,8 @@ export function DashboardScreen(props: Props) {
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
-      {screen === 'Community Library' && <CommunityLibraryScreen />}\n      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} data={data} preferences={props.preferences} screen={screen} symbol={props.symbol} marketType={props.marketType} onWorkspaceLoad={props.onWorkspaceLoad} />}
+      {screen === 'Community Library' && <CommunityLibraryScreen />}
+      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} data={data} preferences={props.preferences} screen={screen} symbol={props.symbol} marketType={props.marketType} onWorkspaceLoad={props.onWorkspaceLoad} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
       {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
