@@ -38,6 +38,35 @@ def test_research_api_create_and_restore_workspace(monkeypatch, tmp_path):
     db.close()
 
 
+
+def test_research_api_strategy_and_report_crud(monkeypatch, tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'api-research.db'}")
+    db.init_db()
+    monkeypatch.setattr(research, "get_session_maker", db.session_maker)
+
+    strategy = research.save_strategy(research.StrategyRequest(
+        name="My breakout", strategy_key="breakout",
+        definition={"min_score": 3, "risk_per_trade_pct": 1},
+        tags=["saved"],
+    ))
+    assert strategy["version"] == 1
+    updated = research.update_saved_strategy(strategy["strategy_id"], research.StrategyRequest(
+        name="My breakout v2", strategy_key="breakout",
+        definition={"min_score": 4},
+    ))
+    assert updated["version"] == 2
+    assert research.get_saved_strategy(strategy["strategy_id"])["name"] == "My breakout v2"
+
+    report = research.save_backtest_report(research.ReportRequest(
+        strategy_id=strategy["strategy_id"], strategy_name="breakout",
+        symbol="ETHUSDT", market="SPOT", timeframe="15m",
+        config={"capital": 500}, report={"status": "evaluated", "trades": []},
+    ))
+    assert research.get_backtest_report(report["report_id"])["config"]["capital"] == 500
+    assert research.delete_backtest_report(report["report_id"])["status"] == "deleted"
+    assert research.delete_saved_strategy(strategy["strategy_id"])["status"] == "deleted"
+    db.close()
+
 def test_research_api_rejects_unsupported_strategy_key():
     import pytest
     from pydantic import ValidationError
