@@ -42,12 +42,18 @@ try {
     assert.ok(metrics.rootPresent, `React root did not render at ${width}px`)
     assert.ok(metrics.documentWidth <= width + 1, `Horizontal document overflow at ${width}px: ${JSON.stringify(metrics)}`)
     console.log(`responsive ${width}px: document=${metrics.documentWidth}px body=${metrics.bodyWidth}px`)
+    const openNavigationIfNeeded = async () => {
+      const navigation = page.locator('#application-navigation')
+      if (!(await navigation.isVisible())) {
+        await page.getByRole('button', { name: 'Toggle navigation' }).click()
+      }
+    }
     const marketsTab = page.locator('#application-navigation button[title="Markets"]')
-    await marketsTab.scrollIntoViewIfNeeded()
+    await openNavigationIfNeeded()
     await marketsTab.click()
     assert.equal(await marketsTab.getAttribute('aria-current'), 'page', `Markets navigation failed at ${width}px`)
     const overviewTab = page.locator('#application-navigation button[title="Overview"]')
-    await overviewTab.scrollIntoViewIfNeeded()
+    await openNavigationIfNeeded()
     await overviewTab.click()
     assert.equal(await overviewTab.getAttribute('aria-current'), 'page', `Overview navigation failed at ${width}px`)
   }
