@@ -50,7 +50,7 @@ def performance_by_regime(
         regime = observations[idx][1]
         grouped[regime].append({
             "net_pnl": net, "notional": quantity * entry,
-            "holding_hours": (exit_time - entry_time) / 3_600_000.0,
+            "holding_hours": (exit_time - entry_time) / 3_600_000.0,\n            "entry_time": float(entry_time),
         })
 
     result = {}
