@@ -1180,13 +1180,14 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
         funding_rate: funding === '' ? undefined : Number(funding),
       })
       setResult(data)
+      await reloadSaved()
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
     finally { setBusy(false) }
   }
   const compare = async () => {
     setBusy(true); setError(''); setComparison(null)
     try {
-      setComparison(await onCompare({
+      const compared = await onCompare({
         symbol: symbol.toUpperCase(), market, timeframe,
         start_date: new Date(start + 'T00:00:00Z').toISOString(),
         end_date: new Date(end + 'T23:59:59Z').toISOString(),
@@ -1197,7 +1198,9 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
         slippage_bps: slippage === '' ? undefined : Number(slippage),
         spread_bps: spread === '' ? undefined : Number(spread),
         funding_rate: funding === '' ? undefined : Number(funding),
-      }))
+      })
+      setComparison(compared)
+      await reloadSaved()
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
     finally { setBusy(false) }
   }
