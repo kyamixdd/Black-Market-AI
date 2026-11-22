@@ -99,11 +99,12 @@ class Scanner:
 
         # Rotate through the full eligible universe in bounded batches. This avoids
         # permanently ignoring symbols beyond the first page while controlling REST load.
-        batch_size = self.analysis_symbol_limit
+        batch_size = min(self.analysis_symbol_limit, len(candidates) if self.scan_all_eligible else self.analysis_symbol_limit)
         offset = self._analysis_offsets.get(market, 0)
         if self.scan_all_eligible:
-            selected = (candidates + candidates)[offset:offset + batch_size]
-            self._analysis_offsets[market] = (offset + batch_size) % len(candidates)
+            end = offset + batch_size
+            selected = candidates[offset:end] + candidates[:max(0, end - len(candidates))]
+            self._analysis_offsets[market] = end % len(candidates)
         else:
             selected = candidates[:batch_size]
             self._analysis_offsets[market] = 0
