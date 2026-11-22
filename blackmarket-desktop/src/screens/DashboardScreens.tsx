@@ -1056,7 +1056,9 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   data: WorkspaceData; preferences: DashboardPreferences; screen: ScreenName;
   symbol: string; marketType: 'SPOT' | 'FUTURES'; onWorkspaceLoad: Props['onWorkspaceLoad'];
 }) {
-  const [dna, setDna] = useState<any>(null)\n  const [dnaError, setDnaError] = useState('')\n  const [strategy, setStrategy] = useState('momentum')
+  const [dna, setDna] = useState<any>(null)
+  const [dnaError, setDnaError] = useState('')
+  const [strategy, setStrategy] = useState('momentum')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
   const [timeframe, setTimeframe] = useState('1h')
@@ -1097,7 +1099,12 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     setSavedReports(reports?.reports ?? [])
     setSavedWorkspaces(workspaces?.workspaces ?? [])
   }
-  useEffect(() => { void reloadSaved() }, [])\n  useEffect(() => {\n    let active = true\n    requestJson<any>('/learning/strategy-dna').then(value => { if (active) setDna(value) }).catch(error => { if (active) setDnaError(error instanceof Error ? error.message : 'Strategy DNA unavailable') })\n    return () => { active = false }\n  }, [])
+  useEffect(() => { void reloadSaved() }, [])
+  useEffect(() => {
+    let active = true
+    requestJson<any>('/learning/strategy-dna').then(value => { if (active) setDna(value) }).catch(error => { if (active) setDnaError(error instanceof Error ? error.message : 'Strategy DNA unavailable') })
+    return () => { active = false }
+  }, [])
   const saveCurrentStrategy = async () => {
     try {
       const saved = await mutateJson<any>('/research/strategies', 'POST', {
