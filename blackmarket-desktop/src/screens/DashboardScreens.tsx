@@ -1058,6 +1058,7 @@ function CommunityLibraryScreen() {
   const [assetFilter, setAssetFilter] = useState('')
   const [timeframeFilter, setTimeframeFilter] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [showFavorites, setShowFavorites] = useState(false)
   const [sort, setSort] = useState('recent')
   const [selected, setSelected] = useState<CommunityStrategy | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1077,7 +1078,7 @@ function CommunityLibraryScreen() {
     if (strategyKey) params.set('strategy_key', strategyKey)
     if (assetFilter) params.set('asset', assetFilter.toUpperCase())
     if (timeframeFilter) params.set('timeframe', timeframeFilter)
-    const result = await requestJson<{ strategies: CommunityStrategy[] }>(`/community/strategies?${params.toString()}`)
+    const result = await requestJson<{ strategies: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
     if (result) setItems(result.strategies ?? [])
   }
   useEffect(() => { void load() }, [query, strategyKey, sort])
@@ -1154,6 +1155,7 @@ function CommunityLibraryScreen() {
           <option value="">All strategy types</option>
           {['momentum','breakout','trend_following','mean_reversion','reversal'].map(value => <option key={value} value={value}>{value.replaceAll('_',' ')}</option>)}
         </select>
+        <button className="table-action" onClick={() => setShowFavorites(value => !value)}>{showFavorites ? 'All strategies' : 'Saved strategies'}</button>
         <input className="workspace-search" aria-label="Filter by asset" placeholder="Asset (BTCUSDT)" value={assetFilter} onChange={event => setAssetFilter(event.target.value)} />
         <input className="workspace-search" aria-label="Filter by timeframe" placeholder="Timeframe (15m)" value={timeframeFilter} onChange={event => setTimeframeFilter(event.target.value)} />
         <select className="workspace-search" aria-label="Sort strategies" value={sort} onChange={event => setSort(event.target.value)}>
@@ -1166,7 +1168,7 @@ function CommunityLibraryScreen() {
           <h3>{item.name}</h3>
           <p>{item.description || 'No description supplied.'}</p>
           <p className="workspace-note">{item.strategy_key.replaceAll('_',' ')} · v{item.version} · {item.supported_timeframes.join(', ')}</p>
-          <p className="workspace-note">Report provenance: <b>USER SUBMITTED</b> · {String(item.backtest_report?.total_trades ?? '—')} reported trades</p>
+          <p className="workspace-note">Report provenance: <b>USER SUBMITTED</b> · {String(item.backtest_report?.total_trades ?? '—')} reported trades · win rate {String(item.backtest_report?.win_rate_pct ?? '—')}% · return {String(item.backtest_report?.net_return_pct ?? '—')}% · drawdown {String(item.backtest_report?.max_drawdown_pct ?? '—')}%</p>
           <div className="workspace-actions">
             <button className="table-action" onClick={() => void openDetails(item)}>Details</button>
             {item.is_owner && <button className="table-action" onClick={() => editStrategy(item)}>Edit / new version</button>}
@@ -1181,6 +1183,7 @@ function CommunityLibraryScreen() {
       <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => setSelected(null)}>Close</button></div>
       <p>{selected.description}</p>
       <p className="workspace-note">Shared report: USER_SUBMITTED · SHA-256 {selected.report_provenance === 'USER_SUBMITTED' ? 'integrity digest stored' : 'provenance unavailable'}. User-submitted metrics are not independently verified.</p>
+      <h3>Submitted backtest summary</h3><pre className="workspace-code">{JSON.stringify(selected.backtest_report, null, 2)}</pre>
       <h3>Rules</h3><pre className="workspace-code">{JSON.stringify(selected.rules, null, 2)}</pre>
       <h3>Risk configuration</h3><pre className="workspace-code">{JSON.stringify(selected.risk_configuration, null, 2)}</pre>
       <h3>Known limitations</h3><ul>{selected.known_limitations.map((item, i) => <li key={i}>{item}</li>)}</ul>
