@@ -469,13 +469,29 @@ class MarketHeatmapResponse(BaseModel):
     heatmap: list[MarketHeatmapItemResponse]
 
 
-class MarketBreadthResponse(BaseModel):
+class MarketBreadthMarketResponse(BaseModel):
     advancing: int
     declining: int
     neutral: int
-    total_volume: float
+    sample_size: int
+    advance_pct: float | None = None
+    decline_pct: float | None = None
+    neutral_pct: float | None = None
+    advance_decline_ratio: float | None = None
+    status: str
+    total_quote_volume_24h: float | None = None
+    sample_coverage: int
+
+
+class MarketBreadthResponse(BaseModel):
+    markets: dict[str, MarketBreadthMarketResponse]
+    sample_size: int
+    scope: str
+    total_quote_volume_24h: float | None = None
     avg_spread_bps: float | None = None
     avg_orderbook_imbalance: float | None = None
+    spread_status: str | None = None
+    orderbook_status: str | None = None
 
 
 class VolumeResponse(BaseModel):
