@@ -107,6 +107,9 @@ def test_invalid_strategy_and_risk_fields_are_rejected():
         community.PublishRequest(name="Bad", strategy_key="momentum",
             rules={"code": "not executable"}, risk_configuration={"account_balance": 999999},
             supported_timeframes=["15m"])
+    with pytest.raises(ValidationError):
+        community.PublishRequest(name="Leak", strategy_key="momentum",
+            rules={"api_key": "secret"}, supported_timeframes=["15m"])
 
 
 def test_public_record_contains_no_account_or_trade_history_fields(monkeypatch, tmp_path):
