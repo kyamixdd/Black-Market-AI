@@ -9,6 +9,29 @@
 - Classification: desktop beta candidate; website private preview
 - Latest reviewed CI: [run #605](https://github.com/kyamixdd/Black-Market-AI/actions/runs/45055409152), successful
 
+## Engineering assessment
+
+Overall score: **7.6 / 10 — advanced beta, not public-release ready**
+
+The score weights implementation completeness, correctness evidence, security, operability and release readiness. UI appearance is not used as a substitute for working backend behavior. This is a source-and-CI assessment; live hosted operation and profitability are not scored as verified.
+
+| Area | Score |
+|---|---:|
+| Frontend and shared UI | 8.2/10 |
+| Desktop packaging and lifecycle | 8.0/10 |
+| Backend/API architecture | 7.8/10 |
+| Market data and analytics | 7.5/10 |
+| Paper trading and risk | 7.8/10 |
+| Strategy research and backtesting | 7.5/10 |
+| Learning and model lifecycle | 7.3/10 |
+| Persistence and recovery | 8.0/10 |
+| Security controls | 7.0/10 |
+| CI and automated verification | 8.5/10 |
+| Hosted deployment readiness | 4.5/10 |
+| Public release readiness | 5.5/10 |
+
+The lower hosted and release scores reflect the private-preview authentication model, unverified live backend/persistence, missing root license, and remaining manual installer acceptance. The overall score is not a financial-performance rating.
+
 ## Product paths
 
 ### Tauri desktop
