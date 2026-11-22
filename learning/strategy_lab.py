@@ -195,7 +195,8 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
                 if config.market == "FUTURES" and config.funding_rate is not None:
                     hours = (bar["open_time"] - position["entry_time"]) / 3600000.0
                     funding = position["quantity"] * position["entry_fill"] * _number(config.funding_rate, "funding_rate") * int(hours // 8) * (1 if long_side else -1)
-                exit_slippage = abs(exit_fill - raw_exit) * position["quantity"] * (slip_bps / (spread_bps / 2.0 + slip_bps) if spread_bps / 2.0 + slip_bps else 0.0)\n                exit_spread = raw_exit * spread_bps / 20000.0 * position["quantity"]\n                total_cost = position["entry_fee"] + exit_fee + position["entry_slippage"] + exit_slippage + position["entry_spread"] + exit_spread + funding
+                exit_slippage = abs(exit_fill - raw_exit) * position["quantity"] * (slip_bps / (spread_bps / 2.0 + slip_bps) if spread_bps / 2.0 + slip_bps else 0.0)
+                exit_spread = raw_exit * spread_bps / 20000.0 * position["quantity"]\n                total_cost = position["entry_fee"] + exit_fee + position["entry_slippage"] + exit_slippage + position["entry_spread"] + exit_spread + funding
                 net = gross - total_cost
                 equity += net
                 trades.append({
