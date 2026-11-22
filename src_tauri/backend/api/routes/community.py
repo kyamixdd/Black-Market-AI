@@ -27,6 +27,20 @@ def _owner(value: str | None) -> str:
         raise HTTPException(status_code=401, detail="Community identity is unavailable. Sign in again.")
     return value
 
+def _reject_private_fields(value: Any, path: str = "rules") -> Any:
+    forbidden_fragments = ("apikey", "secret", "credential", "private", "tradehistory",
+                          "personalsettings", "accountbalance", "walletbalance", "accesstoken")
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if any(fragment in normalized for fragment in forbidden_fragments):
+                raise ValueError(f"{path} contains a private field name: {key}")
+            _reject_private_fields(nested, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _reject_private_fields(nested, f"{path}[{index}]")
+    return value
+
 
 def _valid_json(value: Any, label: str, limit: int = 100_000):
     try:
@@ -71,7 +85,8 @@ class PublishRequest(BaseModel):
     @field_validator("rules")
     @classmethod
     def rules_safe(cls, value):
-        return _valid_json(value, "Strategy rules", 100_000)
+        _valid_json(value, "Strategy rules", 100_000)
+        return _reject_private_fields(value)
 
     @field_validator("supported_assets")
     @classmethod
