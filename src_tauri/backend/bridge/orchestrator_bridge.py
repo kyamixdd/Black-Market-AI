@@ -33,6 +33,19 @@ class OrchestratorBridge:
         self._candle_refresh_at: dict[tuple[str, str, str], float] = {}
         self._analytics_cache: dict[tuple[str, str], tuple[float, dict]] = {}
 
+
+    def get_market_data_status(self) -> dict:
+        """Expose a stable aggregate market-data health contract."""
+        markets = {market: self.orch.cache.get_data_status(market)
+                  for market in ("SPOT", "FUTURES")}
+        scanner = getattr(self.orch, "scanner", None)
+        websocket = getattr(scanner, "websocket_manager", None)
+        stream_status = websocket.status_snapshot() if websocket is not None else {
+            "state": "UNAVAILABLE", "last_message_ms": None,
+            "message_age_ms": None, "reconnect_attempts": 0, "active_streams": 0}
+        return {"markets": markets, "websocket": stream_status,
+                "checked_at": datetime.now(timezone.utc).isoformat()}
+
     # ===== Market Data =====
 
     def get_market_snapshot(self, symbol: str, market: str) -> dict | None:
