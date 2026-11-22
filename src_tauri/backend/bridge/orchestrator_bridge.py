@@ -15,6 +15,7 @@ from core.event_bus import EventBus
 from core.event_models import EventType
 from database.repositories import Repository
 from market.candle_manager import CandleManager
+from market.analytics import breadth_summary, historical_volatility, volume_comparison
 
 logger = logging.getLogger(__name__)
 
@@ -776,23 +777,31 @@ class OrchestratorBridge:
         return realized, atr_pct
 
     def get_market_heatmap(self) -> list[dict]:
-        """Return ticker heatmap enriched with measured 24h candle volatility."""
+        """Return ticker heatmap with market-scoped relative strength and measured volatility."""
         snapshots = [item for item in self.get_all_market_snapshots()
                      if item.get("price") is not None and item.get("volume_24h") is not None
                      and item.get("price_change_24h") is not None]
         if not snapshots:
             return []
-        average_change = sum(item["price_change_24h"] for item in snapshots) / len(snapshots)
-        volumes = sorted(item["volume_24h"] for item in snapshots)
+        benchmark_by_market: dict[str, list[float]] = {}
+        for item in snapshots:
+            benchmark_by_market.setdefault(item["market"], []).append(float(item["price_change_24h"]))
+        average_by_market = {
+            market: sum(changes) / len(changes) for market, changes in benchmark_by_market.items() if changes
+        }
+        volumes = sorted(float(item["volume_24h"]) for item in snapshots)
         result = []
         for item in snapshots:
-            rank = sum(1 for volume in volumes if volume <= item["volume_24h"])
             volatility, atr = self._volatility_metrics(item["market"], item["symbol"])
+            market_sample = len(benchmark_by_market.get(item["market"], []))
+            rank = sum(1 for volume in volumes if volume <= float(item["volume_24h"]))
             result.append({
                 "symbol": item["symbol"], "market": item["market"],
                 "price_change_24h": item["price_change_24h"], "volume_24h": item["volume_24h"],
                 "price": item["price"], "regime": item.get("regime") or "UNKNOWN",
-                "relative_strength_pct": item["price_change_24h"] - average_change,
+                "relative_strength_pct": float(item["price_change_24h"]) - average_by_market[item["market"]],
+                "relative_strength_benchmark": "mean 24h change of cached eligible tickers in same market",
+                "relative_strength_sample_size": market_sample,
                 "volume_rank_pct": rank / len(volumes) * 100,
                 "volatility_24h_pct": volatility, "atr_24h_pct": atr,
                 "data_age_seconds": item.get("data_age_seconds"),
@@ -803,23 +812,22 @@ class OrchestratorBridge:
     # ===== Market Breadth =====
 
     def get_market_breadth(self) -> dict:
-        """Get market breadth statistics."""
+        """Return advance/decline breadth for the currently cached market universe."""
         snapshots = self.get_all_market_snapshots()
-        snapshots = [s for s in snapshots if s.get("price_change_24h") is not None]
-        advancing = sum(1 for s in snapshots if s["price_change_24h"] > 0)
-        declining = sum(1 for s in snapshots if s["price_change_24h"] < 0)
-        neutral = sum(1 for s in snapshots if s["price_change_24h"] == 0)
-        total_volume = sum(s.get("volume_24h") or 0 for s in snapshots)
-        spreads = [s["bid_ask_spread"] for s in snapshots if s.get("bid_ask_spread") is not None]
-        imbalances = [s["orderbook_imbalance"] for s in snapshots if s.get("orderbook_imbalance") is not None]
-
+        valid = [s for s in snapshots if s.get("price_change_24h") is not None
+                 and math.isfinite(float(s["price_change_24h"]))]
+        summary = breadth_summary(float(s["price_change_24h"]) for s in valid)
+        total_volume = sum(float(s.get("volume_24h") or 0) for s in valid
+                           if math.isfinite(float(s.get("volume_24h") or 0)))
         return {
-            "advancing": advancing,
-            "declining": declining,
-            "neutral": neutral,
-            "total_volume": total_volume,
-            "avg_spread_bps": sum(spreads) / len(spreads) if spreads else None,
-            "avg_orderbook_imbalance": sum(imbalances) / len(imbalances) if imbalances else None,
+            **summary,
+            "total_volume": total_volume if valid else None,
+            "scope": "cached eligible tickers; SPOT and FUTURES are counted separately",
+            "sample_coverage": len(valid),
+            "avg_spread_bps": None,
+            "avg_orderbook_imbalance": None,
+            "spread_status": "UNAVAILABLE: no live order-book depth sample",
+            "orderbook_status": "UNAVAILABLE: no live order-book depth sample",
         }
 
     # ===== Volume =====
