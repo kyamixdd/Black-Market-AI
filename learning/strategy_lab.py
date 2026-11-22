@@ -187,7 +187,7 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
                 if stop_hit and ((long_side and bar["open"] < position["stop_loss"]) or (not long_side and bar["open"] > position["stop_loss"])):
                     raw_exit = bar["open"]
                 direction = -1 if long_side else 1
-                exit_fill = raw_exit * (1 + direction * (spread_bps / 2.0 + slip_bps) / 10000.0
+                exit_fill = raw_exit * (1 + direction * (spread_bps / 2.0 + slip_bps) / 10000.0)
                 notional_exit = position["quantity"] * exit_fill
                 exit_fee = notional_exit * fee_rate
                 gross = (raw_exit - position["entry_price"]) * position["quantity"] * (1 if long_side else -1)
@@ -201,8 +201,8 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
                 trades.append({
                     **position, "exit_time": bar["close_time"], "exit_price": raw_exit, "exit_fill": exit_fill,
                     "gross_pnl": gross, "net_pnl": net, "fees": position["entry_fee"] + exit_fee,
-                    "slippage": position["entry_slippage"] + position["exit_slippage"],
-                    "spread": position["entry_spread"] + position["exit_spread"], "funding": funding,
+                    "slippage": position["entry_slippage"] + exit_slippage,
+                    "spread": position["entry_spread"] + exit_spread, "funding": funding,
                     "close_reason": exit_reason, "bars_held": bars_in_position, "status": "CLOSED",
                 })
                 position = None
