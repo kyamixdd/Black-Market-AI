@@ -1395,6 +1395,24 @@ function App() {
           onPreferencesChange={changePreferences}
           onStrategyLabRun={async (payload) => mutateJson('/learning/strategy-lab', 'POST', payload)}
           onStrategyLabCompare={async (payload) => mutateJson('/learning/strategy-lab/compare', 'POST', { ...payload, strategies: ['momentum', 'breakout', 'trend_following', 'mean_reversion', 'reversal'] })}
+          onWorkspaceLoad={(workspace) => {
+            const payload = workspace?.payload
+            if (!payload || typeof payload !== 'object') return
+            if (payload.dashboardData && typeof payload.dashboardData === 'object') {
+              setData((current) => ({ ...current, ...payload.dashboardData }))
+            }
+            if (payload.preferences && typeof payload.preferences === 'object') {
+              changePreferences(payload.preferences as DashboardPreferences)
+            }
+            if (typeof payload.symbol === 'string' && /^[A-Z0-9]{3,20}$/i.test(payload.symbol)) {
+              setSymbol(payload.symbol.toUpperCase())
+              setSearchValue(payload.symbol.toUpperCase())
+            }
+            if (payload.marketType === 'SPOT' || payload.marketType === 'FUTURES') setMarketType(payload.marketType)
+            if (typeof payload.screen === 'string' && ['Overview','Markets','AI Signals','Market Analysis','Portfolio','Positions','Trade History','Intelligence','Learning','Strategy Lab','Risk Management','Activity','Settings'].includes(payload.screen)) {
+              setActiveScreen(payload.screen as ScreenName)
+            }
+          }}
           onSettingsSave={async (payload) => {
             await mutateJson('/settings', 'POST', payload)
             refreshScreenDataRef.current?.()
