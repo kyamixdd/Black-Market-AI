@@ -18,8 +18,12 @@ class MomentumAnalyzer:
         losses = np.where(diff < 0, -diff, 0.0)
         avg_gain = np.mean(gains[-period:])
         avg_loss = np.mean(losses[-period:])
+        if avg_gain == 0 and avg_loss == 0:
+            return 50.0
         if avg_loss == 0:
             return 100.0
+        if avg_gain == 0:
+            return 0.0
         rs = avg_gain / avg_loss
         return float(100.0 - (100.0 / (1.0 + rs)))
 
