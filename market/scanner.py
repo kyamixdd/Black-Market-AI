@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import time
 import logging
 from asyncio import Semaphore
 
@@ -11,6 +13,7 @@ from exchange.futures_client import FuturesClient
 from exchange.spot_client import SpotClient
 from exchange.symbol_registry import SymbolRegistry
 from market.market_cache import MarketCache
+from market.data_reliability import valid_price, valid_volume
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +116,15 @@ class Scanner:
             change = float(payload.get("P", payload.get("priceChangePercent", 0)))
         except (TypeError, ValueError):
             return
-        if price > 0 and volume >= 0:
-            self.cache.update_ticker(market, str(symbol), price, volume, change)
+        try:
+            event_time_ms = int(payload.get("E", 0))
+        except (TypeError, ValueError, OverflowError):
+            return
+        now_ms = int(time.time() * 1000)
+        if event_time_ms and (event_time_ms > now_ms + 5_000 or event_time_ms < now_ms - 120_000):
+            return
+        if valid_price(price) and valid_volume(volume) and math.isfinite(change):
+            self.cache.update_ticker(market, str(symbol), price, volume, change, source="WEBSOCKET")
 
     async def _refresh_stream_subscriptions(self, market: str) -> None:
         if self.websocket_manager is None:
@@ -152,9 +162,9 @@ class Scanner:
                     price = float(ticker.get("lastPrice", 0))
                     volume = float(ticker.get("quoteVolume", 0))
                     change = float(ticker.get("priceChangePercent", 0))
-                    if price <= 0:
+                    if not valid_price(price) or not valid_volume(volume) or not math.isfinite(change):
                         continue
-                    self.cache.update_ticker(market, symbol, price, volume, change)
+                    self.cache.update_ticker(market, symbol, price, volume, change, source="REST")
                 await self._refresh_stream_subscriptions(market)
                 await self.event_bus.publish(make_event(
                     EventType.MARKET_SNAPSHOT, "scanner", market=market,

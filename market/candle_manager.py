@@ -6,6 +6,8 @@ from collections import defaultdict
 
 import numpy as np
 
+from market.data_reliability import valid_symbol, validate_candle
+
 logger = logging.getLogger(__name__)
 
 # Timeframe in seconds
@@ -39,8 +41,13 @@ class CandleManager:
                    open_time: int, open_: float, high: float, low: float,
                    close: float, volume: float, close_time: int | None = None) -> bool:
         """Add a candle, deduplicate by open_time. Returns True if added, False if duplicate."""
-        key = (market, symbol, timeframe)
+        if market not in {"SPOT", "FUTURES"} or not valid_symbol(symbol) or timeframe not in TIMEFRAME_SECONDS:
+            return False
+        effective_close_time = close_time if close_time is not None else open_time + TIMEFRAME_SECONDS[timeframe] * 1000 - 1
+        if not validate_candle(open_time, open_, high, low, close, volume, effective_close_time):
+            return False
 
+        key = (market, symbol, timeframe)
         series = self._candles[key]
         index = self._find_candle_index(series, open_time)
         if index < len(series) and series[index]["open_time"] == open_time:
@@ -49,7 +56,7 @@ class CandleManager:
         candle = {
             "open_time": open_time, "open": open_, "high": high,
             "low": low, "close": close, "volume": volume,
-            "close_time": close_time or open_time + TIMEFRAME_SECONDS.get(timeframe, 60) * 1000 - 1,
+            "close_time": effective_close_time,
         }
         series.insert(index, candle)
 
@@ -61,10 +68,17 @@ class CandleManager:
                               open_time: int, open_: float, high: float, low: float,
                               close: float, volume: float, close_time: int | None = None) -> bool:
         """Replace the current unclosed candle when a REST refresh has newer values."""
+        if market not in {"SPOT", "FUTURES"} or not valid_symbol(symbol) or timeframe not in TIMEFRAME_SECONDS:
+            return False
+        effective_close_time = close_time if close_time is not None else open_time + TIMEFRAME_SECONDS[timeframe] * 1000 - 1
+        if not validate_candle(open_time, open_, high, low, close, volume, effective_close_time):
+            return False
         key = (market, symbol, timeframe)
         series = self._candles.get(key, [])
         index = self._find_candle_index(series, open_time)
         if index >= len(series) or series[index]["open_time"] != open_time:
+            return False
+        if effective_close_time < series[index]["close_time"]:
             return False
         series[index] = {
             "open_time": open_time,
@@ -73,7 +87,7 @@ class CandleManager:
             "low": low,
             "close": close,
             "volume": volume,
-            "close_time": close_time or open_time + TIMEFRAME_SECONDS.get(timeframe, 60) * 1000 - 1,
+            "close_time": effective_close_time,
         }
         return True
 
@@ -88,12 +102,12 @@ class CandleManager:
         tf_seconds = TIMEFRAME_SECONDS.get(timeframe, 60)
         expected_interval_ms = tf_seconds * 1000
         missing = []
-
-        for i in range(1, min(len(series), expected_count)):
-            expected_time = series[-i]["open_time"] + expected_interval_ms
-            actual_time = series[-(i + 1)]["open_time"]
-            if actual_time != expected_time:
-                missing.append(expected_time)
+        recent = series[-max(2, expected_count):]
+        for previous, current in zip(recent, recent[1:]):
+            gap = current["open_time"] - previous["open_time"]
+            if gap > expected_interval_ms:
+                missing.extend(range(previous["open_time"] + expected_interval_ms,
+                                    current["open_time"], expected_interval_ms))
 
         return missing
 
