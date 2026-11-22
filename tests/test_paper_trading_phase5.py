@@ -1489,6 +1489,13 @@ async def test_order_id_makes_execution_idempotent_and_blocks_reexecution_after_
     assert len(simulator.closed_trades) == 1
     assert simulator.spot_balance == pytest.approx(balance_after_close)
 
+    restored = Simulator(EventBus())
+    restored.restore_state(simulator.get_state_snapshot())
+    restored_balance = restored.spot_balance
+    assert await restored.execute_signal(signal) is None
+    assert restored.spot_balance == pytest.approx(restored_balance)
+    assert len(restored.closed_trades) == 1
+
 
 @pytest.mark.asyncio
 async def test_order_cancellation_emits_trade_cancelled_event():
