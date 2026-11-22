@@ -752,6 +752,9 @@ class OrchestratorBridge:
                 total_risk += risk
             else:
                 unmeasured_positions += 1
+        for order in sim.open_orders.values():
+            if order.get("status") == "OPEN" and order.get("stop_loss"):
+                total_risk += abs(order["entry_price"] - order["stop_loss"]) * order["amount"]
 
         exposure_pct = (total_risk / total_balance * 100) if total_balance > 0 else 0
         daily_loss_pct = abs(min(0, daily_pnl)) / daily_baseline * 100 if daily_baseline > 0 else 0
@@ -778,6 +781,8 @@ class OrchestratorBridge:
             "risk_per_trade_pct": manager.max_risk_pct,
             "max_daily_loss_pct": manager.max_daily_loss_pct,
             "max_total_open_pct": manager.max_open_risk_pct,
+            "max_position_size_pct": manager.max_position_size_pct,
+            "max_asset_exposure_pct": manager.max_asset_exposure_pct,
             "unmeasured_positions": unmeasured_positions,
         }
 
