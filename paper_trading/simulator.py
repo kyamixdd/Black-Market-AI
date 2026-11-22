@@ -767,7 +767,12 @@ class Simulator:
 
     # --- Limit Order Handling ---
     async def place_limit_order(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
-        """Place a simulated limit order."""
+        """Serialize risk validation and pending-order reservation."""
+        async with self._account_lock:
+            return await self._place_limit_order_locked(signal, quantity_override)
+
+    async def _place_limit_order_locked(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
+        """Place a simulated limit order while holding the account lock."""
         ok, reason = self.validate_new_position(signal, quantity_override)
         if not ok:
             logger.warning("Limit order %s risk check failed: %s", signal["signal_id"], reason)
