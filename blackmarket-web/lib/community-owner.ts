@@ -18,7 +18,7 @@ export function createCommunityOwnerToken() {
 export function verifyCommunityOwnerToken(value?: string) {
   if (typeof value !== "string" || value.length > 256) return null;
   const [id, signature, extra] = value.split(".");
-  if (extra !== undefined || !/^[a-f0-9-]{36}$/i.test(id || "") || !signature) return null;
+  if (extra !== undefined || !id || !signature || !/^[a-f0-9-]{36}$/i.test(id)) return null;
   try {
     const expected = Buffer.from(sign(id));
     const actual = Buffer.from(signature);
