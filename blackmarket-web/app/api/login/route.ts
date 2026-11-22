@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { makeSession, passwordMatches, sessionCookie, sessionMaxAgeSeconds } from "@/lib/session";
 import { rateLimited, sameOriginMutation, requestClientKey, readLimitedBody } from "@/lib/request-security";
+import { createCommunityOwnerToken, verifyCommunityOwnerToken, communityOwnerCookie, communityOwnerMaxAgeSeconds } from "@/lib/community-owner";
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
@@ -30,6 +31,16 @@ export async function POST(request: NextRequest) {
       path: "/",
       maxAge: sessionMaxAgeSeconds,
     });
+    const existingOwner = verifyCommunityOwnerToken(request.cookies.get(communityOwnerCookie)?.value);
+    if (!existingOwner) {
+      response.cookies.set(communityOwnerCookie, createCommunityOwnerToken(), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "strict",
+        path: "/",
+        maxAge: communityOwnerMaxAgeSeconds,
+      });
+    }
     return response;
   } catch {
     return NextResponse.json({ error: "Authentication is not configured correctly" }, { status: 503 });
