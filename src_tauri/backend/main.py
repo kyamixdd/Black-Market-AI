@@ -203,6 +203,8 @@ async def request_observability(request: Request, call_next):
     status_code = 500
     try:
         response = await call_next(request)
+        route = request.scope.get("route")
+        safe_path = getattr(route, "path", None) or safe_path
         status_code = response.status_code
         response.headers["X-Request-ID"] = request_id
         return response
