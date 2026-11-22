@@ -1,7 +1,7 @@
 # Security Policy and Threat Model
 
-Last reviewed: 22 November 2026  
-Target: `black-market-ai-beta` (audited head `db3fc448af100236efac42ee8ed8e2fbe6a162d7`)
+Last reviewed: 23 November 2026  
+Target: `black-market-ai-beta` (source reviewed at `ee602590442d9d29060d525e1aff5539dc42f01c`; documentation snapshot `c9e488f14814b670308574582c6e7cb175c2b51b`)
 
 ## Security scope
 
