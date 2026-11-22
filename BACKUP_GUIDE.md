@@ -1,78 +1,76 @@
-# BlackMarket AI — Backup and Recovery
+# Backup and Recovery
 
-Last reviewed: 22 November 2026
+## Data locations
 
-This guide covers local application data for the Tauri desktop and Python/terminal modes. The installed desktop uses a per-user application-data directory; it does not necessarily use the repository's `data/` folder. Use the app's startup diagnostics/logs and configured `BLACKMARKET_CONFIG_DIR` / database path to identify the active locations.
+The Tauri desktop stores application data in a per-user application-data directory. The Python/terminal path may use a configured project or user data directory. The active database location is determined by the runtime configuration, including `BLACKMARKET_CONFIG_DIR` and the configured database path.
 
-## What to preserve
+## Data included in a backup
 
-- SQLite database and any SQLite sidecar files present while the application is running (for example, WAL/SHM files).
+- SQLite database and required SQLite sidecar files.
 - Compressed application-created backups.
 - Model artifacts and model registry data.
-- User configuration and settings files.
-- Logs needed to diagnose a failed recovery.
+- Application settings and configuration.
+- Relevant logs for incident diagnosis.
 
-The database and backups are not encrypted by the application. Protect copies with OS disk encryption, filesystem permissions, and secure storage.
+SQLite databases and backup archives are not encrypted by the application. Apply OS-level disk encryption and restrictive filesystem permissions.
 
-## Automatic backup behavior
+## Automatic backup
 
-The recovery subsystem creates verified compressed SQLite backups according to the configured backup schedule and on graceful shutdown. The development progress log records a six-hour backup interval and retention of up to 30 backups for the verified desktop configuration. Actual backup location and retention can vary with the configured application-data path; verify the current configuration and logs before relying on a schedule.
+The recovery subsystem creates verified compressed SQLite backups according to the configured schedule and during graceful shutdown. The development log records a six-hour interval and retention of up to 30 backups for the verified desktop configuration. Actual locations and retention depend on runtime configuration.
 
-Do not assume a backup completed just because the application exited. Check the latest backup timestamp and integrity result.
+Backup completion should be confirmed from the backup timestamp and integrity result.
 
-## Safe manual backup
+## Manual backup
 
-**Preferred:** close BlackMarket AI normally and confirm its backend has stopped, then copy the database and required model/configuration directories to a protected backup location.
+1. Exit the application normally.
+2. Confirm the managed backend process has stopped.
+3. Copy the database and relevant model/configuration directories to protected storage.
+4. Preserve any SQLite sidecar files present at shutdown.
+5. Verify the copied database before relying on it.
 
-For a database that is actively in use, do not copy only the main `.db` file with a basic file-copy command. Use SQLite's online backup API or the application's verified backup mechanism so the copy is transactionally consistent.
+For an active database, use SQLite's online backup API or the application's verified backup mechanism. A basic copy of the main database file alone may not capture a consistent transaction state.
 
-Keep at least one backup on a separate storage device. Do not include secrets in a cloud or shared archive unless it is encrypted and access-controlled.
+## Backup validation
 
-## Verify a backup
-
-Use SQLite against a copy of the backup:
+Run an integrity check against a copy:
 
 ```bash
 sqlite3 path/to/backup.db "PRAGMA integrity_check;"
 ```
 
-Expected output is `ok`. Also check that important tables can be queried and that the file corresponds to the expected application date/version. A successful integrity check alone does not prove all application-level records are correct.
+Expected output: `ok`.
+
+An integrity check verifies database structure; application-level record completeness requires additional checks.
 
 ## Restore procedure
 
-1. Exit the desktop app normally.
-2. Confirm the managed backend has stopped and port `127.0.0.1:8765` is no longer listening.
-3. Make a separate copy of the current database and its sidecar files before changing anything.
-4. Extract or copy the selected backup into a temporary directory.
-5. Run `PRAGMA integrity_check;` on the temporary database.
-6. Restore to the configured database location only after the backup passes verification.
-7. Start the application and check backend/database readiness, portfolio balances, open positions/orders, trade history, and logs.
-8. Preserve the original database and backup until the restored application has been validated.
+1. Exit the application and confirm backend shutdown.
+2. Preserve a copy of the current database and sidecar files.
+3. Extract the selected backup into a temporary directory.
+4. Run `PRAGMA integrity_check;` against the temporary database.
+5. Restore the verified database to the configured location.
+6. Start the application and verify readiness, balances, positions, orders, trade history and logs.
+7. Retain the original database and backup until application-level validation is complete.
 
-Never delete the only original database or overwrite it with an unverified backup.
+Do not overwrite the only original database with an unverified backup.
 
-## Corruption or failed startup
+## Corruption handling
 
-If integrity validation fails:
-
-- Stop the application and preserve the database and sidecar files.
-- Copy the files before any repair attempt.
-- Review the backend log and the latest known-good backup.
-- Test recovery against a copy.
-- If no verified backup exists, preserve the original and seek help before running destructive SQL.
-
-Do **not** drop tables, delete the database to make startup succeed, or use a forced process kill as the first recovery step.
+- Preserve the database and sidecar files before repair attempts.
+- Retain logs and the last known-good backup.
+- Perform recovery against a copy.
+- Avoid destructive SQL operations unless the original data has been preserved and the recovery procedure is understood.
 
 ## Model recovery
 
-Model artifacts and registry metadata should be restored from the same backup/version where possible. Do not manually mark a candidate model as active or bypass the current validation/promotion gate. If a model is suspected of behaving unexpectedly, disable model-driven signal execution through supported configuration, retain the artifacts and logs, and use the application's validated rollback mechanism.
+Restore model artifacts and registry metadata from a compatible backup/version. Candidate models must not be manually promoted outside the configured validation and promotion process. When a model is suspected of causing incorrect behavior, retain its artifacts and logs and use the supported rollback or disablement mechanism.
 
-## Backup checklist
+## Operational checklist
 
-- [ ] Identify the active database and application-data location.
-- [ ] Verify the most recent automatic backup exists.
-- [ ] Verify backup integrity on a copy.
-- [ ] Preserve models, registry, settings, and logs as needed.
-- [ ] Keep an encrypted/offline or otherwise access-controlled off-site copy.
-- [ ] Perform a restore drill on a disposable copy periodically.
-- [ ] Confirm the restored application recovers paper positions, orders, and trade history without duplication.
+- [ ] Confirm the active database path.
+- [ ] Confirm the latest automatic backup exists.
+- [ ] Validate backup integrity on a copy.
+- [ ] Include required models, registry, settings and logs.
+- [ ] Store an encrypted or access-controlled secondary copy.
+- [ ] Perform periodic restore drills using disposable data.
+- [ ] Confirm restored paper-trading records are consistent and not duplicated.
