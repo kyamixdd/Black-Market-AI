@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 from asyncio import Semaphore
 from datetime import datetime, timezone
 
@@ -168,8 +170,16 @@ class Scanner:
             change = float(payload.get("P", payload.get("priceChangePercent", 0)))
         except (TypeError, ValueError):
             return
-        if price > 0 and volume >= 0:
-            self.cache.update_ticker(market, str(symbol), price, volume, change)
+        event_time = payload.get("E")
+        try:
+            event_time_ms = int(event_time) if event_time is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return
+        now_ms = int(time.time() * 1000)
+        if event_time_ms is not None and (event_time_ms > now_ms + 5000 or event_time_ms < now_ms - 120000):
+            return
+        if all(math.isfinite(value) for value in (price, volume, change)) and price > 0 and volume >= 0:
+            self.cache.update_ticker(market, str(symbol), price, volume, change, source="WEBSOCKET")
 
     async def _refresh_stream_subscriptions(self, market: str) -> None:
         if self.websocket_manager is None:
@@ -204,12 +214,15 @@ class Scanner:
                     symbol = ticker.get("symbol")
                     if not self.registry.is_eligible(symbol, market):
                         continue
-                    price = float(ticker.get("lastPrice", 0))
-                    volume = float(ticker.get("quoteVolume", 0))
-                    change = float(ticker.get("priceChangePercent", 0))
-                    if price <= 0:
+                    try:
+                        price = float(ticker.get("lastPrice", 0))
+                        volume = float(ticker.get("quoteVolume", 0))
+                        change = float(ticker.get("priceChangePercent", 0))
+                    except (TypeError, ValueError, OverflowError):
                         continue
-                    self.cache.update_ticker(market, symbol, price, volume, change)
+                    if not all(math.isfinite(value) for value in (price, volume, change)) or price <= 0 or volume < 0:
+                        continue
+                    self.cache.update_ticker(market, symbol, price, volume, change, source="REST")
                 await self._refresh_stream_subscriptions(market)
                 await self.event_bus.publish(make_event(
                     EventType.MARKET_SNAPSHOT, "scanner", market=market,
