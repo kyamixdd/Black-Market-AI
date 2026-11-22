@@ -1,5 +1,5 @@
 import { getApiToken } from './localAuth.js'
-import { backendEventStreamUrl, backendWebSocketUrl, isDesktopRuntime } from './backendClient.ts'
+import { backendEventStreamUrl, backendWebSocketUrl, isDesktopRuntime } from './backendClient.js'
 
 type EventCallback = (data: unknown) => void
 
