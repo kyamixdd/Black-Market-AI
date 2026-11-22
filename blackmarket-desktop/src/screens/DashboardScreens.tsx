@@ -1084,6 +1084,8 @@ type CommunityStrategy = {
 
 function CommunityLibraryScreen() {
   const [items, setItems] = useState<CommunityStrategy[]>([])
+  const [listLoading, setListLoading] = useState(true)
+  const [listError, setListError] = useState('')
   const [query, setQuery] = useState('')
   const [strategyKey, setStrategyKey] = useState('')
   const [assetFilter, setAssetFilter] = useState('')
@@ -1109,6 +1111,8 @@ function CommunityLibraryScreen() {
   const [sourceReportId, setSourceReportId] = useState('')
 
   const load = async () => {
+    setListLoading(true)
+    setListError('')
     const params = new URLSearchParams({ q: query, sort, limit: '50' })
     if (strategyKey) params.set('strategy_key', strategyKey)
     if (assetFilter) params.set('asset', assetFilter.trim().toUpperCase())
@@ -1116,12 +1120,13 @@ function CommunityLibraryScreen() {
     try {
       const result = await requestJson<{ strategies?: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
       if (!result || !Array.isArray(result.strategies)) {
-        setNotice('Community library returned an invalid response. Please refresh and try again.')
-        return
+        throw new Error('Community library returned an invalid response. Please try again.')
       }
       setItems(result.strategies.filter(item => item && typeof item.public_id === 'string' && typeof item.name === 'string'))
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Unable to load community strategies.')
+      setListError(error instanceof Error ? error.message : 'Unable to load community strategies.')
+    } finally {
+      setListLoading(false)
     }
   }
   useEffect(() => { void load() }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
@@ -1282,6 +1287,8 @@ function CommunityLibraryScreen() {
         </select>
       </div>
       {notice && <p className="workspace-note" role="status">{notice}</p>}
+      {listLoading && <p className="workspace-note" role="status">Loading community strategies…</p>}
+      {!listLoading && listError && <div className="workspace-note" role="alert"><p>{listError}</p><button className="table-action" onClick={() => void load()}>Retry</button></div>}
       <div className="workspace-summary-grid">
         {items.map(item => <article className="workspace-panel" key={item.public_id}>
           <h3>{item.name}</h3>
@@ -1296,7 +1303,7 @@ function CommunityLibraryScreen() {
           </div>
         </article>)}
       </div>
-      {!items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
+      {!listLoading && !listError && !items.length && <EmptyState text={showFavorites ? 'No saved strategies yet.' : 'No public strategies found. Try a different search, or publish a strategy below.'} />}
     </section>
     {selected && <section className="workspace-panel">
       <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => { detailRequestId.current += 1; setSelected(null) }}>Close</button></div>
