@@ -315,6 +315,62 @@ class WorkspaceModel(Base):
     updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
 
 
+
+
+class PublicStrategyModel(Base):
+    """Public community entry; deliberately stores only publication-safe data."""
+    __tablename__ = "public_strategies"
+
+    public_id = Column(String(64), primary_key=True)
+    owner_key = Column(String(64), nullable=False, index=True)
+    name = Column(String(120), nullable=False, index=True)
+    description = Column(Text, nullable=False, default="")
+    strategy_key = Column(String(64), nullable=False, index=True)
+    rules_json = Column(Text, nullable=False)
+    assets_json = Column(Text, nullable=False, default="[]")
+    timeframes_json = Column(Text, nullable=False, default="[]")
+    risk_json = Column(Text, nullable=False, default="{}")
+    limitations_json = Column(Text, nullable=False, default="[]")
+    report_json = Column(Text, nullable=False, default="{}")
+    report_provenance = Column(String(32), nullable=False, default="USER_SUBMITTED")
+    version = Column(Integer, nullable=False, default=1)
+    visibility = Column(String(16), nullable=False, default="PUBLIC")
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class PublicStrategyVersionModel(Base):
+    """Immutable publication snapshots for community version history."""
+    __tablename__ = "public_strategy_versions"
+
+    version_id = Column(String(64), primary_key=True)
+    public_id = Column(String(64), nullable=False, index=True)
+    owner_key = Column(String(64), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    snapshot_json = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+
+
+class StrategyFavoriteModel(Base):
+    __tablename__ = "strategy_favorites"
+
+    owner_key = Column(String(64), primary_key=True)
+    public_id = Column(String(64), primary_key=True)
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+
+
+class StrategyReportFlagModel(Base):
+    __tablename__ = "strategy_report_flags"
+
+    flag_id = Column(String(64), primary_key=True)
+    public_id = Column(String(64), nullable=False, index=True)
+    reporter_key = Column(String(64), nullable=False, index=True)
+    reason = Column(String(32), nullable=False)
+    details = Column(Text, nullable=False, default="")
+    status = Column(String(16), nullable=False, default="OPEN")
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+
+
 def create_all(db_path: str) -> None:
     engine = create_engine(db_path, future=True)
     Base.metadata.create_all(engine)
