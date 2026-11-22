@@ -348,6 +348,10 @@ class Simulator:
         market = signal["market"]
         balance = self.get_balance(market)
         qty, leverage = self._calculate_order_quantity(signal, balance)
+        leverage = self.risk_manager.validate_leverage(market, signal.get("leverage", 1.0))
+        if leverage < 1.0 or (market == "SPOT" and leverage != 1.0):
+            logger.warning("Order %s rejected: invalid market leverage", signal.get("signal_id"))
+            return None
         if quantity_override is not None:
             qty = float(quantity_override)
         if qty <= 0:
