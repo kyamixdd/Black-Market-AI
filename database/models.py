@@ -377,3 +377,12 @@ class StrategyReportFlagModel(Base):
 def create_all(db_path: str) -> None:
     engine = create_engine(db_path, future=True)
     Base.metadata.create_all(engine)
+
+class ShareableAnalysisModel(Base):
+    """Immutable publication-safe analysis snapshot; contains no account identity."""
+    __tablename__ = "shareable_analysis"
+
+    share_id = Column(String(32), primary_key=True)
+    payload_json = Column(Text, nullable=False)
+    content_sha256 = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=now_utc, nullable=False, index=True)
