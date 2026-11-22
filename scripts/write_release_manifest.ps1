@@ -5,13 +5,13 @@ param(
 $ErrorActionPreference = "Stop"
 
 $installer = Get-Item -LiteralPath $InstallerPath
-$tauriConfigPath = Join-Path $PSScriptRoot "..\\blackmarket-desktop\\src-tauri\\tauri.conf.json"
+$tauriConfigPath = Join-Path $PSScriptRoot "..\blackmarket-desktop\src-tauri\tauri.conf.json"
 $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
 $version = [string]$tauriConfig.version
-if ($version -notmatch '^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
     throw "Tauri app version is invalid: '$version'."
 }
-$expectedNamePattern = "_$([regex]::Escape($version))_x64-setup\\.exe$"
+$expectedNamePattern = "_$([regex]::Escape($version))_x64-setup\.exe$"
 if ($installer.Name -notmatch $expectedNamePattern) {
     throw "Installer filename '$($installer.Name)' does not match Tauri version '$version'."
 }
