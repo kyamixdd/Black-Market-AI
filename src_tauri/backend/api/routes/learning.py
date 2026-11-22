@@ -286,6 +286,7 @@ async def run_strategy_lab(payload: dict):
                 })
         result["regime_performance"] = performance_by_regime(
             trade_rows, observations, minimum_sample=5,
+            initial_capital=float(config.initial_capital),
         )
         report_id = _save_lab_report(strategy, payload, result)
         result["report_id"] = report_id
