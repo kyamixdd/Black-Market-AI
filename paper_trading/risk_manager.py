@@ -8,7 +8,7 @@ class RiskManager:
     def __init__(self, max_risk_pct: float, max_daily_loss_pct: float,
                  max_open_risk_pct: float, max_leverage: float,
                  max_spot_positions: int, max_futures_positions: int,
-                 max_position_size_pct: float = 20.0,
+                 max_position_size_pct: float = 50.0,
                  max_asset_exposure_pct: float = 30.0):
         self.max_risk_pct = max_risk_pct
         self.max_daily_loss_pct = max_daily_loss_pct
@@ -72,6 +72,8 @@ class RiskManager:
             return 0.0
         if market == "FUTURES" and value > self.max_leverage:
             return self.max_leverage
+        # Spot leverage is not a simulator constraint here; execution separately
+        # rejects Spot orders unless leverage is exactly 1.
         return value
 
     def check_trade_risk(self, risk_amount: float, equity: float) -> bool:
