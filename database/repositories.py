@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -25,6 +25,10 @@ from .models import (
     SavedStrategyModel,
     BacktestReportModel,
     WorkspaceModel,
+    PublicStrategyModel,
+    PublicStrategyVersionModel,
+    StrategyFavoriteModel,
+    StrategyReportFlagModel,
 )
 
 logger = logging.getLogger(__name__)
@@ -482,6 +486,147 @@ class Repository:
             session.commit()
             return None
 
+
+
+    # --- Public strategy library ---
+    @staticmethod
+    def _public_strategy_dict(obj: PublicStrategyModel, *, favorite_count: int = 0,
+                              is_favorite: bool = False) -> dict[str, Any]:
+        return {
+            "public_id": obj.public_id, "name": obj.name, "description": obj.description,
+            "strategy_key": obj.strategy_key, "rules": json.loads(obj.rules_json),
+            "supported_assets": json.loads(obj.assets_json),
+            "supported_timeframes": json.loads(obj.timeframes_json),
+            "risk_configuration": json.loads(obj.risk_json),
+            "known_limitations": json.loads(obj.limitations_json),
+            "backtest_report": json.loads(obj.report_json),
+            "report_provenance": obj.report_provenance,
+            "report_sha256": obj.report_sha256,
+            "version": obj.version, "favorite_count": favorite_count,
+            "is_favorite": is_favorite, "created_at": obj.created_at.isoformat() if obj.created_at else None,
+            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
+        }
+
+    def publish_public_strategy(self, record: dict[str, Any], owner_key: str) -> dict[str, Any]:
+        from hashlib import sha256
+        with self._get_session() as session:
+            obj = session.get(PublicStrategyModel, record["public_id"])
+            if obj is not None and obj.owner_key != owner_key:
+                raise PermissionError("You cannot modify another user's published strategy.")
+            version = (obj.version + 1) if obj else 1
+            report = record.get("backtest_report", {})
+            report_json = self._json_value(report)
+            values = {
+                "owner_key": owner_key, "name": record["name"], "description": record.get("description", ""),
+                "strategy_key": record["strategy_key"], "rules_json": self._json_value(record["rules"]),
+                "assets_json": self._json_value(record.get("supported_assets", [])),
+                "timeframes_json": self._json_value(record.get("supported_timeframes", [])),
+                "risk_json": self._json_value(record.get("risk_configuration", {})),
+                "limitations_json": self._json_value(record.get("known_limitations", [])),
+                "report_json": report_json, "report_sha256": sha256(report_json.encode("utf-8")).hexdigest(),
+                "report_provenance": "USER_SUBMITTED", "version": version, "visibility": "PUBLIC",
+            }
+            if obj is None:
+                obj = PublicStrategyModel(public_id=record["public_id"], **values)
+                session.add(obj)
+            else:
+                for key, value in values.items():
+                    setattr(obj, key, value)
+                obj.updated_at = datetime.now(timezone.utc)
+            snapshot = {key: value for key, value in values.items() if key not in {"owner_key", "visibility"}}
+            session.add(PublicStrategyVersionModel(
+                version_id=uuid.uuid4().hex, public_id=obj.public_id, owner_key=owner_key,
+                version=version, snapshot_json=self._json_value(snapshot),
+            ))
+            session.commit()
+            return self._public_strategy_dict(obj)
+
+    def list_public_strategies(self, *, query: str = "", strategy_key: str = "",
+                               asset: str = "", timeframe: str = "", sort: str = "recent",
+                               owner_key: str | None = None, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        with self._get_session() as session:
+            stmt = select(PublicStrategyModel).where(PublicStrategyModel.visibility == "PUBLIC")
+            if query:
+                needle = "%" + query.strip().lower().replace("%", "\\%").replace("_", "\\_") + "%"
+                stmt = stmt.where(func.lower(PublicStrategyModel.name + " " + PublicStrategyModel.description).like(needle, escape="\\"))
+            if strategy_key:
+                stmt = stmt.where(PublicStrategyModel.strategy_key == strategy_key)
+            if asset:
+                stmt = stmt.where(func.lower(PublicStrategyModel.assets_json).like("%" + asset.lower() + "%"))
+            if timeframe:
+                stmt = stmt.where(func.lower(PublicStrategyModel.timeframes_json).like("%" + timeframe.lower() + "%"))
+            if sort == "name":
+                stmt = stmt.order_by(func.lower(PublicStrategyModel.name), PublicStrategyModel.created_at.desc())
+            elif sort == "updated":
+                stmt = stmt.order_by(PublicStrategyModel.updated_at.desc())
+            else:
+                stmt = stmt.order_by(PublicStrategyModel.created_at.desc())
+            rows = list(session.scalars(stmt.offset(offset).limit(limit)).all())
+            output = []
+            for row in rows:
+                count = session.scalar(select(func.count()).select_from(StrategyFavoriteModel).where(StrategyFavoriteModel.public_id == row.public_id)) or 0
+                fav = bool(owner_key and session.get(StrategyFavoriteModel, (owner_key, row.public_id)))
+                output.append(self._public_strategy_dict(row, favorite_count=count, is_favorite=fav))
+            return output
+
+    def get_public_strategy(self, public_id: str, owner_key: str | None = None) -> dict[str, Any] | None:
+        with self._get_session() as session:
+            obj = session.get(PublicStrategyModel, public_id)
+            if obj is None or (obj.visibility != "PUBLIC" and obj.owner_key != owner_key):
+                return None
+            count = session.scalar(select(func.count()).select_from(StrategyFavoriteModel).where(StrategyFavoriteModel.public_id == public_id)) or 0
+            fav = bool(owner_key and session.get(StrategyFavoriteModel, (owner_key, public_id)))
+            result = self._public_strategy_dict(obj, favorite_count=count, is_favorite=fav)
+            versions = session.scalars(select(PublicStrategyVersionModel).where(
+                PublicStrategyVersionModel.public_id == public_id).order_by(PublicStrategyVersionModel.version.desc())).all()
+            result["version_history"] = [{"version": v.version, "created_at": v.created_at.isoformat() if v.created_at else None,
+                                          "snapshot": json.loads(v.snapshot_json)} for v in versions]
+            return result
+
+    def set_strategy_favorite(self, public_id: str, owner_key: str, favorite: bool) -> bool:
+        with self._get_session() as session:
+            strategy = session.get(PublicStrategyModel, public_id)
+            if strategy is None or strategy.visibility != "PUBLIC":
+                return False
+            key = (owner_key, public_id)
+            existing = session.get(StrategyFavoriteModel, key)
+            if favorite and existing is None:
+                session.add(StrategyFavoriteModel(owner_key=owner_key, public_id=public_id))
+            elif not favorite and existing is not None:
+                session.delete(existing)
+            session.commit()
+            return True
+
+    def hide_public_strategy(self, public_id: str, owner_key: str) -> bool:
+        with self._get_session() as session:
+            obj = session.get(PublicStrategyModel, public_id)
+            if obj is None or obj.owner_key != owner_key:
+                return False
+            obj.visibility = "PRIVATE"
+            obj.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            return True
+
+    def flag_public_strategy(self, public_id: str, reporter_key: str, reason: str, details: str = "") -> bool:
+        with self._get_session() as session:
+            obj = session.get(PublicStrategyModel, public_id)
+            if obj is None or obj.visibility != "PUBLIC":
+                return False
+            session.add(StrategyReportFlagModel(flag_id=uuid.uuid4().hex, public_id=public_id,
+                reporter_key=reporter_key, reason=reason, details=details[:1000], status="OPEN"))
+            session.commit()
+            return True
+
+    def list_strategy_favorites(self, owner_key: str) -> list[dict[str, Any]]:
+        with self._get_session() as session:
+            ids = session.scalars(select(StrategyFavoriteModel.public_id).where(
+                StrategyFavoriteModel.owner_key == owner_key).order_by(StrategyFavoriteModel.created_at.desc())).all()
+        output = []
+        for public_id in ids:
+            item = self.get_public_strategy(public_id, owner_key)
+            if item is not None:
+                output.append(item)
+        return output
 
     # --- Saved strategies, backtest reports, and workspaces ---
     @staticmethod
