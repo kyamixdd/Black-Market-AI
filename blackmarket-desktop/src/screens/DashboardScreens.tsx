@@ -14,6 +14,7 @@ export type ScreenName =
   | 'Intelligence'
   | 'Learning'
   | 'Strategy Lab'
+  | 'Community Library'
   | 'Risk Management'
   | 'Activity'
   | 'Settings'
@@ -1030,6 +1031,150 @@ function SettingsScreen({
   )
 }
 
+
+type CommunityStrategy = {
+  public_id: string
+  name: string
+  description: string
+  strategy_key: string
+  rules: Record<string, unknown>
+  supported_assets: string[]
+  supported_timeframes: string[]
+  risk_configuration: Record<string, number>
+  known_limitations: string[]
+  backtest_report: Record<string, unknown>
+  report_provenance: string
+  version: number
+  favorite_count: number
+  is_favorite: boolean
+}
+
+function CommunityLibraryScreen() {
+  const [items, setItems] = useState<CommunityStrategy[]>([])
+  const [query, setQuery] = useState('')
+  const [strategyKey, setStrategyKey] = useState('')
+  const [sort, setSort] = useState('recent')
+  const [selected, setSelected] = useState<CommunityStrategy | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [key, setKey] = useState('momentum')
+  const [assets, setAssets] = useState('BTCUSDT, ETHUSDT')
+  const [timeframes, setTimeframes] = useState('15m, 1h')
+  const [rules, setRules] = useState('{"entry":"Describe the entry rule","exit":"Describe the exit rule"}')
+  const [risk, setRisk] = useState('{"risk_per_trade_pct":1,"max_position_pct":10}')
+  const [limitations, setLimitations] = useState('Results are user-submitted and not a forecast.')
+  const [report, setReport] = useState('{"total_trades":0,"sample_period":""}')
+
+  const load = async () => {
+    const params = new URLSearchParams({ q: query, sort, limit: '50' })
+    if (strategyKey) params.set('strategy_key', strategyKey)
+    const result = await requestJson<{ strategies: CommunityStrategy[] }>(`/community/strategies?${params.toString()}`)
+    if (result) setItems(result.strategies ?? [])
+  }
+  useEffect(() => { void load() }, [query, strategyKey, sort])
+
+  const publish = async (event: FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setNotice('')
+    try {
+      const payload = {
+        name, description, strategy_key: key,
+        supported_assets: assets.split(',').map(value => value.trim()).filter(Boolean),
+        supported_timeframes: timeframes.split(',').map(value => value.trim()).filter(Boolean),
+        rules: JSON.parse(rules), risk_configuration: JSON.parse(risk),
+        known_limitations: limitations.split('\n').map(value => value.trim()).filter(Boolean),
+        backtest_report: JSON.parse(report),
+      }
+      await mutateJson('/community/strategies', 'POST', payload)
+      setNotice('Strategy published. Shared performance is labelled user-submitted.')
+      setName('')
+      await load()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to publish strategy.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggleFavorite = async (item: CommunityStrategy) => {
+    try {
+      await mutateJson(`/community/strategies/${item.public_id}/favorite`, 'POST', { favorite: !item.is_favorite })
+      await load()
+      if (selected?.public_id === item.public_id) setSelected({ ...selected, is_favorite: !item.is_favorite })
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to update favorite.')
+    }
+  }
+
+  const reportItem = async (item: CommunityStrategy) => {
+    try {
+      await mutateJson(`/community/strategies/${item.public_id}/report`, 'POST', { reason: 'misleading_results', details: 'Please review this strategy listing.' })
+      setNotice('Report submitted for review.')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Unable to report listing.')
+    }
+  }
+
+  return <div className="screen-stack">
+    <ScreenHeader title="Community Strategy Library" description="Browse and share strategy research · simulator-only · no live execution" />
+    <section className="workspace-panel">
+      <div className="workspace-toolbar">
+        <input className="workspace-search" aria-label="Search strategies" placeholder="Search strategy name or description" value={query} onChange={event => setQuery(event.target.value)} />
+        <select className="workspace-search" aria-label="Filter strategy type" value={strategyKey} onChange={event => setStrategyKey(event.target.value)}>
+          <option value="">All strategy types</option>
+          {['momentum','breakout','trend_following','mean_reversion','reversal'].map(value => <option key={value} value={value}>{value.replaceAll('_',' ')}</option>)}
+        </select>
+        <select className="workspace-search" aria-label="Sort strategies" value={sort} onChange={event => setSort(event.target.value)}>
+          <option value="recent">Recently published</option><option value="updated">Recently updated</option><option value="name">Name</option>
+        </select>
+      </div>
+      {notice && <p className="workspace-note" role="status">{notice}</p>}
+      <div className="workspace-summary-grid">
+        {items.map(item => <article className="workspace-panel" key={item.public_id}>
+          <h3>{item.name}</h3>
+          <p>{item.description || 'No description supplied.'}</p>
+          <p className="workspace-note">{item.strategy_key.replaceAll('_',' ')} · v{item.version} · {item.supported_timeframes.join(', ')}</p>
+          <p className="workspace-note">Report provenance: <b>USER SUBMITTED</b> · {item.backtest_report?.total_trades ?? '—'} reported trades</p>
+          <div className="workspace-actions">
+            <button className="table-action" onClick={() => setSelected(item)}>Details</button>
+            <button className="table-action" onClick={() => void toggleFavorite(item)}>{item.is_favorite ? '★ Saved' : '☆ Save'} · {item.favorite_count}</button>
+            <button className="table-action" onClick={() => void reportItem(item)}>Report</button>
+          </div>
+        </article>)}
+      </div>
+      {!items.length && <EmptyState title="No public strategies found" description="Try a different search, or publish a strategy below." />}
+    </section>
+    {selected && <section className="workspace-panel">
+      <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => setSelected(null)}>Close</button></div>
+      <p>{selected.description}</p>
+      <p className="workspace-note">Shared report: USER_SUBMITTED · SHA-256 {selected.report_provenance === 'USER_SUBMITTED' ? 'integrity digest stored' : 'provenance unavailable'}. User-submitted metrics are not independently verified.</p>
+      <h3>Rules</h3><pre className="workspace-code">{JSON.stringify(selected.rules, null, 2)}</pre>
+      <h3>Risk configuration</h3><pre className="workspace-code">{JSON.stringify(selected.risk_configuration, null, 2)}</pre>
+      <h3>Known limitations</h3><ul>{selected.known_limitations.map((item, i) => <li key={i}>{item}</li>)}</ul>
+      <h3>Version history</h3><p className="workspace-note">Version history is available from the strategy details API; updates preserve prior publication snapshots.</p>
+    </section>}
+    <section className="workspace-panel">
+      <h2>Publish a strategy</h2>
+      <p className="workspace-note">Only the fields below are published. Account balances, credentials, private trades, and personal settings are not sent. Backtest metrics are marked user-submitted, not verified.</p>
+      <form className="workspace-form" onSubmit={publish}>
+        <label>Strategy name<input className="workspace-search" required minLength={2} maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
+        <label>Description<textarea className="workspace-search" maxLength={2000} value={description} onChange={event => setDescription(event.target.value)} /></label>
+        <label>Strategy type<select className="workspace-search" value={key} onChange={event => setKey(event.target.value)}>{['momentum','breakout','trend_following','mean_reversion','reversal'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label>Supported assets (comma separated)<input className="workspace-search" value={assets} onChange={event => setAssets(event.target.value)} /></label>
+        <label>Supported timeframes (comma separated)<input className="workspace-search" value={timeframes} onChange={event => setTimeframes(event.target.value)} /></label>
+        <label>Strategy rules (JSON)<textarea className="workspace-search" rows={4} required value={rules} onChange={event => setRules(event.target.value)} /></label>
+        <label>Risk configuration (JSON)<textarea className="workspace-search" rows={3} value={risk} onChange={event => setRisk(event.target.value)} /></label>
+        <label>Known limitations (one per line)<textarea className="workspace-search" rows={3} value={limitations} onChange={event => setLimitations(event.target.value)} /></label>
+        <label>Backtest summary (JSON, optional)<textarea className="workspace-search" rows={3} value={report} onChange={event => setReport(event.target.value)} /></label>
+        <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Publishing…' : 'Publish to public library'}</button>
+      </form>
+    </section>
+  </div>
+}
+
 export function DashboardScreen(props: Props) {
   const { screen, data } = props
   return (
@@ -1042,7 +1187,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'Trade History' && <TradeHistoryScreen trades={data.trades} stats={data.tradeStats} />}
       {screen === 'Intelligence' && <IntelligenceScreen data={data} />}
       {screen === 'Learning' && <LearningScreen data={data} />}
-      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} data={data} preferences={props.preferences} screen={screen} symbol={props.symbol} marketType={props.marketType} onWorkspaceLoad={props.onWorkspaceLoad} />}
+      {screen === 'Community Library' && <CommunityLibraryScreen />}\n      {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} data={data} preferences={props.preferences} screen={screen} symbol={props.symbol} marketType={props.marketType} onWorkspaceLoad={props.onWorkspaceLoad} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} />}
       {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
