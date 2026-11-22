@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import re
+import uuid
 
 from fastapi import APIRouter, Query, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
+from database.connection import get_session_maker
+from database.repositories import Repository
 from .schemas import (
     LearningStatusResponse,
     PredictionListResponse,
@@ -162,6 +165,26 @@ async def get_models():
     models = bridge.get_model_registry()
     return ModelRegistryListResponse(models=[ModelRegistryResponse(**m) for m in models])
 
+
+def _save_lab_report(strategy_name: str, payload: dict, report: dict) -> str:
+    """Persist every completed Strategy Lab result before returning it to the client."""
+    repository = Repository(get_session_maker())
+    report_id = uuid.uuid4().hex
+    record = {
+        "report_id": report_id,
+        "strategy_id": payload.get("strategy_id") if isinstance(payload.get("strategy_id"), str) else None,
+        "strategy_name": strategy_name,
+        "symbol": str(payload.get("symbol", "BTCUSDT")).upper(),
+        "market": str(payload.get("market", "SPOT")).upper(),
+        "timeframe": str(payload.get("timeframe", "1h")),
+        "status": report.get("status", "completed"),
+        "config": payload,
+        "report": report,
+    }
+    repository.save_backtest_report(record)
+    return report_id
+
+
 @router.post("/strategy-lab")
 async def run_strategy_lab(payload: dict):
     """Run a deterministic historical simulation using completed candle data."""
@@ -215,7 +238,10 @@ async def run_strategy_lab(payload: dict):
                and int(row.get("close_time", row.get("open_time", 0))) <= config.end_time]
     candles.sort(key=lambda row: int(row["open_time"]))
     try:
-        return run_strategy_lab(candles, config, strategy)
+        result = run_strategy_lab(candles, config, strategy)
+        report_id = _save_lab_report(strategy, payload, result)
+        result["report_id"] = report_id
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -232,6 +258,9 @@ async def compare_strategy_lab(payload: dict):
         config = dict(payload)
         config["strategy"] = name
         results.append(await run_strategy_lab(config))
-    return {"status": "ok", "conditions": {k: payload.get(k) for k in
+    comparison = {"status": "ok", "conditions": {k: payload.get(k) for k in
             ("symbol", "market", "timeframe", "start_date", "end_date", "initial_capital")},
             "results": results}
+    report_id = _save_lab_report("strategy-comparison", payload, comparison)
+    comparison["report_id"] = report_id
+    return comparison
