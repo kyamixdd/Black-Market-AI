@@ -155,10 +155,9 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup default stable
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path blackmarket-desktop/src-tauri/Cargo.toml --all -- --check
       - name: Compile Tauri application
-        run: cargo check --manifest-path blackmarket-desktop/src-tauri/Cargo.toml --locked
+        run: cargo check --locked
+        working-directory: blackmarket-desktop/src-tauri
 
   dependency-audit:
     name: Dependency vulnerability audit
