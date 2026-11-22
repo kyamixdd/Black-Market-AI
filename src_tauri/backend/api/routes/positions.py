@@ -51,7 +51,7 @@ async def close_position(position_id: str):
     closed = await simulator._close_position(position, price, "MANUAL")
     if not closed:
         raise HTTPException(409, "Position is already closing or has been closed.")
-    log_event(logger, logging.INFO, "paper_position_closed", symbol=position["symbol"], market=position["market"], position_id=position_id)
+    log_event(logger, logging.INFO, "paper_position_closed", symbol=position["symbol"], market=position["market"])
     return ManualActionResponse(success=True, id=position_id, message="Paper position closed.")
 
 
