@@ -107,7 +107,10 @@ def test_position_recovery_restores_balances_daily_pnl_reserved_principal_and_op
 
     assert simulator.spot_balance == initial_spot - 99.0
     assert simulator.futures_balance == initial_futures - 4.0
-    # Total-equity daily P&L includes the closed-trade net (-1), open fees (-2),\n    # and open-position unrealized gain (+1), for a net mark-to-market of -2.\n    assert simulator.get_daily_pnl() == -2.0\n    assert len(simulator.spot_positions) == 1
+    # Total-equity daily P&L includes closed-trade net (-1), open fees (-2),
+    # and open-position unrealized gain (+1), for a net mark-to-market of -2.
+    assert simulator.get_daily_pnl() == -2.0
+    assert len(simulator.spot_positions) == 1
     assert list(simulator.open_orders) == ["ORD-OPEN-1"]
     assert simulator.open_orders["ORD-OPEN-1"]["strategy"] == "MOMENTUM"
 
