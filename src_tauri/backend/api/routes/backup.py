@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -11,6 +12,7 @@ from config import BACKUP_DIR, DATABASE_URL
 from database.connection import Database
 from core.disaster_recovery import BackupConfig, DatabaseBackupManager
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/backup", tags=["backup"])
 
 class BackupRequest(BaseModel):
@@ -31,7 +33,8 @@ def create_manual_backup(request: BackupRequest):
             "metadata": metadata,
         }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Backup creation failed: {exc}") from exc
+        logger.exception("Manual backup creation failed")
+        raise HTTPException(status_code=500, detail="Backup creation failed; inspect backend logs.") from exc
     finally:
         db.close()
 
