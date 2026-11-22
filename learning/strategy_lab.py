@@ -184,6 +184,8 @@ def run_strategy_lab(rows: list[dict], config: LabConfig, strategy_name: str) ->
             exit_reason = "STOP_LOSS" if stop_hit else "TAKE_PROFIT" if target_hit else None
             if exit_reason:
                 raw_exit = position["stop_loss"] if stop_hit else position["take_profit"]
+                if stop_hit and ((long_side and bar["open"] < position["stop_loss"]) or (not long_side and bar["open"] > position["stop_loss"])):
+                    raw_exit = bar["open"]
                 direction = -1 if long_side else 1
                 exit_fill = raw_exit * (1 + direction * (spread_bps / 2.0 + slip_bps) / 10000.0
                 notional_exit = position["quantity"] * exit_fill
