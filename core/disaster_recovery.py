@@ -78,6 +78,29 @@ class DatabaseBackupManager:
                     backup_path.unlink(missing_ok=True)
                     raise RuntimeError("Backup verification failed")
 
+            settings_backup_path = Path(str(backup_path) + ".settings.json")
+            settings_metadata = {"settings_backup_file": None, "settings_sha256": None, "settings_size_bytes": None}
+            try:
+                from core.runtime_settings_store import SETTINGS_PATH
+                if SETTINGS_PATH.is_file():
+                    settings_data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+                    if not isinstance(settings_data, dict):
+                        raise RuntimeError("Runtime settings backup must be a JSON object")
+                    settings_backup_path.write_text(json.dumps(settings_data, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8")
+                    try:
+                        os.chmod(settings_backup_path, 0o600)
+                    except OSError:
+                        pass
+                    settings_metadata = {
+                        "settings_backup_file": settings_backup_path.name,
+                        "settings_sha256": self._sha256_file(settings_backup_path),
+                        "settings_size_bytes": settings_backup_path.stat().st_size,
+                    }
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                backup_path.unlink(missing_ok=True)
+                settings_backup_path.unlink(missing_ok=True)
+                raise RuntimeError(f"Could not safely include runtime settings in backup: {exc}") from exc
+
             metadata_path = Path(str(backup_path) + ".json")
             metadata = {
                 "format_version": 1,
@@ -89,6 +112,7 @@ class DatabaseBackupManager:
                 "backup_size_bytes": backup_path.stat().st_size,
                 "sha256": self._sha256_file(backup_path),
                 "integrity_check": "ok" if self._verify_backup(backup_path) else "not_verified",
+                **settings_metadata,
             }
             if metadata["integrity_check"] != "ok":
                 backup_path.unlink(missing_ok=True)
@@ -126,6 +150,18 @@ class DatabaseBackupManager:
                 raise RuntimeError("Backup checksum does not match metadata")
             if metadata.get("backup_size_bytes") != backup_path.stat().st_size:
                 raise RuntimeError("Backup size does not match metadata")
+            settings_name = metadata.get("settings_backup_file")
+            if settings_name:
+                settings_path = Path(str(backup_path) + ".settings.json")
+                if settings_path.name != settings_name or not settings_path.is_file():
+                    raise RuntimeError("Runtime settings backup is missing or mismatched")
+                if metadata.get("settings_sha256") != self._sha256_file(settings_path):
+                    raise RuntimeError("Runtime settings backup checksum does not match")
+                if metadata.get("settings_size_bytes") != settings_path.stat().st_size:
+                    raise RuntimeError("Runtime settings backup size does not match")
+                parsed_settings = json.loads(settings_path.read_text(encoding="utf-8"))
+                if not isinstance(parsed_settings, dict):
+                    raise RuntimeError("Runtime settings backup is not a JSON object")
             return metadata
         return {"format_version": 0, "legacy_backup": True, "integrity_check": "ok"}
 
@@ -223,6 +259,7 @@ class DatabaseBackupManager:
         for old_backup in backups[max(1, self.config.max_backups):]:
             old_backup.unlink(missing_ok=True)
             Path(str(old_backup) + ".json").unlink(missing_ok=True)
+            Path(str(old_backup) + ".settings.json").unlink(missing_ok=True)
             logger.info("Pruned old backup: %s", old_backup)
 
     def restore_backup(self, backup_path: Path, target_path: Optional[Path] = None) -> bool:
