@@ -7,6 +7,10 @@ The canonical React + TypeScript application lives in `../blackmarket-desktop/sr
 
 There is one dashboard implementation. Do not create a separate website dashboard.
 
+## Deployment status
+
+This website is an optional private-preview path. The supported primary product remains the Tauri desktop app with its supervised local Python backend. Do not advertise a hosted backend as verified until its API authentication, persistent database, market-data freshness, event stream, portfolio refresh, and paper-order error handling have passed end-to-end checks.
+
 ## Website setup
 
 1. Use Node.js 20+.
