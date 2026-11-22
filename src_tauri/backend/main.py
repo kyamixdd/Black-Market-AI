@@ -45,6 +45,7 @@ from src_tauri.backend.api.routes import (
     settings,
     assistant,
     backup,
+    research,
 )
 from src_tauri.backend.api.routes.schemas import (
     HealthResponse,
@@ -224,6 +225,7 @@ for router in (
     settings.router,
     assistant.router,
     backup.router,
+    research.router,
 ):
     app.include_router(router, prefix="/api")
 
