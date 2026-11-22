@@ -3343,3 +3343,43 @@ button:not(:disabled):active {
     transition: none !important;
   }
 }
+
+
+/* RiskPanel compact dial and status semantics */
+.risk-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 5px;
+  border: 1px solid var(--border-panel);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+.risk-status.positive { color: var(--accent-positive); }
+.risk-status.negative { color: var(--accent-negative); }
+.risk-panel .risk-dial > div {
+  z-index: 1;
+  display: flex;
+  width: 74%;
+  height: 74%;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--panel);
+}
+.risk-panel .risk-digit {
+  color: var(--text-primary) !important;
+  font-size: 14px;
+}
+.risk-panel .risk-caption {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 7px;
+}
+.risk-panel .risk-stat {
+  font-size: 8px;
+}
+.risk-panel .risk-stat b {
+  font-size: 8px;
+}
