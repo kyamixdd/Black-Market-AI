@@ -1,5 +1,7 @@
 """Stage 6 paper-trading risk and execution integrity regressions."""
 import asyncio
+from datetime import datetime, timezone
+
 import pytest
 
 from core.event_bus import EventBus
@@ -83,6 +85,7 @@ def test_risk_manager_rejects_nonfinite_or_negative_risk_inputs():
     assert not manager.check_total_risk(float("nan"), 1, 1000)
     assert not manager.check_total_risk(-1, 1, 1000)
     assert not manager.check_trade_risk(float("inf"), 1000)
+
 
 @pytest.mark.asyncio
 async def test_restart_restores_daily_loss_baseline_and_blocks_new_risk():
