@@ -74,7 +74,7 @@ jobs:
         run: npm run lint
         working-directory: blackmarket-desktop
 
-      - name: Market-data unit tests
+      - name: API and market-data integration tests
         run: npm test
         working-directory: blackmarket-desktop
 
