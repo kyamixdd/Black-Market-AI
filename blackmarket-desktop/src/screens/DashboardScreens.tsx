@@ -1083,7 +1083,7 @@ function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
   const metrics = result?.metrics
   return (
     <div className="workspace-content strategy-lab">
-      <ScreenHeader title="Strategy Lab" subtitle="Historical research · simulated execution · paper-trading compatible" />
+      <ScreenHeader title="Strategy Lab" description="Historical research · simulated execution · paper-trading compatible" />
       <form className="workspace-form" onSubmit={run}>
         <div className="workspace-form-grid">
           <label>Strategy<select value={strategy} onChange={e => setStrategy(e.target.value)}>{['momentum','breakout','trend_following','mean_reversion','reversal'].map(v => <option key={v}>{v}</option>)}</select></label>
@@ -1101,7 +1101,7 @@ function StrategyLabScreen({ onRun }: { onRun: Props['onStrategyLabRun'] }) {
         <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Running backtest…' : 'Run historical backtest'}</button>
       </form>
       {error && <div role="alert" className="workspace-error">{error}</div>}
-      {result?.status === 'insufficient_data' && <EmptyState title="Insufficient historical candles" description={`Available: ${result.available_candles}; required: ${result.required_candles}. Try a wider range or another timeframe.`} />}
+      {result?.status === 'insufficient_data' && <EmptyState text={`Insufficient historical candles. Available: ${result.available_candles}; required: ${result.required_candles}. Try a wider range or another timeframe.`} />}
       {metrics && <>
         <div className="workspace-summary-grid">
           {[
