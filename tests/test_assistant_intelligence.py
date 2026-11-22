@@ -25,3 +25,11 @@ async def test_missing_market_data_is_reported_as_unavailable():
 async def test_unsupported_tool_is_rejected():
     with pytest.raises(ValueError):
         await execute_tool(object(), "arbitrary_code", "BTCUSDT", "SPOT")
+
+
+@pytest.mark.asyncio
+async def test_optional_provider_is_disabled_without_configuration(monkeypatch):
+    from src_tauri.backend.assistant_intelligence import optional_provider_interpretation
+    monkeypatch.delenv("BLACKMARKET_ASSISTANT_PROVIDER", raising=False)
+    monkeypatch.delenv("BLACKMARKET_ASSISTANT_API_KEY", raising=False)
+    assert await optional_provider_interpretation("analyze", {"data": {"price": 10}}) is None
