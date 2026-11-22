@@ -369,7 +369,7 @@ class Simulator:
         equity = self.get_account_equity_breakdown()["total_equity"]
         stop_price = float(signal["stop_loss"])
         actual_distance = abs(fill_price - stop_price)
-        risk_budget = equity * self.risk_manager.max_risk_pct / 100.0
+        risk_budget = equity * self.risk_manager.max_risk_pct / 100.0 * 0.999
         if quantity_override is None and actual_distance > 0 and qty * actual_distance > risk_budget:
             qty = risk_budget / actual_distance
             fill_price = self.fee_calc.get_fill_price(
@@ -378,10 +378,11 @@ class Simulator:
             )
         actual_risk = abs(fill_price - stop_price) * qty
         actual_notional = qty * fill_price
-        if not self.risk_manager.check_trade_risk(actual_risk, equity):
+        risk_equity = self.get_account_equity_breakdown()["total_equity"]
+        if not self.risk_manager.check_trade_risk(actual_risk, risk_equity):
             logger.warning("Order %s rejected: actual fill exceeds per-trade risk budget", signal.get("signal_id"))
             return None
-        if not self.risk_manager.check_total_risk(self._get_total_risk(), actual_risk, equity):
+        if not self.risk_manager.check_total_risk(self._get_total_risk(), actual_risk, risk_equity):
             logger.warning("Order %s rejected: actual fill exceeds aggregate open-risk cap", signal.get("signal_id"))
             return None
         if not self.risk_manager.check_position_notional(actual_notional, equity):
