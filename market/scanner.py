@@ -15,6 +15,7 @@ from exchange.spot_client import SpotClient
 from exchange.symbol_registry import SymbolRegistry
 from market.market_cache import MarketCache
 from market.data_reliability import valid_price, valid_volume
+from core.observability import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +102,11 @@ class Scanner:
             return
 
         status = self._scan_status[market]
+        scan_started = time.perf_counter()
         status.update({"state": "SCANNING", "started_at": datetime.now(timezone.utc).isoformat(),
                        "symbols_selected": len(prioritized), "refresh_successes": 0,
                        "refresh_failures": 0, "last_error": None})
+        log_event(logger, logging.INFO, "scanner_batch_started", component="scanner", market=market, symbols_selected=len(prioritized))
         semaphore = Semaphore(self.max_concurrent_scans)
 
         async def refresh(symbol: str, timeframe: str) -> bool:
@@ -142,6 +145,11 @@ class Scanner:
             logger.exception("Strategy scan batch failed for %s", market)
         status["completed_at"] = datetime.now(timezone.utc).isoformat()
         status["state"] = "DEGRADED" if status["refresh_failures"] or status["last_error"] else "COMPLETE"
+        log_event(logger, logging.INFO if status["state"] == "COMPLETE" else logging.WARNING,
+                  "scanner_batch_completed", component="scanner", market=market,
+                  scanner_state=status["state"], symbols_selected=len(prioritized),
+                  refresh_successes=status["refresh_successes"], refresh_failures=status["refresh_failures"],
+                  duration_ms=round((time.perf_counter() - scan_started) * 1000, 2))
 
     async def _handle_stream_message(self, market: str, message: dict) -> None:
         """Consume Binance combined-stream 24h ticker events into the shared cache."""
