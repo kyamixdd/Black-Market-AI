@@ -257,6 +257,36 @@ async def run_strategy_lab(payload: dict):
     candles.sort(key=lambda row: int(row["open_time"]))
     try:
         result = run_strategy_lab(candles, config, strategy)
+        # Attach regime-conditioned metrics using only completed candles available
+        # before each trade entry (no future-candle lookahead).
+        from market.regime_radar import classify_market_regime
+        from learning.regime_performance import performance_by_regime
+
+        observations = []
+        trade_rows = result.get("trades", []) if isinstance(result, dict) else []
+        entry_times = sorted({
+            int(item["entry_time"]) for item in trade_rows
+            if item.get("status") == "CLOSED" and item.get("entry_time") is not None
+        })
+        for entry_time in entry_times:
+            prior = [
+                row for row in candles
+                if int(row.get("close_time", row.get("open_time", 0))) < entry_time
+            ][-100:]
+            if len(prior) < 50:
+                continue
+            classification = classify_market_regime(
+                prior, symbol=symbol, market=market, timeframe=timeframe,
+                expected_candles=100,
+            )
+            if classification.get("status") == "READY":
+                observations.append({
+                    "timestamp": entry_time,
+                    "regime": classification["regime"],
+                })
+        result["regime_performance"] = performance_by_regime(
+            trade_rows, observations, minimum_sample=5,
+        )
         report_id = _save_lab_report(strategy, payload, result)
         result["report_id"] = report_id
         return result
