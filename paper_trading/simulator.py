@@ -241,6 +241,15 @@ class Simulator:
             return False, "Long stop-loss must be below entry"
         if direction in ("SELL", "SHORT") and stop <= entry:
             return False, "Short stop-loss must be above entry"
+        targets = signal.get("take_profit") or []
+        if targets:
+            target = float(targets[0])
+            if not math.isfinite(target) or target <= 0:
+                return False, "Take-profit must be a finite positive price"
+            if direction in ("BUY", "LONG") and target <= entry:
+                return False, "Long take-profit must be above entry"
+            if direction in ("SELL", "SHORT") and target >= entry:
+                return False, "Short take-profit must be below entry"
         positions = self._get_positions(market)
         pending = {
             order_id: order for order_id, order in self.open_orders.items()
@@ -368,6 +377,9 @@ class Simulator:
         if not self.risk_manager.check_trade_risk(actual_risk, equity):
             logger.warning("Order %s rejected: actual fill exceeds per-trade risk budget", signal.get("signal_id"))
             return None
+        if not self.risk_manager.check_total_risk(self._get_total_risk(), actual_risk, equity):
+            logger.warning("Order %s rejected: actual fill exceeds aggregate open-risk cap", signal.get("signal_id"))
+            return None
         if not self.risk_manager.check_position_notional(actual_notional, equity):
             logger.warning("Order %s rejected: actual fill exceeds position-size cap", signal.get("signal_id"))
             return None
@@ -448,6 +460,27 @@ class Simulator:
 
     async def update_prices(self, market: str, symbol: str, price: float,
                         mark_price: float | None = None, funding_rate: float | None = None) -> None:
+        try:
+            current = float(price)
+        except (TypeError, ValueError, OverflowError):
+            return
+        if not math.isfinite(current) or current <= 0:
+            return
+        try:
+            mark = float(mark_price) if mark_price is not None else current
+        except (TypeError, ValueError, OverflowError):
+            mark = current
+        if not math.isfinite(mark) or mark <= 0:
+            mark = current
+        if funding_rate is not None:
+            try:
+                funding_rate = float(funding_rate)
+            except (TypeError, ValueError, OverflowError):
+                funding_rate = None
+            if funding_rate is not None and not math.isfinite(funding_rate):
+                funding_rate = None
+        price = current
+        mark_price = mark
         positions = self._get_positions(market)
         # Iterate over a copy to avoid "dictionary changed size during iteration"
         for pos in list(positions.values()):
