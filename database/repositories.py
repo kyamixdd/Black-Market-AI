@@ -840,6 +840,12 @@ class Repository:
     def save_assistant_memory(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._get_session() as session:
             existing = session.get(AssistantMemoryModel, record["memory_id"])
+            if existing is None:
+                existing = session.scalars(select(AssistantMemoryModel).where(
+                    AssistantMemoryModel.owner_key == record["owner_key"],
+                    AssistantMemoryModel.memory_type == record["memory_type"],
+                    func.lower(AssistantMemoryModel.content) == str(record["content"]).strip().lower(),
+                ).limit(1)).first()
             values = {
                 "owner_key": record["owner_key"],
                 "memory_type": record["memory_type"],
