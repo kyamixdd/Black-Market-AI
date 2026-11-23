@@ -161,6 +161,7 @@ class AssistantToolRegistry:
 
     async def invoke(
         self,
+        bridge: Any,
         tool_id: str,
         arguments: dict[str, Any],
         *,
@@ -181,7 +182,7 @@ class AssistantToolRegistry:
         started = time.monotonic()
         try:
             result = await asyncio.wait_for(
-                self._executor(None, tool_id, validated["symbol"], validated["market"], validated["timeframe"]),
+                self._executor(bridge, tool_id, validated["symbol"], validated["market"], validated["timeframe"]),
                 timeout=spec.timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
