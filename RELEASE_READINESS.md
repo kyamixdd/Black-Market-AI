@@ -17,7 +17,7 @@ The desktop path has automated packaging and installation smoke-test coverage. T
 
 ## CI verification
 
-GitHub Actions run [#605](https://github.com/kyamixdd/Black-Market-AI/actions/runs/45055409152) completed successfully for source commit `ee602590442d9d29060d525e1aff5539dc42f01c`.
+GitHub Actions run [#605](https://github.com/kyamixdd/Black-Market-AI/actions/runs/45055409152) completed successfully for source commit `49e6841215303ed296ced4fc1ef3039b9959426d`.
 
 Successful jobs:
 
