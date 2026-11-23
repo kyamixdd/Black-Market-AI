@@ -140,7 +140,7 @@ async def test_malformed_executor_result_is_rejected():
             "bridge", "market_snapshot",
             {"symbol": "BTCUSDT", "market": "SPOT", "timeframe": "1h"},
         )
-    assert error.value.code == "invalid_tool_result
+    assert error.value.code == "invalid_tool_result"
 
 
 def test_registry_metadata_is_explicit_and_read_only():
