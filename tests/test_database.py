@@ -196,3 +196,11 @@ def test_closed_trade_history_is_persisted_without_duplicates(tmp_path):
     assert len(history) == 1
     assert history[0].position_id == trade["position_id"]
     assert history[0].pnl == 0.18
+
+
+def test_repository_json_value_serializes_datetime():
+    import json
+
+    value = datetime(2026, 11, 23, 13, 5, 50, tzinfo=timezone.utc)
+    encoded = Repository._json_value({"created_at": value})
+    assert json.loads(encoded)["created_at"] == value.isoformat()
