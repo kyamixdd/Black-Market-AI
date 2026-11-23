@@ -13,6 +13,9 @@ class Bus:
         self.handlers = []
     def subscribe_all(self, handler):
         self.handlers.append(handler)
+    def unsubscribe_all(self, handler):
+        while handler in self.handlers:
+            self.handlers.remove(handler)
 
 
 def event(event_id, symbol="BTCUSDT", market="SPOT", price=101):
