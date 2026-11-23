@@ -10,7 +10,7 @@ import re
 
 from database.connection import get_session_maker
 from database.repositories import Repository
-from ...assistant_memory import build_memory_record, retrieve_relevant_memories, MemoryValidationError, apply_assistant_preferences
+from ...assistant_memory import build_memory_record, retrieve_relevant_memories, MemoryValidationError, apply_assistant_preferences, preference_adaptation_for_feedback
 from fastapi import APIRouter, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
@@ -305,10 +305,11 @@ async def submit_assistant_feedback(request: Request, payload: AssistantFeedback
         evidence = repository.count_assistant_feedback(
             owner_key, payload.feedback_type, preference_key=preference_key,
         )
-        # Repeated preference-specific feedback is required; isolated ratings never adapt.
-        if evidence >= threshold:
+        decision = preference_adaptation_for_feedback(payload.feedback_type, evidence, threshold=threshold)
+        if decision is not None:
+            adapted_key, adapted_value = decision
             adapted = repository.set_assistant_preference(
-                owner_key, preference_key, preference_value, source="feedback",
+                owner_key, adapted_key, adapted_value, source="feedback",
                 evidence_count=evidence, confidence=min(0.85, 0.55 + 0.05 * evidence),
             )
     return {"status": "recorded", "feedback": saved, "adapted_preference": adapted,
