@@ -58,7 +58,7 @@ class StructuredAssistantRequest:
 
 _INTENT_GROUPS = (
     ("historical_data", "historical_candles", ("historical", "history", "candles", "ohlc")),
-    ("indicators", "indicator_report", ("indicator", "sma", "ema", "atr", "volatility", "analytics")),
+    ("indicators", "indicator_report", ("indicator", "indicators", "sma", "ema", "atr", "volatility", "analytics")),
     ("scanner", "scanner_status", ("scanner", "scan status")),
     ("signals", "signal_report", ("signal", "signals", "rejected signal")),
     ("strategy", "strategy_report", ("strategy", "backtest", "weights")),
