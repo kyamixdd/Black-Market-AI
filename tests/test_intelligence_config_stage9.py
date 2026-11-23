@@ -58,6 +58,14 @@ def test_environment_mode_overrides_persisted_mode(tmp_path, monkeypatch):
     assert loaded.provider_enabled is False
 
 
+def test_explicit_mode_override_has_highest_precedence(tmp_path, monkeypatch):
+    target = tmp_path / "runtime_settings.json"
+    target.write_text(json.dumps({"intelligence_mode": "research"}), encoding="utf-8")
+    monkeypatch.setattr(runtime_settings_store, "SETTINGS_PATH", target)
+    monkeypatch.setenv("BLACKMARKET_INTELLIGENCE_MODE", "fast")
+    assert config.load_intelligence_config({"mode": "balanced"}).mode is config.IntelligenceMode.BALANCED
+
+
 def test_invalid_persisted_config_fails_closed(tmp_path, monkeypatch):
     target = tmp_path / "runtime_settings.json"
     target.write_text(json.dumps({"intelligence_mode": "fast",
@@ -67,6 +75,18 @@ def test_invalid_persisted_config_fails_closed(tmp_path, monkeypatch):
     monkeypatch.delenv("BLACKMARKET_INTELLIGENCE_MODE", raising=False)
     with pytest.raises(RuntimeError, match="Invalid intelligence configuration"):
         config.load_intelligence_config()
+
+
+def test_save_config_persists_and_refreshes_cache(tmp_path, monkeypatch):
+    target = tmp_path / "runtime_settings.json"
+    monkeypatch.setattr(runtime_settings_store, "SETTINGS_PATH", target)
+    config.get_runtime_intelligence_config.cache_clear()
+    saved = config.save_intelligence_config(config.config_for_mode("fast"))
+    stored = json.loads(target.read_text(encoding="utf-8"))
+    assert stored["intelligence_mode"] == "fast"
+    assert stored["intelligence_config"]["max_tool_calls"] == 1
+    assert saved.mode is config.IntelligenceMode.FAST
+    config.get_runtime_intelligence_config.cache_clear()
 
 
 def test_runtime_config_cache_can_be_reloaded(monkeypatch):
