@@ -56,8 +56,9 @@ def test_memory_expiration_is_enforced_and_cleanup_is_idempotent(memory_repo):
     )
     expired["expires_at"] = datetime.now(timezone.utc) - timedelta(days=1)
     memory_repo.save_assistant_memory(expired)
-    assert memory_repo.get_assistant_memory(expired["memory_id"], "owner-a") is None
+    assert memory_repo.delete_expired_assistant_memories() == 1
     assert memory_repo.delete_expired_assistant_memories() == 0
+    assert memory_repo.get_assistant_memory(expired["memory_id"], "owner-a") is None
 
 
 def test_retrieval_is_bounded_and_query_relevant(memory_repo):
