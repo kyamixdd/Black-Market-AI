@@ -65,3 +65,41 @@ async def test_event_worker_lifecycle_subscribes_and_stops():
     await service.stop()
     assert service.status_snapshot()["running"] is False
     assert service.on_event not in bus.handlers
+
+
+@pytest.mark.asyncio
+async def test_scanner_publishes_validated_live_ticker_event():
+    from market.scanner import Scanner
+
+    class Registry:
+        def is_eligible(self, symbol, market):
+            return symbol == "BTCUSDT" and market == "SPOT"
+
+    class Cache:
+        def __init__(self):
+            self.updated = []
+        def update_ticker(self, *args, **kwargs):
+            self.updated.append((args, kwargs))
+
+    class CapturingBus:
+        def __init__(self):
+            self.events = []
+        async def publish(self, event):
+            self.events.append(event)
+
+    scanner = Scanner.__new__(Scanner)
+    scanner.registry = Registry()
+    scanner.cache = Cache()
+    scanner.event_bus = CapturingBus()
+    now_ms = int(__import__("time").time() * 1000)
+    await scanner._handle_stream_message("SPOT", {
+        "data": {"s": "BTCUSDT", "c": "123.4", "q": "5000",
+                 "P": "1.2", "E": now_ms}
+    })
+    assert len(scanner.cache.updated) == 1
+    assert len(scanner.event_bus.events) == 1
+    published = scanner.event_bus.events[0]
+    assert published.event_type == EventType.MARKET_DATA
+    assert published.symbol == "BTCUSDT"
+    assert published.payload["price"] == 123.4
+    assert published.payload["data_source"] == "WEBSOCKET"
