@@ -177,7 +177,7 @@ async def execute_assistant_query(
         return AssistantExecution(
             task_id=trace.task_id, task_state=trace.state.value,
             task_trace=tuple(trace.transitions), answer=answer,
-            tool=primary.get("tool"), status="available" if plan_result.state == "completed" else "partial",
+            tool=primary.get("tool"), status="available" if plan_result.state == "completed" and all(r.get("status") == "available" for r in successful) else "partial",
             data=primary.get("data") if len(successful) == 1 else [r.get("data") for r in successful],
             sources=tuple(dict.fromkeys(r.get("source", "local backend") for r in successful)),
             interpretation=interpretation, structured_request=parsed,
