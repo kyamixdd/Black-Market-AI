@@ -84,9 +84,9 @@ class RealtimeIntelligence:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)
             self._worker = None
-        subscribers = self.event_bus._subscribers.get("*", [])
-        if self.on_event in subscribers:
-            subscribers.remove(self.on_event)
+        unsubscribe = getattr(self.event_bus, "unsubscribe_all", None)
+        if callable(unsubscribe):
+            unsubscribe(self.on_event)
 
     async def on_event(self, event: Event) -> None:
         if event.event_type not in MARKET_EVENTS:
