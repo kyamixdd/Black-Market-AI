@@ -39,3 +39,21 @@ Do not update an approved baseline merely to make a candidate pass. Review the p
 ## Limitations
 
 This is a compact regression benchmark, not a comprehensive measure of assistant quality. It does not establish calibrated confidence, production memory relevance, real-time monitoring uptime, model factuality across arbitrary prompts, or trading profitability. Expand the dataset with reviewed cases before using it as a broader quality claim.
+
+
+## Measured baseline v1.0.0
+
+The initial benchmark was executed in GitHub Actions on 2026-11-23 against source commit `7c975d69b17aa7d13d9f0ea3f04786073c38ef8a` (workflow run 45147538731). The full per-case report is retained as the workflow artifact; the versioned baseline summary is committed at `reports/baseline-v1.0.0.json`.
+
+Measured metrics:
+
+| Metric | Baseline |
+|---|---:|
+| Intent exact match | 0.7143 (10/14) |
+| Tool registry safety | 1.0000 (11/11) |
+| Memory top-1 relevance | 1.0000 (3/3) |
+| Completion accuracy | 1.0000 (3/3) |
+
+The baseline did not meet the 0.90 intent threshold and is not promotion-eligible. Four intent cases exposed deterministic classification issues: scanner request also matched market snapshot; trade history also matched historical candles; portfolio risk also matched paper account; and an unresolved pronoun request did not trigger clarification. These are recorded as baseline findings, not silently corrected in the evaluation data.
+
+To evaluate a future candidate against this baseline, use the manual workflow's `baseline_report` input with `benchmarks/assistant_outcomes/reports/baseline-v1.0.0.json`. A candidate that still fails policy thresholds will be rejected by the promotion gate. Keep the original baseline immutable; approve a new baseline version only after reviewing dataset changes and measured results.
