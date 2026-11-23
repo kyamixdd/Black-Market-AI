@@ -22,9 +22,10 @@ def isolated_evolution(tmp_path, monkeypatch):
     return current, state_path
 
 
-def report(intent=1.0, safety=1.0, memory=1.0, completion=1.0):
+def report(intent=1.0, safety=1.0, memory=1.0, completion=1.0, mode="balanced"):
     return {
         "report_version": "1.0.0",
+        "intelligence_config": config_for_mode(mode).model_dump(mode="json"),
         "metrics": {
             "intent_exact_match": intent,
             "tool_registry_safety": safety,
@@ -58,7 +59,7 @@ def test_proposal_only_accepts_allowlisted_config_fields(isolated_evolution):
 
 def test_proposal_without_baseline_cannot_be_approved(isolated_evolution):
     proposal = evolution.create_improvement_proposal(
-        {"mode": "fast"}, report(), None,
+        {"mode": "fast"}, report(mode="fast"), None,
         "Reduce request cost with a constrained fast profile.",
     )
     assert proposal["status"] == "pending_review"
@@ -69,7 +70,7 @@ def test_proposal_without_baseline_cannot_be_approved(isolated_evolution):
 
 def test_approval_requires_explicit_human_confirmation(isolated_evolution):
     proposal = evolution.create_improvement_proposal(
-        {"mode": "fast"}, report(), report(),
+        {"mode": "fast"}, report(mode="fast"), report(),
         "Use a faster mode after passing benchmark gates.",
     )
     with pytest.raises(PermissionError):
@@ -115,7 +116,7 @@ def test_proposal_mode_change_uses_mode_preset(isolated_evolution):
 
 
 def test_non_finite_candidate_metric_is_rejected(isolated_evolution):
-    invalid = report()
+    invalid = report(mode="fast")
     invalid["metrics"]["intent_exact_match"] = float("nan")
     with pytest.raises(ValueError, match="finite"):
         evolution.create_improvement_proposal(
