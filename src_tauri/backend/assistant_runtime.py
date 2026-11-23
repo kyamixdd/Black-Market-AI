@@ -7,13 +7,13 @@ from typing import Any
 from uuid import uuid4
 
 from .assistant_intelligence import (
-    execute_tool,
     optional_provider_interpretation,
     summarize_result,
     validate_market,
     validate_symbol,
 )
 from .assistant_nlu import ContextSnapshot, StructuredAssistantRequest, parse_assistant_request
+from .assistant_tool_registry import ToolRegistryError, create_default_registry
 
 
 class AssistantTaskState(str, Enum):
@@ -59,6 +59,7 @@ class AssistantRuntimeError(Exception):
         self.task_state = trace.state.value
         self.task_trace = tuple(trace.transitions)
         self.status_code = status_code
+        self.error_code = error_code
 
 
 @dataclass(frozen=True)
@@ -127,11 +128,14 @@ async def execute_assistant_query(
 
         trace.transition(AssistantTaskState.EXECUTING)
         results = []
+        registry = create_default_registry()
+        arguments = {
+            "symbol": parsed.parameters["symbol"],
+            "market": parsed.parameters["market"],
+            "timeframe": parsed.parameters["timeframe"],
+        }
         for tool in tools:
-            results.append(await execute_tool(
-                bridge, tool, parsed.parameters["symbol"],
-                parsed.parameters["market"], parsed.parameters["timeframe"],
-            ))
+            results.append(await registry.invoke(bridge, tool, arguments))
 
         trace.transition(AssistantTaskState.VALIDATING)
         summaries = [summarize_result(query, item) for item in results]
@@ -155,6 +159,10 @@ async def execute_assistant_query(
             sources=tuple(dict.fromkeys(r.get("source", "local backend") for r in results)),
             interpretation=interpretation, structured_request=parsed,
         )
+    except ToolRegistryError as exc:
+        if trace.state not in {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED, AssistantTaskState.AWAITING_CLARIFICATION}:
+            trace.transition(AssistantTaskState.FAILED)
+        raise AssistantRuntimeError(str(exc), trace, exc.status_code, exc.code) from exc
     except ValueError as exc:
         if trace.state not in {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED, AssistantTaskState.AWAITING_CLARIFICATION}:
             trace.transition(AssistantTaskState.FAILED)
