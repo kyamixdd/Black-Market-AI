@@ -256,3 +256,57 @@ async def query_assistant(request: Request, payload: AssistantQuery):
             "Observations and calculations are not guaranteed predictions or trade instructions."
         ),
     }
+
+
+class MonitoringTaskCreate(BaseModel):
+    model_config = {"extra": "forbid"}
+    symbol: str = Field(min_length=2, max_length=32)
+    market: str = Field(default="SPOT", pattern="^(SPOT|FUTURES)$")
+    condition: str = Field(pattern="^(price_above|price_below)$")
+    threshold: float = Field(gt=0, allow_inf_nan=False)
+    ttl_seconds: int = Field(default=86400, ge=60, le=2592000)
+
+
+def _realtime_service():
+    bridge = get_bridge()
+    service = getattr(bridge.orch, "realtime_intelligence", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Realtime intelligence is not running")
+    return service
+
+
+@router.post("/monitoring")
+async def create_monitoring_task(request: Request, payload: MonitoringTaskCreate):
+    owner_key = _memory_owner(request)
+    try:
+        task = _realtime_service().create_task(
+            owner_key, payload.symbol, payload.market, payload.condition,
+            payload.threshold, ttl_seconds=payload.ttl_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return {"task": task}
+
+
+@router.get("/monitoring")
+async def list_monitoring_tasks(request: Request):
+    owner_key = _memory_owner(request)
+    return {"tasks": _realtime_service().list_tasks(owner_key)}
+
+
+@router.delete("/monitoring/{task_id}")
+async def cancel_monitoring_task(task_id: str, request: Request):
+    owner_key = _memory_owner(request)
+    if not re.fullmatch(r"[a-f0-9]{32}", task_id):
+        raise HTTPException(status_code=404, detail="Monitoring task not found")
+    if not _realtime_service().cancel_task(owner_key, task_id):
+        raise HTTPException(status_code=404, detail="Monitoring task not found")
+    return {"task_id": task_id, "status": "cancelled"}
+
+
+@router.get("/monitoring/status")
+async def realtime_intelligence_status(request: Request):
+    _memory_owner(request)
+    return _realtime_service().status_snapshot()
