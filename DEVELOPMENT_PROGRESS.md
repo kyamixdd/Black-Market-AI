@@ -3,7 +3,7 @@
 ## Current baseline
 
 - Branch: `black-market-ai-beta`
-- Source baseline reviewed: `ee602590442d9d29060d525e1aff5539dc42f01c`
+- Source baseline reviewed: `49e6841215303ed296ced4fc1ef3039b9959426d`
 - Product version: `1.0.0`
 - Current classification: desktop beta candidate; website private preview
 
@@ -34,10 +34,25 @@ These checks do not replace manual release acceptance or hosted-service verifica
 
 ## Release work remaining
 
-- Add a project license before public source distribution.
+- Root `LICENSE` is present and identifies the project as proprietary; confirm distribution rights and EULA before release.
 - Complete manual Windows clean-install, upgrade and uninstall acceptance.
 - Verify signing status and exact release artifact metadata/checksum.
 - Complete hosted backend and persistence verification before public website access.
-- Finish release security review and confirm documentation matches the release candidate.
+- Finish release security review, reconcile documentation, inspect tracked `.db.gz` backups, and verify the exact release candidate.
 
 Detailed release gates are maintained in [RELEASE_READINESS.md](RELEASE_READINESS.md).
+
+## Current repository status — 23 November 2026
+
+This document is maintained against the `black-market-ai-beta` branch. The latest application-source baseline reviewed for the comprehensive product audit is `49e6841215303ed296ced4fc1ef3039b9959426d`. Subsequent commits in this branch update documentation only; verify the branch head before treating this snapshot as current runtime or CI evidence.
+
+Current product classification: **Windows desktop beta candidate; hosted website private preview**. The application is local-first market research and paper-trading software. Paper trading is the only execution mode; no real-money exchange order execution is supported or verified. The deterministic assistant is read-only by default; an optional OpenAI-compatible endpoint may provide interpretation. ML training and model registration do not establish profitability or promotion without the configured validation evidence.
+
+Current audit corrections and outstanding items:
+- A root `LICENSE` file exists and identifies the project as proprietary. Older statements that the root license is absent are stale.
+- Existing CI run #605 passed for an earlier source commit, not the current source baseline. Fresh current-head CI and release-artifact verification remain required.
+- The website is a private preview with a shared-password session gate, not a multi-user SaaS identity and isolation system. Hosted backend, durable storage, streaming and restore acceptance remain release gates.
+- The repository tree contains 30 generated compressed shutdown database backups under `data/backups/` with the `.db.gz` suffix. The current ignore rules do not exclude that suffix. Their contents were not inspected in this audit; review them safely and remove generated database artifacts from version control after confirming data-handling requirements.
+- The application does not encrypt SQLite databases, model artifacts or backup archives. SHA-256 manifests provide integrity checking, not confidentiality.
+
+This status block records source/documentation evidence only. It does not claim a live deployment test, fresh training run, new backtest, current-head CI pass, security certification or trading performance result.
