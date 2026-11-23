@@ -106,11 +106,20 @@ def apply_assistant_preferences(answer: str, data: Any, preferences: list[dict[s
     result = answer
     evidence_lines: list[str] = []
     if applied.get("response_detail") == "detailed" and isinstance(data, dict):
-        for key, value in list(data.items())[:8]:
-            rendered = str(value).replace("\n", " ")
+        for key, value in list(data.items())[:12]:
+            if re.search(r"(?i)(secret|token|password|api[_-]?key)", str(key)):
+                continue
+            if isinstance(value, (dict, list, tuple)):
+                rendered = f"<{type(value).__name__}: {len(value)} items>"
+            elif value is None or isinstance(value, (str, int, float, bool)):
+                rendered = str(value).replace("\n", " ")
+            else:
+                rendered = f"<{type(value).__name__}>"
             if len(rendered) > 180:
                 rendered = rendered[:177] + "..."
             evidence_lines.append(f"{key}: {rendered}")
+            if len(evidence_lines) >= 8:
+                break
     if evidence_lines:
         result += "\n\nAdditional returned evidence:\n" + "\n".join(evidence_lines)
 
