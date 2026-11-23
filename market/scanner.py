@@ -173,7 +173,7 @@ class Scanner:
         if event_time_ms and (event_time_ms > now_ms + 5_000 or event_time_ms < now_ms - 120_000):
             return
         if valid_price(price) and valid_volume(volume) and math.isfinite(change):
-            self.cache.update_ticker(market, str(symbol), price, volume, change, source="WEBSOCKET")
+            self.cache.update_ticker(market, str(symbol), price, volume, change, source="WEBSOCKET")\n            # Fan out validated stream data through the existing shared EventBus.\n            await self.event_bus.publish(make_event(\n                EventType.MARKET_DATA, "scanner.websocket", symbol=str(symbol).upper(),\n                market=market, price=price, volume_24h=volume,\n                price_change_24h_pct=change, exchange_event_time_ms=event_time_ms or None,\n                data_source="WEBSOCKET",\n            ))
 
     async def _refresh_stream_subscriptions(self, market: str) -> None:
         if self.websocket_manager is None:
