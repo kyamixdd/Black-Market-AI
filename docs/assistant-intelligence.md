@@ -89,3 +89,33 @@ Retrieved memory content is returned as contextual data, not executable instruct
 - Memory context is exposed to the assistant API, but deterministic response wording does not yet adapt to stored preferences.
 - Cross-device account synchronization is not implemented.
 - User correction is supported by updating a memory through its ID; automatic contradiction resolution is not implemented.
+
+
+## Stage 4 controlled tool registry
+
+Assistant evidence operations are dispatched through `src_tauri/backend/assistant_tool_registry.py`. The registry exposes the existing deterministic backend capabilities through stable identifiers; it does not duplicate market, analytics, strategy, portfolio, or risk calculations.
+
+### Registered capabilities
+
+The registry currently includes read-only tools for market snapshots, historical candles, indicator reports, scanner status, signal reports, strategy reports, paper-account summaries, open paper positions, paper-trade history, risk status, and model learning/evaluation status.
+
+Each tool declares a description, input and output schema, required read permission, timeout, availability, and state-change policy. Input validation rejects missing or unsupported fields, invalid symbols, unsupported markets, and unsupported timeframes. Execution is bounded by a timeout and validates the returned tool identifier and result envelope.
+
+### Security boundary
+
+- Only registered tool IDs are accepted.
+- The current registry exposes read-only tools only.
+- State-changing tools are rejected by the registry.
+- Tool permission scopes are checked before execution.
+- The current local assistant API grants a limited set of read scopes after bearer authentication; granular account scopes and hosted account identity are not yet wired into the auth layer.
+- Tool errors are returned with safe error codes; internal exceptions are not forwarded.
+- Tool execution metadata records an execution ID, tool ID, duration, and read-only/state-change flags.
+- `GET /api/assistant/tools` returns authenticated tool metadata for client capability display.
+
+### Verification coverage
+
+The Stage 4 registry tests cover successful dispatch, unknown tool rejection, schema validation, permission denial, state-changing tool rejection, timeout handling, malformed tool results, and explicit read-only metadata. Runtime regression tests verify the assistant continues to use existing evidence services through the registry.
+
+### Limitations
+
+The registry currently covers the existing assistant evidence tool set. Additional existing services such as alert management, workspace notes, model registry administration, monitoring subscriptions, and health endpoints require separate reviewed schemas and permission mapping before registration. No write or exchange execution tools are registered.
