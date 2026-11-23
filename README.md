@@ -124,6 +124,7 @@ Public release also requires the acceptance items in [RELEASE_READINESS.md](RELE
 - [Project status and audit](docs/PROJECT_STATUS.md)
 - [Market-intelligence assistant](docs/assistant-intelligence.md)
 - [Community strategy library](docs/COMMUNITY_STRATEGY_LIBRARY.md)
+- [Complete product, architecture, feature and operating guide](blackmarketai.md)
 
 ## Disclaimer
 
