@@ -23,7 +23,9 @@ All endpoints are under `/api/evolution` and use the existing local bearer-token
 - `GET /versions`: list configuration versions.
 - `POST /versions/{version_id}/rollback`: body `{"explicit_approval": true}`; restore the saved previous configuration and record the rollback as a new version.
 
-A missing baseline results in a pending proposal that is ineligible for approval. It is not treated as evidence of improvement.
+A missing baseline results in a pending proposal that is ineligible for approval. It is not treated as evidence of improvement. Candidate reports must include the exact proposed configuration; baseline reports must include the active configuration. Reports are rejected if these snapshots do not match.
+
+To measure a candidate configuration, save its validated JSON object and run the Stage 8 benchmark with `--intelligence-config candidate.json`. The resulting report records the configuration used. A baseline should be generated under the currently active configuration.
 
 ## Persistence
 
