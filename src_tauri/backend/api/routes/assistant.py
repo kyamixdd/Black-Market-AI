@@ -98,16 +98,39 @@ class AssistantQuery(BaseModel):
 
 
 @router.post("/query")
-async def query_assistant(request: AssistantQuery):
-    supplied_fields = getattr(request, "model_fields_set", getattr(request, "__fields_set__", set()))
+async def query_assistant(request: Request, payload: AssistantQuery):
+    owner_key = _memory_owner(request)
+    repository = _memory_repository()
+    remember_match = re.match(r"^(?:please\\s+)?remember(?:\\s+that)?\\s+(.+)$", payload.query.strip(), re.I)
+    if remember_match:
+        try:
+            record = build_memory_record(
+                owner_key=owner_key, memory_type="semantic", content=remember_match.group(1),
+                source="user_explicit", importance=0.75, confidence=1.0,
+            )
+            saved = repository.save_assistant_memory(record)
+        except MemoryValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"answer": "Saved that memory.", "status": "memory_saved", "memory": saved,
+                "task": {"state": "completed", "trace": ["received", "memory_saved", "completed"]}}
+
+    recall_match = re.match(r"^(?:what do you remember(?:\\s+about)?|recall)\\s*(.*)$", payload.query.strip(), re.I)
+    if recall_match:
+        memories = retrieve_relevant_memories(repository, owner_key, recall_match.group(1) or "user preferences", limit=8)
+        answer = "Relevant saved memories: " + "; ".join(item["content"] for item in memories) if memories else "No relevant saved memories were found."
+        return {"answer": answer, "status": "memory_retrieved", "memories": memories,
+                "task": {"state": "completed", "trace": ["received", "memory_retrieved", "completed"]}}
+
+    memory_context = retrieve_relevant_memories(repository, owner_key, payload.query, limit=5)
+    supplied_fields = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
     context = ContextSnapshot(
-        symbol=request.symbol if "symbol" in supplied_fields else None,
-        timeframe=request.timeframe if "timeframe" in supplied_fields else None,
+        symbol=payload.symbol if "symbol" in supplied_fields else None,
+        timeframe=payload.timeframe if "timeframe" in supplied_fields else None,
     )
     try:
         result = await execute_assistant_query(
-            get_bridge(), request.query, request.symbol, request.market,
-            request.timeframe, context=context,
+            get_bridge(), payload.query, payload.symbol, payload.market,
+            payload.timeframe, context=context,
         )
     except AssistantRuntimeError as exc:
         raise HTTPException(
@@ -129,6 +152,7 @@ async def query_assistant(request: AssistantQuery):
         "status": result.status,
         "sources": list(result.sources),
         "data": result.data,
+        "memory_context": [{"memory_id": item["memory_id"], "memory_type": item["memory_type"], "content": item["content"], "relevance_score": item["relevance_score"]} for item in memory_context],
         "understanding": {
             "intents": [{"name": intent.name, "tool": intent.tool} for intent in parsed.intents] if parsed else [],
             "entities": parsed.entities if parsed else {},
