@@ -15,6 +15,7 @@ from .assistant_intelligence import (
 from .assistant_nlu import ContextSnapshot, StructuredAssistantRequest, parse_assistant_request
 from .assistant_tool_registry import ToolRegistryError, create_default_registry
 from .assistant_planning import TASK_EXECUTION_MANAGER, build_plan, execute_plan
+from core.intelligence_config import get_runtime_intelligence_config
 
 
 class AssistantTaskState(str, Enum):
@@ -99,6 +100,7 @@ async def execute_assistant_query(
             timeframe=timeframe, context=context, request_id=trace.task_id,
         )
         tools = list(dict.fromkeys(intent.tool for intent in parsed.intents))
+        intelligence_config = get_runtime_intelligence_config()
         assets = parsed.entities.get("assets", [])
 
         # Current evidence tools accept one asset at a time; do not imply a comparison.
@@ -122,12 +124,12 @@ async def execute_assistant_query(
             )
         if not tools:
             raise ValueError("No supported assistant tool was identified.")
-        if len(tools) > 3:
+        if len(tools) > intelligence_config.max_tool_calls:
             trace.transition(AssistantTaskState.AWAITING_CLARIFICATION)
             return AssistantExecution(
                 task_id=trace.task_id, task_state=trace.state.value,
                 task_trace=tuple(trace.transitions),
-                answer="This request contains more than three evidence categories. Please split it into smaller requests.",
+                answer=f"The active {intelligence_config.mode.value} intelligence mode allows up to {intelligence_config.max_tool_calls} evidence tools per request. Please split this request into smaller parts.",
                 tool=None, status="clarification_required", data=None, sources=(),
                 structured_request=parsed,
             )
@@ -162,7 +164,8 @@ async def execute_assistant_query(
         trace.transition(AssistantTaskState.VALIDATING)
         interpretation = None
         if len(successful) == 1 and plan_result.state == "completed":
-            interpretation = await optional_provider_interpretation(query, successful[0])
+            if intelligence_config.provider_enabled:
+                interpretation = await optional_provider_interpretation(query, successful[0])
             if interpretation:
                 answer += "\n\nOptional provider interpretation (not verified facts): " + interpretation
 
