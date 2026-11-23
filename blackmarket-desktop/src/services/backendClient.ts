@@ -97,14 +97,14 @@ export function createBackendClient(options: BackendClientOptions) {
     get: <T>(path: string) => requestJson<T>(path),
     post: <T>(path: string, body: unknown) => requestJson<T>(path, { method: 'POST', body: JSON.stringify(body) }),
     requestJson,
-    healthCheck: () => {
+    healthCheck: <T = Record<string, unknown>>() => {
       const base = options.baseUrl.replace(/\/$/, '')
       // The desktop API is mounted under /api, but FastAPI health is at the root.
       // The hosted proxy exposes the same root health endpoint beneath its base path.
       const healthUrl = /^https?:\/\//.test(base) && base.endsWith('/api')
         ? `${base.slice(0, -4)}/health`
         : `${base}/health`
-      return requestJson<Record<string, unknown>>(healthUrl)
+      return requestJson<T>(healthUrl)
     },
   }
 }
@@ -157,7 +157,7 @@ export const requestJson = <T>(path: string, api = true): Promise<T | null> =>
   api ? client.get<T>(path).catch((error: unknown) => {
     console.error(`Unable to load ${path}`, error)
     return null
-  }) : path === '/health' ? client.healthCheck().catch(() => null) : client.requestJson<T>(path).catch(() => null)
+  }) : path === '/health' ? client.healthCheck<T>().catch(() => null) : client.requestJson<T>(path).catch(() => null)
 
 export const mutateJson = <T>(path: string, method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', body?: unknown): Promise<T> =>
   client.requestJson<T>(path, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
