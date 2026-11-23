@@ -90,6 +90,12 @@ async def get_memory(memory_id: str, request: Request):
 
 
 
+@router.get("/tools")
+async def list_assistant_tools(request: Request):
+    _memory_owner(request)
+    return {"tools": create_default_registry().list_tools()}
+
+
 class AssistantQuery(BaseModel):
     query: str = Field(min_length=2, max_length=500)
     symbol: str = Field(default="BTCUSDT", min_length=2, max_length=20)
