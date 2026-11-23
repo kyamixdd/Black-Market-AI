@@ -176,6 +176,13 @@ class RealtimeIntelligence:
         if not 60 <= int(ttl_seconds) <= 30 * 86400:
             raise ValueError("Monitoring expiry must be between 60 seconds and 30 days.")
         self._expire_tasks()
+        # Reclaim terminal records first; retain active tasks and cap history.
+        for old_id, old_task in list(self._tasks.items()):
+            if len(self._tasks) < self.max_tasks:
+                break
+            if old_task.status != "active":
+                self._tasks.pop(old_id, None)
+                self._owners.pop(old_id, None)
         if len(self._tasks) >= self.max_tasks:
             raise RuntimeError("Monitoring task capacity reached.")
         now = datetime.now(timezone.utc)
