@@ -143,6 +143,7 @@ async def query_assistant(request: Request, payload: AssistantQuery):
             status_code=exc.status_code,
             detail={
                 "message": str(exc),
+                "code": exc.error_code,
                 "task": {
                     "id": exc.task_id,
                     "state": exc.task_state,
