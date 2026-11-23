@@ -132,8 +132,12 @@ def create_improvement_proposal(
     values.update(candidate_patch)
     candidate_config = IntelligenceConfig.model_validate(values)
     _validate_report_metrics(candidate_report, "candidate")
+    if candidate_report.get("intelligence_config") != candidate_config.model_dump(mode="json"):
+        raise ValueError("Candidate benchmark must be measured using the exact proposed intelligence configuration.")
     if baseline_report is not None:
         _validate_report_metrics(baseline_report, "baseline")
+        if baseline_report.get("intelligence_config") != current.model_dump(mode="json"):
+            raise ValueError("Baseline benchmark must match the currently active intelligence configuration.")
     gate = promotion_gate(candidate_report, baseline_report, {
         "minimum_intent_exact_match": METRIC_THRESHOLDS["intent_exact_match"],
         "minimum_tool_registry_safety": METRIC_THRESHOLDS["tool_registry_safety"],
