@@ -956,6 +956,53 @@ function ActivityScreen({ events }: { events: WorkspaceEvent[] }) {
   )
 }
 
+
+function IntelligenceModePanel() {
+  type Mode = 'balanced' | 'fast' | 'research' | 'conservative'
+  type Profile = { mode: Mode; max_tool_calls: number; memory_enabled: boolean; feedback_enabled: boolean; provider_enabled: boolean; response_detail: 'brief' | 'normal' | 'detailed' }
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [selected, setSelected] = useState<Mode>('balanced')
+  const [saving, setSaving] = useState(false)
+  const [status, setStatus] = useState('')
+  useEffect(() => {
+    let active = true
+    void requestJson<Profile>('/settings/intelligence').then((result) => {
+      if (active && result) { setProfile(result); setSelected(result.mode) }
+    }).catch((error) => { if (active) setStatus(error instanceof Error ? error.message : 'Could not load intelligence mode.') })
+    return () => { active = false }
+  }, [])
+  const descriptions: Record<Mode, string> = {
+    balanced: 'Balanced evidence gathering, memory and optional provider interpretation.',
+    fast: 'Single-tool requests, brief answers and no optional provider interpretation.',
+    research: 'Multi-tool evidence requests with memory and detailed output.',
+    conservative: 'Single-tool requests with provider interpretation and feedback adaptation disabled.',
+  }
+  return (
+    <>
+      <h2 className="workspace-section-title">Assistant intelligence · persistent</h2>
+      <div className="settings-card-list">
+        <label className="settings-card"><span><b>Intelligence mode</b><small>{descriptions[selected]}</small></span>
+          <select className="workspace-select" value={selected} onChange={(event) => setSelected(event.target.value as Mode)}>
+            <option value="balanced">Balanced</option><option value="fast">Fast</option><option value="research">Research</option><option value="conservative">Conservative</option>
+          </select>
+        </label>
+        <div className="settings-card"><span><b>Active profile</b><small>{profile ? `${profile.max_tool_calls} tool calls · ${profile.response_detail} response · memory ${profile.memory_enabled ? 'on' : 'off'} · provider ${profile.provider_enabled ? 'on' : 'off'}` : 'Loading configuration…'}</small></span></div>
+        <button className="settings-card" disabled={saving || !profile} onClick={async () => {
+          setSaving(true); setStatus('')
+          try {
+            const result = await mutateJson<Profile>('/settings/intelligence', 'PUT', { mode: selected })
+            if (result) { setProfile(result); setSelected(result.mode) }
+            setStatus('Intelligence mode saved and reloaded.')
+          } catch (error) { setStatus(error instanceof Error ? error.message : 'Could not save intelligence mode.') }
+          finally { setSaving(false) }
+        }}><span><b>{saving ? 'Saving…' : 'Apply intelligence mode'}</b><small>Changes apply to subsequent assistant requests.</small></span></button>
+        {status && <p role="status" className="settings-status">{status}</p>}
+      </div>
+    </>
+  )
+}
+
+
 function SettingsScreen({
   settings,
   preferences,
@@ -975,6 +1022,7 @@ function SettingsScreen({
   return (
     <>
       <ScreenHeader title="Settings" description="Engine settings are validated, saved locally by the backend, and applied to the running scanner and risk controls." />
+      <IntelligenceModePanel />
       <h2 className="workspace-section-title">Dashboard preferences · this device</h2>
       <div className="settings-card-list">
         {([
