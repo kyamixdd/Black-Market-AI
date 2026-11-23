@@ -19,7 +19,9 @@ from typing import Any
 from src_tauri.backend.assistant_nlu import parse_assistant_request
 from src_tauri.backend.assistant_tool_registry import create_default_registry
 from src_tauri.backend.assistant_memory import retrieve_relevant_memories
+from src_tauri.backend import assistant_runtime
 from src_tauri.backend.assistant_runtime import execute_assistant_query
+from core.intelligence_config import IntelligenceConfig, get_runtime_intelligence_config
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +56,17 @@ def _ratio(correct: int, total: int) -> float:
     return round(correct / total, 4) if total else 0.0
 
 
-async def evaluate(dataset: dict[str, Any]) -> dict[str, Any]:
+async def evaluate(dataset: dict[str, Any], intelligence_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    configured = IntelligenceConfig.model_validate(intelligence_config) if intelligence_config is not None else get_runtime_intelligence_config()
+    original_loader = assistant_runtime.get_runtime_intelligence_config
+    assistant_runtime.get_runtime_intelligence_config = lambda: configured
+    try:
+        return await _evaluate(dataset, configured)
+    finally:
+        assistant_runtime.get_runtime_intelligence_config = original_loader
+
+
+async def _evaluate(dataset: dict[str, Any], configured: IntelligenceConfig) -> dict[str, Any]:
     intent_correct = 0
     intent_results = []
     for case in dataset["intent_cases"]:
@@ -123,6 +135,7 @@ async def evaluate(dataset: dict[str, Any]) -> dict[str, Any]:
         "dataset_version": dataset["version"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "baseline_status": "measured",
+        "intelligence_config": configured.model_dump(mode="json"),
         "sample_counts": {
             "intent": len(intent_results), "tools": len(tool_checks),
             "memory": len(memory_results), "completion": len(completion_results),
@@ -166,11 +179,13 @@ def main() -> int:
     parser.add_argument("--dataset", default=str(DATASET_PATH))
     parser.add_argument("--report", required=True)
     parser.add_argument("--baseline")
+    parser.add_argument("--intelligence-config", help="JSON file containing a validated candidate intelligence config")
     parser.add_argument("--enforce-promotion", action="store_true")
     args = parser.parse_args()
 
     dataset = json.loads(Path(args.dataset).read_text(encoding="utf-8"))
-    report = asyncio.run(evaluate(dataset))
+    config_override = json.loads(Path(args.intelligence_config).read_text(encoding="utf-8")) if args.intelligence_config else None
+    report = asyncio.run(evaluate(dataset, config_override))
     baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8")) if args.baseline else None
     report["promotion"] = promotion_gate(report, baseline, dataset["promotion_policy"])
     report_path = Path(args.report)
