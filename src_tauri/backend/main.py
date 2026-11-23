@@ -57,7 +57,7 @@ from src_tauri.backend.api.routes.schemas import (
     SystemHealthResponse,
 )
 from src_tauri.backend.api.websocket.manager import WebSocketManager
-from src_tauri.backend.bridge.orchestrator_bridge import get_bridge
+from src_tauri.backend.bridge.orchestrator_bridge import get_bridge\nfrom src_tauri.backend.realtime_intelligence import RealtimeIntelligence
 
 logger = logging.getLogger(__name__)
 
