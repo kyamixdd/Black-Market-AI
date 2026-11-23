@@ -19,19 +19,35 @@ Unavailable records are reported as unavailable rather than fabricated. The assi
 
 ## Stage 1 request orchestration
 
-The API route delegates request execution to `assistant_runtime.execute_assistant_query`. The runtime coordinates the existing deterministic tool selector, input validation, evidence tool execution, result summarization, and optional provider interpretation.
+The API route delegates request execution to `assistant_runtime.execute_assistant_query`. The runtime coordinates validated input, evidence tool execution, result summarization, and optional provider interpretation.
 
-Each request receives a unique task ID and an in-request lifecycle trace:
+Each request receives a unique task ID and an in-request lifecycle trace. The trace is scoped to the current request and is not durable task storage. Errors return a sanitized message and bounded task metadata.
 
-`received → interpreting → executing → validating → completed`
+The runtime does not calculate market indicators, change paper-trading state, grant permissions, or execute arbitrary code.
 
-Validation or execution exceptions move the trace to `failed`. The API returns a bounded task ID, failed state, and lifecycle trace with a sanitized error message. The trace is scoped to the current request and is not durable task storage.
+## Stage 2 natural-language understanding
 
-The runtime does not calculate market indicators, change paper-trading state, grant permissions, or execute arbitrary code. Existing allowlisted evidence tools remain authoritative. Multi-step planning, persistent memory, feedback learning, event-driven monitoring, and cancellation are not implemented by this stage.
+`assistant_nlu.parse_assistant_request` converts a supported request into a structured representation containing:
+
+- Request ID and original/normalized text
+- One or more deterministic intent categories and associated registered evidence tools
+- Asset symbols, market and timeframe
+- Duration expressions and numeric values
+- Recognized constraints
+- Conversational reference markers
+- Confidence level with explanatory signals
+- Clarification requirement and question
+- Unsupported-request status
+
+The parser uses a bounded deterministic vocabulary and regular-expression extraction. Confidence is categorical and reflects detectable signals; it is not a calibrated probability.
+
+The runtime executes up to three distinct evidence categories sequentially. Multi-asset comparisons are not yet implemented because the current evidence tools accept one asset per call; these requests return a clarification instead of implying a comparison occurred. Requests with missing references or unsupported intent also ask for clarification. The API exposes parsed understanding as additive response metadata.
+
+Context is supplied only when the request explicitly includes symbol or timeframe fields. The API does not yet maintain conversational history across requests; persistent context resolution is deferred to a later stage.
 
 ## Optional compatible provider
 
-A provider can add a short interpretation to the deterministic evidence. It is disabled by default. Configure these backend environment variables only if a compatible service is available:
+A provider can add a short interpretation to deterministic evidence. It is disabled by default. Configure these backend environment variables only if a compatible service is available:
 
 - `BLACKMARKET_ASSISTANT_PROVIDER=openai_compatible`
 - `BLACKMARKET_ASSISTANT_API_URL=https://your-compatible-endpoint/v1`
