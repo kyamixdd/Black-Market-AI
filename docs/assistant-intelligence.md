@@ -119,3 +119,45 @@ The Stage 4 registry tests cover successful dispatch, unknown tool rejection, sc
 ### Limitations
 
 The registry currently covers the existing assistant evidence tool set. Additional existing services such as alert management, workspace notes, model registry administration, monitoring subscriptions, and health endpoints require separate reviewed schemas and permission mapping before registration. No write or exchange execution tools are registered.
+
+
+## Stage 5 — Planning and task execution
+
+Assistant requests with multiple supported evidence intents are converted into a bounded `AssistantTaskPlan` and executed by `assistant_planning.py`.
+
+### Planning and execution controls
+
+- Plans contain stable task and step IDs, registered tool IDs, validated arguments, dependencies, and step state.
+- Plans are limited to eight steps/tool calls.
+- Dependencies must reference an earlier step; missing, forward, and self-dependencies are rejected.
+- Steps execute in dependency order. A step whose dependency failed or was cancelled is marked blocked.
+- Read-only execution and tool schemas continue to be enforced by the Stage 4 registry.
+- Only transient tool timeout/execution failures receive one bounded retry. Validation and permission errors are not retried.
+- Results are retained per step so successful work is not discarded when another step fails.
+- Task outcomes distinguish completed, failed, partially completed, and cancelled.
+- Cancellation is checked before each step and can interrupt an in-flight asynchronous tool call.
+
+### Task API
+
+The existing synchronous `POST /api/assistant/query` remains compatible.
+
+New asynchronous task endpoints:
+
+- `POST /api/assistant/tasks` — submit a task and return its task ID.
+- `GET /api/assistant/tasks/{task_id}` — retrieve task state and result.
+- `POST /api/assistant/tasks/{task_id}/cancel` — request cancellation.
+
+Task status and cancellation require the same bearer-authenticated owner namespace as assistant memory. Task records are held in a bounded in-process cache; they are not durable across backend restarts and are not shared across multiple worker processes.
+
+### Clarification and failure behavior
+
+The existing NLU clarification path is retained. Multi-asset requests that current tools cannot compare still request clarification rather than silently analyzing only one asset. Invalid or unsupported requests do not execute a plan.
+
+### Limitations
+
+- Plans currently contain the existing read-only evidence tools; no assistant state-changing tools are allowed.
+- Current tool inputs share the existing symbol/market/timeframe contract.
+- Dependency tracking is implemented and tested, but current NLU-generated evidence steps are independent unless a plan explicitly declares dependencies.
+- Asynchronous task cache and cancellation registry are process-local. Multi-worker deployments need shared task state and cancellation signaling.
+- Cancellation cannot undo a tool operation that already completed; current registry tools are read-only.
+- The task endpoint does not yet stream live step progress; clients poll task status.
