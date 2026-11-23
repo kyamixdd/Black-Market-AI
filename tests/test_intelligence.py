@@ -206,3 +206,38 @@ def test_signal_deduplication():
 
     # Second should be duplicate
     assert core._is_duplicate(signal) is True
+
+@pytest.mark.asyncio
+async def test_decision_engine_does_not_duplicate_event_envelope_fields(monkeypatch):
+    from core.event_bus import EventBus
+    from intelligence.decision_engine import DecisionEngine
+
+    bus = EventBus()
+    published = []
+
+    async def capture(event):
+        published.append(event)
+
+    monkeypatch.setattr(bus, "publish", capture)
+    engine = DecisionEngine(bus)
+    monkeypatch.setattr(engine.validator, "validate", lambda _signal: (True, ""))
+    monkeypatch.setattr(engine.confidence_engine, "calculate", lambda _signal: 0.9)
+
+    signal = {
+        "signal_id": "REGRESSION-SYMBOL",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "strategy": "test",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 99.0,
+        "take_profit": [102.0],
+    }
+    await engine.evaluate_signal(signal)
+
+    assert len(published) == 1
+    event = published[0]
+    assert event.symbol == "BTCUSDT"
+    assert event.market == "FUTURES"
+    assert "symbol" not in event.payload
+    assert "market" not in event.payload
