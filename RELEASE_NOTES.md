@@ -1,5 +1,7 @@
 # BlackMarket AI 1.0.0 — Beta Release Candidate
 
+> Status refreshed 23 November 2026. Source audit baseline: `49e6841215303ed296ced4fc1ef3039b9959426d`. This note is not evidence of a new binary, deployment or current-head CI pass.
+
 > Documentation status refreshed 23 November 2026. The comprehensive source audit reviewed application baseline `49e6841215303ed296ced4fc1ef3039b9959426d`. This note is not evidence of a new binary, deployment, or current-head CI pass.
 
 ## Included
