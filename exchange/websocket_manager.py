@@ -19,8 +19,8 @@ from market.data_reliability import MarketDataState
 
 logger = logging.getLogger(__name__)
 
-SPOT_WS_URL = "wss://stream.binance.com:9443/ws"
-FUTURES_WS_URL = "wss://fstream.binance.com/ws"
+SPOT_WS_URL = "wss://stream.binance.com:9443"
+FUTURES_WS_URL = "wss://fstream.binance.com"
 
 
 class WebSocketManager:
@@ -40,11 +40,20 @@ class WebSocketManager:
     def add_handler(self, handler: Callable[[dict], Awaitable[None]]) -> None:
         self._handlers.append(handler)
 
+    @staticmethod
+    def _build_stream_url(base_url: str, streams: list[str]) -> str:
+        """Build Binance raw or combined stream URL from the exchange host root."""
+        if not streams:
+            raise ValueError("At least one stream is required")
+        if len(streams) == 1:
+            return f"{base_url}/ws/{streams[0]}"
+        stream_path = "/".join(streams)
+        return f"{base_url}/stream?streams={stream_path}"
+
     async def _run_stream(self, base_url: str, streams: list[str]) -> None:
         if not streams:
             return
-        stream_path = "/".join(streams)
-        url = f"{base_url}/{streams[0]}" if len(streams) == 1 else f"{base_url}/stream?streams={stream_path}"
+        url = self._build_stream_url(base_url, streams)
         backoff = 1.0
         while self._running:
             try:
