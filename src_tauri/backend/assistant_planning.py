@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
 from .assistant_tool_registry import AssistantToolRegistry, ToolRegistryError
@@ -139,10 +139,26 @@ async def execute_plan(
                 break
             step.attempts += 1
             total_attempts += 1
+            invocation = asyncio.create_task(registry.invoke(
+                bridge, step.tool_id, step.arguments, permissions=permissions
+            ))
+            cancellation = asyncio.create_task(cancel_event.wait())
+            done, _ = await asyncio.wait(
+                {invocation, cancellation}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if cancellation in done and cancel_event.is_set():
+                invocation.cancel()
+                try:
+                    await invocation
+                except asyncio.CancelledError:
+                    pass
+                step.state = PlanStepState.CANCELLED
+                cancelled = True
+                cancellation.cancel()
+                break
+            cancellation.cancel()
             try:
-                step.result = await registry.invoke(
-                    bridge, step.tool_id, step.arguments, permissions=permissions
-                )
+                step.result = await invocation
                 step.state = PlanStepState.COMPLETED
                 break
             except ToolRegistryError as exc:
