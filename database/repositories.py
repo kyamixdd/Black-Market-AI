@@ -869,7 +869,7 @@ class Repository:
             obj = session.get(AssistantMemoryModel, memory_id)
             if obj is None or obj.owner_key != owner_key:
                 return None
-            if obj.expires_at is not None and obj.expires_at <= datetime.now(timezone.utc):
+            if obj.expires_at is not None and obj.expires_at.replace(tzinfo=None) <= datetime.now(timezone.utc).replace(tzinfo=None):
                 session.delete(obj)
                 session.commit()
                 return None
@@ -905,6 +905,8 @@ class Repository:
     def delete_expired_assistant_memories(self, *, now: datetime | None = None) -> int:
         from sqlalchemy import delete
         current = now or datetime.now(timezone.utc)
+        if current.tzinfo is not None:
+            current = current.replace(tzinfo=None)
         with self._get_session() as session:
             result = session.execute(delete(AssistantMemoryModel).where(
                 AssistantMemoryModel.expires_at.is_not(None),
