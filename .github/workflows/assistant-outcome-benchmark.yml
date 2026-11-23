@@ -1,0 +1,52 @@
+name: Assistant outcome benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_report:
+        description: Optional repository-relative baseline report path
+        required: false
+        type: string
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Measure assistant outcome quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r src_tauri/backend/requirements.txt
+      - name: Run versioned benchmark
+        shell: bash
+        env:
+          BASELINE_REPORT: ${{ inputs.baseline_report }}
+        run: |
+          set -euo pipefail
+          report="assistant-outcome-${GITHUB_SHA}.json"
+          args=(--report "$report")
+          if [[ -n "$BASELINE_REPORT" ]]; then
+            test -f "$BASELINE_REPORT"
+            args+=(--baseline "$BASELINE_REPORT" --enforce-promotion)
+          fi
+          python -m benchmarks.assistant_outcomes.evaluate "${args[@]}"
+      - name: Upload versioned evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assistant-outcome-v1-${{ github.sha }}
+          path: assistant-outcome-${{ github.sha }}.json
+          if-no-files-found: warn
+          retention-days: 90
