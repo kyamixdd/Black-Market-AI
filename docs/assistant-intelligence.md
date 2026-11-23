@@ -25,7 +25,7 @@ Each request receives a unique task ID and an in-request lifecycle trace:
 
 `received → interpreting → executing → validating → completed`
 
-Validation or execution exceptions move the trace to `failed` and are re-raised to the API boundary. The trace is bounded to the current request and is not represented as durable task storage.
+Validation or execution exceptions move the trace to `failed`. The API returns a bounded task ID, failed state, and lifecycle trace with a sanitized error message. The trace is scoped to the current request and is not durable task storage.
 
 The runtime does not calculate market indicators, change paper-trading state, grant permissions, or execute arbitrary code. Existing allowlisted evidence tools remain authoritative. Multi-step planning, persistent memory, feedback learning, event-driven monitoring, and cancellation are not implemented by this stage.
 
