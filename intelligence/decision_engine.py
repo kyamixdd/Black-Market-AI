@@ -28,16 +28,22 @@ class DecisionEngine:
         # Evaluate confidence
         confidence = self.confidence_engine.calculate(signal)
         signal["confidence"] = confidence
+        # Event envelope fields belong on Event, not duplicated in its payload.
+        event_payload = {
+            key: value for key, value in signal.items()
+            if key not in {"symbol", "market"}
+        }
         # High confidence threshold
         if confidence >= 0.65:
             await self.event_bus.publish(make_event(
                 EventType.SIGNAL_VALIDATED, "decision_engine",
                 symbol=signal["symbol"], market=signal["market"],
-                **signal
+                **event_payload
             ))
             logger.info("Signal %s validated (conf: %.2f)", signal["signal_id"], confidence)
         else:
             await self.event_bus.publish(make_event(
                 EventType.SIGNAL_REJECTED, "decision_engine",
-                reason="Low confidence", **signal
+                symbol=signal["symbol"], market=signal["market"],
+                reason="Low confidence", **event_payload
             ))
