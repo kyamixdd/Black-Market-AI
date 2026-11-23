@@ -17,6 +17,7 @@ from ...bridge.orchestrator_bridge import get_bridge
 from ...assistant_nlu import ContextSnapshot
 from ...assistant_runtime import AssistantRuntimeError, execute_assistant_query
 from ...assistant_planning import TASK_EXECUTION_MANAGER
+from core.intelligence_config import get_runtime_intelligence_config
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -207,7 +208,8 @@ async def query_assistant(request: Request, payload: AssistantQuery):
         return {"answer": answer, "status": "memory_retrieved", "memories": memories,
                 "task": {"state": "completed", "trace": ["received", "memory_retrieved", "completed"]}}
 
-    memory_context = retrieve_relevant_memories(repository, owner_key, payload.query, limit=5)
+    intelligence_config = get_runtime_intelligence_config()
+    memory_context = retrieve_relevant_memories(repository, owner_key, payload.query, limit=5) if intelligence_config.memory_enabled else []
     supplied_fields = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
     context = ContextSnapshot(
         symbol=payload.symbol if "symbol" in supplied_fields else None,
@@ -233,7 +235,7 @@ async def query_assistant(request: Request, payload: AssistantQuery):
         ) from exc
 
     parsed = result.structured_request
-    saved_preferences = repository.get_assistant_preferences(owner_key)
+    saved_preferences = repository.get_assistant_preferences(owner_key) if intelligence_config.feedback_enabled else []
     adapted_answer, applied_preferences = apply_assistant_preferences(result.answer, result.data, saved_preferences)
     return {
         "answer": adapted_answer,
@@ -301,7 +303,7 @@ async def submit_assistant_feedback(request: Request, payload: AssistantFeedback
     })
     adapted = None
     threshold = 3
-    if preference_key:
+    if preference_key and get_runtime_intelligence_config().feedback_enabled:
         evidence = repository.count_assistant_feedback(
             owner_key, payload.feedback_type, preference_key=preference_key,
         )
