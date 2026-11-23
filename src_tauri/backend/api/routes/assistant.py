@@ -286,7 +286,7 @@ async def submit_assistant_feedback(request: Request, payload: AssistantFeedback
         preference_key = preference_value = None
 
     # Do not persist credential-like strings in optional user comments/corrections.
-    secret_pattern = re.compile(r"(?i)(api[_ -]?key|password|token|secret)\\s*[:=]|\\bBearer\\s+")
+    secret_pattern = re.compile(r"(?i)(api[_ -]?key|password|token|secret)\s*[:=]|\bBearer\s+")
     correction = payload.correction.strip()
     comment = payload.comment.strip()
     if secret_pattern.search(correction) or secret_pattern.search(comment):
