@@ -9,9 +9,9 @@ from typing import Any
 MEMORY_TYPES = {"working", "episodic", "semantic", "procedural"}
 _SOURCE = {"user_explicit", "assistant_summary", "validated_workflow"}
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)\\b(api[_ -]?key|secret|password|token|private[_ -]?key)\\s*[:=]\\s*\\S+"),
-    re.compile(r"(?i)\\bBearer\\s+[A-Za-z0-9._~+/-]+=*"),
-    re.compile(r"(?i)\\b(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\\b"),
+    re.compile(r"(?i)\b(api[_ -]?key|secret|password|token|private[_ -]?key)\s*[:=]\s*\S+"),
+    re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*"),
+    re.compile(r"(?i)\b(?:sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b"),
 )
 
 
