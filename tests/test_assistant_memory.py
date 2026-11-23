@@ -107,3 +107,45 @@ def test_memory_deduplicates_same_owner_type_and_content(memory_repo):
     assert saved_first["memory_id"] == saved_second["memory_id"]
     assert saved_second["version"] == 2
     assert len(memory_repo.retrieve_assistant_memories("owner-a", limit=20)) == 1
+
+
+@pytest.mark.asyncio
+async def test_assistant_remember_and_recall_commands_are_explicit(monkeypatch, tmp_path):
+    from starlette.requests import Request
+    from src_tauri.backend.api.routes import assistant as assistant_route
+    from src_tauri.backend.api.routes.assistant import AssistantQuery
+
+    db = Database(f"sqlite:///{tmp_path / 'api-memory.db'}")
+    db.init_db()
+    repository = Repository(db.session_maker())
+    monkeypatch.setattr(assistant_route, "_memory_repository", lambda: repository)
+
+    def make_request(token):
+        return Request({
+            "type": "http", "method": "POST", "path": "/api/assistant/query",
+            "headers": [(b"authorization", ("Bearer " + token).encode())],
+            "query_string": b"", "server": ("test", 80), "client": ("127.0.0.1", 1234),
+            "scheme": "http", "http_version": "1.1", "root_path": "",
+        })
+
+    saved = await assistant_route.query_assistant(
+        make_request("local-token-a"),
+        AssistantQuery(query="Remember that I prefer detailed explanations"),
+    )
+    assert saved["status"] == "memory_saved"
+    assert saved["memory"]["content"] == "I prefer detailed explanations"
+
+    recalled = await assistant_route.query_assistant(
+        make_request("local-token-a"),
+        AssistantQuery(query="What do you remember about explanations?"),
+    )
+    assert recalled["status"] == "memory_retrieved"
+    assert "detailed explanations" in recalled["answer"]
+
+    other_user = await assistant_route.query_assistant(
+        make_request("local-token-b"),
+        AssistantQuery(query="What do you remember about explanations?"),
+    )
+    assert other_user["status"] == "memory_retrieved"
+    assert other_user["memories"] == []
+    db.close()
