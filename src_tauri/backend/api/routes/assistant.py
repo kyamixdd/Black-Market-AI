@@ -101,7 +101,7 @@ class AssistantQuery(BaseModel):
 async def query_assistant(request: Request, payload: AssistantQuery):
     owner_key = _memory_owner(request)
     repository = _memory_repository()
-    remember_match = re.match(r"^(?:please\\s+)?remember(?:\\s+that)?\\s+(.+)$", payload.query.strip(), re.I)
+    remember_match = re.match(r"^(?:please\s+)?remember(?:\s+that)?\s+(.+)$", payload.query.strip(), re.I)
     if remember_match:
         try:
             record = build_memory_record(
@@ -114,7 +114,7 @@ async def query_assistant(request: Request, payload: AssistantQuery):
         return {"answer": "Saved that memory.", "status": "memory_saved", "memory": saved,
                 "task": {"state": "completed", "trace": ["received", "memory_saved", "completed"]}}
 
-    recall_match = re.match(r"^(?:what do you remember(?:\\s+about)?|recall)\\s*(.*)$", payload.query.strip(), re.I)
+    recall_match = re.match(r"^(?:what do you remember(?:\s+about)?|recall)\s*(.*)$", payload.query.strip(), re.I)
     if recall_match:
         memories = retrieve_relevant_memories(repository, owner_key, recall_match.group(1) or "user preferences", limit=8)
         answer = "Relevant saved memories: " + "; ".join(item["content"] for item in memories) if memories else "No relevant saved memories were found."
