@@ -100,6 +100,17 @@ def detect_weaknesses(report: dict[str, Any]) -> list[dict[str, Any]]:
     return weaknesses
 
 
+def _validate_report_metrics(report: dict[str, Any], label: str) -> None:
+    if not isinstance(report, dict) or not isinstance(report.get("metrics"), dict):
+        raise ValueError(f"{label.capitalize()} benchmark report must contain metrics.")
+    for metric in METRIC_THRESHOLDS:
+        value = report["metrics"].get(metric)
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(float(value)) or not 0 <= float(value) <= 1:
+            raise ValueError(f"{label.capitalize()} report metric {metric} must be finite and between 0 and 1.")
+    if not isinstance(report.get("report_version"), str) or not report["report_version"]:
+        raise ValueError(f"{label.capitalize()} benchmark report version is required.")
+
+
 def create_improvement_proposal(
     candidate_patch: dict[str, Any],
     candidate_report: dict[str, Any],
