@@ -9,6 +9,8 @@ from src_tauri.backend.assistant_memory import (
     MemoryValidationError,
     build_memory_record,
     retrieve_relevant_memories,
+    apply_assistant_preferences,
+    preference_adaptation_for_feedback,
 )
 
 
@@ -150,3 +152,59 @@ async def test_assistant_remember_and_recall_commands_are_explicit(monkeypatch, 
     assert other_user["status"] == "memory_retrieved"
     assert other_user["memories"] == []
     db.close()
+
+
+def test_feedback_and_preferences_persist_with_owner_scope(memory_repo):
+    for idx in range(3):
+        memory_repo.save_assistant_feedback({
+            "feedback_id": f"{idx:032x}", "owner_key": "owner-a",
+            "request_id": f"{idx + 10:032x}", "feedback_type": "too_detailed",
+            "correction": "response_detail", "comment": "",
+        })
+    assert memory_repo.count_assistant_feedback(
+        "owner-a", "too_detailed", preference_key="response_detail"
+    ) == 3
+    assert memory_repo.count_assistant_feedback(
+        "owner-b", "too_detailed", preference_key="response_detail"
+    ) == 0
+
+    preference = memory_repo.set_assistant_preference(
+        "owner-a", "response_detail", "concise", source="feedback",
+        evidence_count=3, confidence=0.7,
+    )
+    assert preference["source"] == "feedback"
+    assert preference["version"] == 1
+    corrected = memory_repo.set_assistant_preference(
+        "owner-a", "response_detail", "detailed", source="user_correction",
+        evidence_count=1, confidence=1.0,
+    )
+    assert corrected["version"] == 2
+    assert memory_repo.get_assistant_preferences("owner-a")[0]["preference_value"] == "detailed"
+    assert memory_repo.get_assistant_preferences("owner-b") == []
+    assert memory_repo.delete_assistant_preference("owner-a", "response_detail")
+    assert memory_repo.get_assistant_preferences("owner-a") == []
+
+
+def test_feedback_preference_application_is_validated_and_bounded():
+    answer, applied = apply_assistant_preferences(
+        "Snapshot summary.", {"price": 100, "freshness": "fresh", "secret_field": "not a secret"},
+        [
+            {"preference_key": "response_detail", "preference_value": "detailed"},
+            {"preference_key": "response_format", "preference_value": "structured"},
+            {"preference_key": "unknown", "preference_value": "anything"},
+            {"preference_key": "response_detail", "preference_value": "unsafe"},
+        ],
+    )
+    assert applied == {"response_detail": "detailed", "response_format": "structured"}
+    assert answer.startswith("Summary\nSnapshot summary.")
+    assert "price: 100" in answer
+    assert "freshness: fresh" in answer
+
+
+def test_feedback_adaptation_requires_repeated_specific_evidence():
+    assert preference_adaptation_for_feedback("too_detailed", 1) is None
+    assert preference_adaptation_for_feedback("too_detailed", 2) is None
+    assert preference_adaptation_for_feedback("too_detailed", 3) == ("response_detail", "concise")
+    assert preference_adaptation_for_feedback("too_brief", 3) == ("response_detail", "detailed")
+    assert preference_adaptation_for_feedback("incorrect", 100) is None
+    assert preference_adaptation_for_feedback("too_detailed", 3, threshold=4) is None

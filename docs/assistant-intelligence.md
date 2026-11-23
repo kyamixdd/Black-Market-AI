@@ -179,3 +179,42 @@ Authenticated endpoints:
 - `GET /api/assistant/monitoring/status` reports service and queue health.
 
 Monitoring records are currently process-local and are lost on backend restart. Notifications are represented by monitor state; user-facing push/desktop notification delivery and durable monitoring storage are not implemented in this stage. Market data is only available while the existing scanner/WebSocket infrastructure is running; no continuous monitoring is claimed while the backend is offline.
+
+
+## Stage 7 feedback and preference adaptation
+
+Assistant feedback is stored in the existing database through `AssistantFeedbackModel`; preferences are stored in `AssistantPreferenceModel`. Both records are scoped by the SHA-256-derived owner namespace used by assistant memory. Feedback stores the request identifier and bounded feedback category/comment/correction fields rather than duplicating the complete request or response.
+
+Authenticated feedback API:
+
+- `POST /api/assistant/feedback` records a supported feedback category for a request.
+- `GET /api/assistant/preferences` returns the caller's saved response preferences.
+- `PUT /api/assistant/preferences` records an explicit user correction for supported response preferences.
+- `DELETE /api/assistant/preferences/{preference_key}` removes a preference owned by the caller.
+
+Automatic adaptation is deliberately narrow. Only repeated `too_detailed` or `too_brief` feedback can adapt `response_detail`; at least three matching feedback records from the preceding 90 days are required. Other feedback types are recorded for evaluation but do not change stable preferences. Confidence is capped at 0.85, and isolated ratings do not alter preferences.
+
+Explicit preference correction takes precedence over learned feedback and sets confidence to 1.0. Supported preferences are `response_detail` (`concise` or `detailed`) and `response_format` (`structured` or `narrative`). The query endpoint applies validated preferences to response presentation only. It does not change market calculations, tool selection permissions, risk limits, trading state, or source evidence. Detailed presentation adds a bounded selection of returned top-level evidence fields and excludes secret-like field names.
+
+Feedback comments and corrections are length-limited and checked for common credential patterns. Feedback and preferences are owner-scoped, deletable, and persisted. Preference adaptation remains rule-based; no model training or autonomous production code modification occurs.
+
+
+Feedback request example:
+
+```json
+{
+  "request_id": "a1b2c3d4e5f678901234567890abcdef",
+  "feedback_type": "too_detailed",
+  "correction": "",
+  "comment": ""
+}
+```
+
+Preference correction example:
+
+```json
+{
+  "preference_key": "response_detail",
+  "preference_value": "concise"
+}
+```
