@@ -43,7 +43,7 @@ class AssistantTaskTrace:
             AssistantTaskState.INTERPRETING: {AssistantTaskState.AWAITING_CLARIFICATION, AssistantTaskState.EXECUTING, AssistantTaskState.FAILED},
             AssistantTaskState.AWAITING_CLARIFICATION: set(),
             AssistantTaskState.EXECUTING: {AssistantTaskState.VALIDATING, AssistantTaskState.FAILED, AssistantTaskState.PARTIALLY_COMPLETED, AssistantTaskState.CANCELLED},
-            AssistantTaskState.VALIDATING: {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED, AssistantTaskState.PARTIALLY_COMPLETED},
+            AssistantTaskState.VALIDATING: {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED, AssistantTaskState.PARTIALLY_COMPLETED, AssistantTaskState.CANCELLED},
             AssistantTaskState.COMPLETED: set(),
             AssistantTaskState.FAILED: set(),
             AssistantTaskState.PARTIALLY_COMPLETED: set(),
