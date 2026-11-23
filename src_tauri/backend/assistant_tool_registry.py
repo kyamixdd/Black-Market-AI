@@ -188,7 +188,17 @@ class AssistantToolRegistry:
         except asyncio.TimeoutError as exc:
             raise ToolRegistryError("tool_timeout", "Assistant tool exceeded its execution timeout.", status_code=504) from exc
         except ValueError as exc:
-            raise ToolRegistryError("tool_validation_failed", str(exc)) from exc
+            message = str(exc)
+            lowered = message.lower()
+            if "symbol" in lowered:
+                code = "invalid_symbol"
+            elif "market" in lowered:
+                code = "invalid_market"
+            elif "timeframe" in lowered:
+                code = "invalid_timeframe"
+            else:
+                code = "tool_validation_failed"
+            raise ToolRegistryError(code, message) from exc
         except Exception as exc:
             raise ToolRegistryError("tool_execution_failed", "Assistant tool execution failed safely.", status_code=502) from exc
         if not isinstance(result, dict):
