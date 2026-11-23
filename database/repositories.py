@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from sqlalchemy import select, update, func
@@ -636,8 +637,23 @@ class Repository:
 
     # --- Saved strategies, backtest reports, and workspaces ---
     @staticmethod
+    def _json_default(value: Any) -> Any:
+        """Convert common domain values into stable JSON-compatible data."""
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, Enum):
+            return value.value
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            return model_dump(mode="json")
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+    @staticmethod
     def _json_value(value: Any) -> str:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        return json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+            default=Repository._json_default,
+        )
 
     @staticmethod
     def _json_object(value: str) -> dict[str, Any]:
@@ -794,7 +810,7 @@ class Repository:
                 source=event_dict["source"],
                 symbol=event_dict.get("symbol"),
                 market=event_dict.get("market"),
-                payload=json.dumps(event_dict.get("payload", {})),
+                payload=self._json_value(event_dict.get("payload", {})),
             )
             session.add(ev)
             session.commit()
