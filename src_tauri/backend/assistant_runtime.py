@@ -1,4 +1,4 @@
-"""Request orchestration boundary for the deterministic market assistant."""
+"""Bounded request orchestration for deterministic assistant evidence tools."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -9,16 +9,17 @@ from uuid import uuid4
 from .assistant_intelligence import (
     execute_tool,
     optional_provider_interpretation,
-    select_tool,
     summarize_result,
     validate_market,
     validate_symbol,
 )
+from .assistant_nlu import ContextSnapshot, StructuredAssistantRequest, parse_assistant_request
 
 
 class AssistantTaskState(str, Enum):
     RECEIVED = "received"
     INTERPRETING = "interpreting"
+    AWAITING_CLARIFICATION = "awaiting_clarification"
     EXECUTING = "executing"
     VALIDATING = "validating"
     COMPLETED = "completed"
@@ -36,7 +37,8 @@ class AssistantTaskTrace:
     def transition(self, next_state: AssistantTaskState) -> None:
         allowed = {
             AssistantTaskState.RECEIVED: {AssistantTaskState.INTERPRETING, AssistantTaskState.FAILED},
-            AssistantTaskState.INTERPRETING: {AssistantTaskState.EXECUTING, AssistantTaskState.FAILED},
+            AssistantTaskState.INTERPRETING: {AssistantTaskState.AWAITING_CLARIFICATION, AssistantTaskState.EXECUTING, AssistantTaskState.FAILED},
+            AssistantTaskState.AWAITING_CLARIFICATION: set(),
             AssistantTaskState.EXECUTING: {AssistantTaskState.VALIDATING, AssistantTaskState.FAILED},
             AssistantTaskState.VALIDATING: {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED},
             AssistantTaskState.COMPLETED: set(),
@@ -61,8 +63,6 @@ class AssistantRuntimeError(Exception):
 
 @dataclass(frozen=True)
 class AssistantExecution:
-    """Validated assistant response and its execution metadata."""
-
     task_id: str
     task_state: str
     task_trace: tuple[str, ...]
@@ -72,6 +72,7 @@ class AssistantExecution:
     data: Any
     sources: tuple[str, ...]
     interpretation: str | None = None
+    structured_request: StructuredAssistantRequest | None = None
 
 
 async def execute_assistant_query(
@@ -80,47 +81,88 @@ async def execute_assistant_query(
     symbol: str = "BTCUSDT",
     market: str = "SPOT",
     timeframe: str = "1h",
+    context: ContextSnapshot | None = None,
 ) -> AssistantExecution:
-    """Run one bounded assistant request through existing evidence services."""
+    """Interpret and execute up to three distinct evidence intents."""
     trace = AssistantTaskTrace()
     try:
         trace.transition(AssistantTaskState.INTERPRETING)
-        normalized_symbol = validate_symbol(symbol)
-        normalized_market = validate_market(market)
-        tool = select_tool(query)
+        parsed = parse_assistant_request(
+            query, symbol=validate_symbol(symbol), market=validate_market(market),
+            timeframe=timeframe, context=context, request_id=trace.task_id,
+        )
+        tools = list(dict.fromkeys(intent.tool for intent in parsed.intents))
+        assets = parsed.entities.get("assets", [])
+
+        # Current evidence tools accept one asset at a time; do not imply a comparison.
+        if len(assets) > 1:
+            parsed_question = "I identified " + " and ".join(assets) + ", but the current assistant tools retrieve one asset per request. Please ask for one asset at a time."
+            trace.transition(AssistantTaskState.AWAITING_CLARIFICATION)
+            return AssistantExecution(
+                task_id=trace.task_id, task_state=trace.state.value,
+                task_trace=tuple(trace.transitions), answer=parsed_question,
+                tool=None, status="clarification_required", data=None, sources=(),
+                structured_request=parsed,
+            )
+        if parsed.clarification_required or parsed.unsupported:
+            trace.transition(AssistantTaskState.AWAITING_CLARIFICATION)
+            return AssistantExecution(
+                task_id=trace.task_id, task_state=trace.state.value,
+                task_trace=tuple(trace.transitions),
+                answer=parsed.clarification_question or "Please clarify the request.",
+                tool=None, status="clarification_required", data=None, sources=(),
+                structured_request=parsed,
+            )
+        if not tools:
+            raise ValueError("No supported assistant tool was identified.")
+        if len(tools) > 3:
+            trace.transition(AssistantTaskState.AWAITING_CLARIFICATION)
+            return AssistantExecution(
+                task_id=trace.task_id, task_state=trace.state.value,
+                task_trace=tuple(trace.transitions),
+                answer="This request contains more than three evidence categories. Please split it into smaller requests.",
+                tool=None, status="clarification_required", data=None, sources=(),
+                structured_request=parsed,
+            )
 
         trace.transition(AssistantTaskState.EXECUTING)
-        evidence = await execute_tool(
-            bridge, tool, normalized_symbol, normalized_market, timeframe
-        )
+        results = []
+        for tool in tools:
+            results.append(await execute_tool(
+                bridge, tool, parsed.parameters["symbol"],
+                parsed.parameters["market"], parsed.parameters["timeframe"],
+            ))
 
         trace.transition(AssistantTaskState.VALIDATING)
-        answer = summarize_result(query, evidence)
-        interpretation = await optional_provider_interpretation(query, evidence)
-        if interpretation:
-            answer += "\\n\\nOptional provider interpretation (not verified facts): " + interpretation
+        summaries = [summarize_result(query, item) for item in results]
+        answer = summaries[0] if len(summaries) == 1 else "\n\n".join(
+            f"{item.get('tool', 'evidence')}: {summary}"
+            for item, summary in zip(results, summaries)
+        )
+        interpretation = None
+        if len(results) == 1:
+            interpretation = await optional_provider_interpretation(query, results[0])
+            if interpretation:
+                answer += "\n\nOptional provider interpretation (not verified facts): " + interpretation
 
         trace.transition(AssistantTaskState.COMPLETED)
+        primary = results[0]
         return AssistantExecution(
-            task_id=trace.task_id,
-            task_state=trace.state.value,
-            task_trace=tuple(trace.transitions),
-            answer=answer,
-            tool=evidence.get("tool"),
-            status=evidence.get("status", "unavailable"),
-            data=evidence.get("data"),
-            sources=(evidence.get("source", "local backend"),),
-            interpretation=interpretation,
+            task_id=trace.task_id, task_state=trace.state.value,
+            task_trace=tuple(trace.transitions), answer=answer,
+            tool=primary.get("tool"), status="available" if all(r.get("status") == "available" for r in results) else "partial",
+            data=primary.get("data") if len(results) == 1 else [r.get("data") for r in results],
+            sources=tuple(dict.fromkeys(r.get("source", "local backend") for r in results)),
+            interpretation=interpretation, structured_request=parsed,
         )
     except ValueError as exc:
-        if trace.state not in {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED}:
+        if trace.state not in {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED, AssistantTaskState.AWAITING_CLARIFICATION}:
             trace.transition(AssistantTaskState.FAILED)
         raise AssistantRuntimeError(str(exc), trace, 422) from exc
     except Exception as exc:
-        if trace.state not in {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED}:
+        if trace.state not in {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED, AssistantTaskState.AWAITING_CLARIFICATION}:
             trace.transition(AssistantTaskState.FAILED)
         raise AssistantRuntimeError(
             "Assistant request failed while retrieving or validating local evidence.",
-            trace,
-            500,
+            trace, 500,
         ) from exc
