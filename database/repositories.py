@@ -30,6 +30,7 @@ from .models import (
     PublicStrategyVersionModel,
     StrategyFavoriteModel,
     StrategyReportFlagModel,
+    AssistantMemoryModel,
 )
 
 logger = logging.getLogger(__name__)
