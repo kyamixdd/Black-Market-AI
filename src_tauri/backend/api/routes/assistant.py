@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
-from ...assistant_runtime import execute_assistant_query
+from ...assistant_runtime import AssistantRuntimeError, execute_assistant_query
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -27,8 +27,18 @@ async def query_assistant(request: AssistantQuery):
             request.market,
             request.timeframe,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except AssistantRuntimeError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "message": str(exc),
+                "task": {
+                    "id": exc.task_id,
+                    "state": exc.task_state,
+                    "trace": list(exc.task_trace),
+                },
+            },
+        ) from exc
 
     return {
         "answer": result.answer,
