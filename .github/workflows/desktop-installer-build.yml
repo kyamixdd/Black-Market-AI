@@ -1,0 +1,60 @@
+name: Build Windows desktop installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-installer:
+    name: Build and verify BlackMarket AI Setup
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out beta branch
+        uses: actions/checkout@v4
+        with:
+          ref: black-market-ai-beta
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: blackmarket-desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Build self-contained backend and Windows installer
+        shell: pwsh
+        run: ./scripts/build_windows_installer.ps1
+
+      - name: Verify installer exists and rename it
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "blackmarket-desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw "Windows installer was not produced." }
+          New-Item -ItemType Directory -Path "release-output" -Force | Out-Null
+          Copy-Item $installer.FullName "release-output/BlackMarketAI-Setup.exe" -Force
+          $hash = (Get-FileHash "release-output/BlackMarketAI-Setup.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  BlackMarketAI-Setup.exe" | Set-Content "release-output/BlackMarketAI-Setup.exe.sha256" -Encoding ascii
+          Write-Host "Installer size: $([math]::Round((Get-Item 'release-output/BlackMarketAI-Setup.exe').Length / 1MB, 1)) MB"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlackMarketAI-Windows-Setup
+          path: |
+            release-output/BlackMarketAI-Setup.exe
+            release-output/BlackMarketAI-Setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 30
