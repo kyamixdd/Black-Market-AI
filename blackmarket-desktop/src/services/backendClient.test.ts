@@ -6,6 +6,27 @@ function response(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
+
+test('health check resolves the root endpoint for desktop API base', async () => {
+  let requested = ''
+  const client = createBackendClient({
+    baseUrl: 'http://127.0.0.1:8765/api',
+    fetcher: async (url) => { requested = String(url); return response(200, { backend_ready: true }) },
+  })
+  await client.healthCheck()
+  assert.equal(requested, 'http://127.0.0.1:8765/health')
+})
+
+test('health check stays under the hosted same-origin proxy', async () => {
+  let requested = ''
+  const client = createBackendClient({
+    baseUrl: '/api/backend',
+    fetcher: async (url) => { requested = String(url); return response(200, { backend_ready: true }) },
+  })
+  await client.healthCheck()
+  assert.equal(requested, '/api/backend/health')
+})
+
 test('desktop API requests attach bearer authentication and disable caching', async () => {
   let captured: { url: string; init?: RequestInit } | undefined
   const client = createBackendClient({
