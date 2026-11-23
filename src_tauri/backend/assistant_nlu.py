@@ -4,7 +4,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 from uuid import uuid4
 
 from .assistant_intelligence import TOOL_NAMES, validate_market, validate_symbol
@@ -12,6 +11,7 @@ from .assistant_intelligence import TOOL_NAMES, validate_market, validate_symbol
 TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
 COMMON_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK", "LTC", "TRX", "TON", "BCH"}
 _TIMEFRAME_RE = re.compile(r"(?<![a-z0-9])(1m|3m|5m|15m|30m|1h|4h|1d|1w)(?![a-z0-9])", re.I)
+_TIMEFRAME_WORD_RE = re.compile(r"\\b(1|3|5|15|30)\\s*(?:-?minutes?|mins?)\\b|\\b(1|4)\\s*(?:-?hours?|hrs?)\\b|\\b(daily|weekly)\\b", re.I)
 _PAIR_RE = re.compile(r"\b([A-Z0-9]{2,12})(USDT|USDC|USD|BTC|ETH)\b", re.I)
 _DURATION_RE = re.compile(r"\b(?:last|past|over|for)\s+(\d+)\s+(minute|hour|day|week|month|year)s?\b", re.I)
 _NUMBER_RE = re.compile(r"\b\d+(?:\.\d+)?%?\b")
@@ -61,7 +61,7 @@ _INTENT_GROUPS = (
     ("scanner", "scanner_status", ("scanner", "scan status")),
     ("signals", "signal_report", ("signal", "signals", "rejected signal")),
     ("strategy", "strategy_report", ("strategy", "backtest", "weights")),
-    ("positions", "open_positions", ("position", "open trade", "open trades")),
+    ("positions", "open_positions", ("position", "positions", "open trade", "open trades")),
     ("trade_history", "trade_history", ("trade history", "closed trade", "recent trade")),
     ("risk", "risk_status", ("risk", "exposure", "risk limit")),
     ("learning", "learning_evaluation", ("learning", "model evaluation", "accuracy", "prediction")),
@@ -123,6 +123,15 @@ def parse_assistant_request(
     assets = _extract_assets(original)
     timeframe_match = _TIMEFRAME_RE.search(normalized)
     explicit_timeframe = timeframe_match.group(1).lower() if timeframe_match else None
+    if not explicit_timeframe:
+        word_match = _TIMEFRAME_WORD_RE.search(normalized)
+        if word_match:
+            if word_match.group(1):
+                explicit_timeframe = word_match.group(1) + "m"
+            elif word_match.group(2):
+                explicit_timeframe = word_match.group(2) + "h"
+            elif word_match.group(3):
+                explicit_timeframe = "1d" if word_match.group(3).lower() == "daily" else "1w"
     references = tuple(ref for ref in ("it", "that asset", "same timeframe", "previous", "earlier", "last result", "continue", "again", "that strategy") if re.search(r"\b" + re.escape(ref) + r"\b", normalized))
     resolved_symbol = assets[0] if assets else (context.symbol if references and context.symbol else default_symbol)
     resolved_timeframe = explicit_timeframe or (context.timeframe if references and context.timeframe else default_timeframe)
