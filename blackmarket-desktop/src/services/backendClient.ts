@@ -103,7 +103,7 @@ export function createBackendClient(options: BackendClientOptions) {
       // The hosted proxy exposes the same root health endpoint beneath its base path.
       const healthUrl = /^https?:\/\//.test(base) && base.endsWith('/api')
         ? `${base.slice(0, -4)}/health`
-        : `${base}/health`
+        : '/health'
       return requestJson<T>(healthUrl)
     },
   }
