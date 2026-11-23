@@ -4,7 +4,9 @@ import asyncio
 import pytest
 
 from exchange.rate_limiter import RateLimiter
-from exchange.websocket_manager import (\n    FUTURES_WS_URL, SPOT_WS_URL, WebSocketManager,\n)
+from exchange.websocket_manager import (
+    FUTURES_WS_URL, SPOT_WS_URL, WebSocketManager,
+)
 
 
 @pytest.mark.asyncio
