@@ -114,6 +114,17 @@ class AssistantQuery(BaseModel):
 @router.post("/tasks", status_code=202)
 async def start_assistant_task(request: Request, payload: AssistantQuery):
     owner_key = _memory_owner(request)
+    terminal_states = {"completed", "failed", "partially_completed", "cancelled", "awaiting_clarification"}
+    active = sum(1 for item in _ASYNC_TASKS.values() if item["state"] not in terminal_states and item["state"] != "cancellation_requested")
+    if active >= 16:
+        raise HTTPException(status_code=429, detail="Assistant task capacity reached; retry after an active task finishes.")
+    for old_id in list(_ASYNC_TASKS):
+        if len(_ASYNC_TASKS) < _ASYNC_TASK_LIMIT:
+            break
+        if _ASYNC_TASKS[old_id]["state"] in terminal_states:
+            _ASYNC_TASKS.pop(old_id, None)
+    if len(_ASYNC_TASKS) >= _ASYNC_TASK_LIMIT:
+        raise HTTPException(status_code=429, detail="Assistant task history is full; wait for completed records to be evicted.")
     task_id = uuid4().hex
     TASK_EXECUTION_MANAGER.register(task_id)
     _ASYNC_TASKS[task_id] = {"owner": owner_key, "state": "received", "result": None, "error": None}
