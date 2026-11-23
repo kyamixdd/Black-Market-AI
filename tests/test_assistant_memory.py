@@ -195,6 +195,6 @@ def test_feedback_preference_application_is_validated_and_bounded():
         ],
     )
     assert applied == {"response_detail": "detailed", "response_format": "structured"}
-    assert answer.startswith("Summary\\nSnapshot summary.")
+    assert answer.startswith("Summary\nSnapshot summary.")
     assert "price: 100" in answer
     assert "freshness: fresh" in answer
