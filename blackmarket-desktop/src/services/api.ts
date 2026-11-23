@@ -23,7 +23,7 @@ class ApiService {
 
   constructor() {
     this.client = axios.create({
-      baseURL: \`${API_BASE_URL}/api\`,
+      baseURL: `${API_BASE_URL}/api`,
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -45,8 +45,8 @@ class ApiService {
 
   async getMarkets() { return this.client.get('/markets'); }
   async getMarketSymbols() { return this.client.get('/markets/symbols'); }
-  async getMarket(symbol: string, market: string = 'SPOT') { return this.client.get(\`/markets/\${symbol}\`, { params: { market } }); }
-  async getCandles(symbol: string, market: string = 'SPOT', timeframe: string = '1h', limit = 200) { return this.client.get(\`/markets/\${symbol}/candles\`, { params: { market, timeframe, limit } }); }
+  async getMarket(symbol: string, market: string = 'SPOT') { return this.client.get(`/markets/${symbol}`, { params: { market } }); }
+  async getCandles(symbol: string, market: string = 'SPOT', timeframe: string = '1h', limit = 200) { return this.client.get(`/markets/${symbol}/candles`, { params: { market, timeframe, limit } }); }
   async getHeatmap() { return this.client.get('/markets/heatmap'); }
   async getBreadth() { return this.client.get('/markets/breadth'); }
   async getVolume() { return this.client.get('/markets/volume'); }
@@ -61,7 +61,7 @@ class ApiService {
   async getPortfolioBalance() { return this.client.get('/portfolio/balance'); }
   async getPortfolioSummary() { return this.client.get('/portfolio/summary'); }
   async getPositions() { return this.client.get('/positions'); }
-  async getPosition(positionId: string) { return this.client.get(\`/positions/\${positionId}\`); }
+  async getPosition(positionId: string) { return this.client.get(`/positions/${positionId}`); }
   async getTrades(limit = 100) { return this.client.get('/trades', { params: { limit } }); }
   async getTradeStats() { return this.client.get('/trades/stats'); }
   async getStrategyMetrics() { return this.client.get('/intelligence/strategies'); }
@@ -84,7 +84,7 @@ class ApiService {
   }
 
   async getHealth() {
-    const response = await axios.get(\`${API_BASE_URL}/health\`, { timeout: 10000 });
+    const response = await axios.get(`${API_BASE_URL}/health`, { timeout: 10000 });
     return response.data;
   }
   async getSystemStatus() { return this.client.get('/system/status'); }
