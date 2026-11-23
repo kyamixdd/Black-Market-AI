@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
+from ...assistant_nlu import ContextSnapshot
 from ...assistant_runtime import AssistantRuntimeError, execute_assistant_query
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -19,13 +20,15 @@ class AssistantQuery(BaseModel):
 
 @router.post("/query")
 async def query_assistant(request: AssistantQuery):
+    # Only explicitly supplied symbol/timeframe values act as context.
+    context = ContextSnapshot(
+        symbol=request.symbol if "symbol" in request.model_fields_set else None,
+        timeframe=request.timeframe if "timeframe" in request.model_fields_set else None,
+    )
     try:
         result = await execute_assistant_query(
-            get_bridge(),
-            request.query,
-            request.symbol,
-            request.market,
-            request.timeframe,
+            get_bridge(), request.query, request.symbol, request.market,
+            request.timeframe, context=context,
         )
     except AssistantRuntimeError as exc:
         raise HTTPException(
@@ -40,12 +43,26 @@ async def query_assistant(request: AssistantQuery):
             },
         ) from exc
 
+    parsed = result.structured_request
     return {
         "answer": result.answer,
         "tool": result.tool,
         "status": result.status,
         "sources": list(result.sources),
         "data": result.data,
+        "understanding": {
+            "intents": [
+                {"name": intent.name, "tool": intent.tool}
+                for intent in parsed.intents
+            ] if parsed else [],
+            "entities": parsed.entities if parsed else {},
+            "parameters": parsed.parameters if parsed else {},
+            "constraints": list(parsed.constraints) if parsed else [],
+            "context_references": list(parsed.context_references) if parsed else [],
+            "confidence": parsed.confidence.value if parsed else "low",
+            "confidence_reasons": list(parsed.confidence_reasons) if parsed else [],
+            "clarification_required": parsed.clarification_required if parsed else False,
+        },
         "task": {
             "id": result.task_id,
             "state": result.task_state,
