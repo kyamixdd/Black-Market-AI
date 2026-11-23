@@ -2,6 +2,8 @@
 
 ## Audit scope and evidence
 
+> Historical Stage 12 technical findings are preserved. Comprehensive product documentation baseline reviewed 23 November 2026: `49e6841215303ed296ced4fc1ef3039b9959426d`. This document’s stage-specific findings and verification status are tied to its original audit evidence unless explicitly updated.
+
 - **Target branch:** `black-market-ai-beta`
 - **Audited base commit:** `45d1becc5406b888cddbb09a81ec9fe78bba5b94`
 - **Stage 10 review:** PR #82, head `c151587fb107dbd4e465ed347730a2149d0abee7` (open; not part of the audited base)
@@ -190,3 +192,19 @@ The merged intelligence implementation is suitable for **bounded, authenticated,
 Stage 9 is integrated on the beta branch. Stage 10 remains under review and should not be merged until benchmark provenance, stale approval validation, and version-write recovery are addressed. Stage 11 local provider status requires confirmation.
 
 No production deployment, live exchange execution, or trading profitability claim was verified or made.
+
+
+## Current repository status — 23 November 2026
+
+Maintained against `black-market-ai-beta`; application-source baseline reviewed: `49e6841215303ed296ced4fc1ef3039b9959426d`. Later commits in this branch are documentation-only at the time of this update. Verify the branch head before relying on this snapshot as current runtime or CI evidence.
+
+**Classification:** Windows desktop beta candidate; hosted website private preview. BlackMarket AI is local-first market research and paper-trading software. Paper trading is the only execution mode; real-money exchange order execution is not supported or verified. The assistant is deterministic and read-only by default; the optional OpenAI-compatible provider only interprets retrieved evidence. ML training or model registration does not establish profitability or promotion without validation evidence.
+
+Audit corrections and outstanding work:
+- Root `LICENSE` exists and identifies the project as proprietary. Statements that no root license exists are outdated.
+- CI run #605 passed on an earlier commit, not the current source baseline. Fresh current-head CI and release-artifact verification remain required.
+- The website is a shared-password private preview, not multi-user identity or tenant isolation. Hosted backend, durable storage, streaming and restore acceptance remain release gates.
+- The repository contains 30 generated compressed shutdown database backups under `data/backups/` using `.db.gz`; the current ignore rules do not exclude this suffix. Contents were not inspected. Review safely and remove generated database artifacts from version control.
+- SQLite databases, model artifacts and backup archives are not application-encrypted. SHA-256 manifests provide integrity, not confidentiality.
+
+This is source/documentation evidence only; it does not claim live deployment verification, fresh training/backtest, current-head CI, security certification or profitable performance.
