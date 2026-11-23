@@ -53,7 +53,7 @@ class AssistantTaskTrace:
 class AssistantRuntimeError(Exception):
     """Safe API-facing failure carrying the bounded request lifecycle."""
 
-    def __init__(self, message: str, trace: AssistantTaskTrace, status_code: int):
+    def __init__(self, message: str, trace: AssistantTaskTrace, status_code: int, error_code: str = "assistant_request_failed"):
         super().__init__(message)
         self.task_id = trace.task_id
         self.task_state = trace.state.value
