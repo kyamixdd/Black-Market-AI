@@ -29,6 +29,14 @@ class EventBus:
     def subscribe_all(self, handler: Callable[[Event], Awaitable[None]]) -> None:
         self._subscribers.setdefault("*", []).append(handler)
 
+    def unsubscribe_all(self, handler: Callable[[Event], Awaitable[None]]) -> None:
+        """Remove a handler from wildcard and typed subscriptions."""
+        for event_type, handlers in list(self._subscribers.items()):
+            while handler in handlers:
+                handlers.remove(handler)
+            if not handlers:
+                self._subscribers.pop(event_type, None)
+
     def set_persist(self, persist: Callable[[Event], Awaitable[None]]) -> None:
         self._persist = persist
 

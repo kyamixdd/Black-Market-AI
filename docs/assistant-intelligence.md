@@ -161,3 +161,21 @@ The existing NLU clarification path is retained. Multi-asset requests that curre
 - Asynchronous task cache and cancellation registry are process-local. Multi-worker deployments need shared task state and cancellation signaling.
 - Cancellation cannot undo a tool operation that already completed; current registry tools are read-only.
 - The task endpoint does not yet stream live step progress; clients poll task status.
+
+
+## Stage 6 real-time intelligence
+
+The real-time intelligence service is implemented in `src_tauri/backend/realtime_intelligence.py` and is started/stopped with the FastAPI backend lifespan. It subscribes to the existing `core.event_bus.EventBus`; it does not create a second exchange WebSocket or market-data connection.
+
+The scanner publishes validated live ticker updates as `MARKET_DATA` events after updating the shared market cache. Events include symbol, market, price, 24-hour volume/change, source, and exchange event time where available. The service processes market data through a bounded queue, deduplicates a bounded recent event-ID window, and uses drop-oldest behavior under saturation so newer market state is favored over stale queued updates. Queue depth, capacity, dropped/processed/duplicate counts, and last processing error are exposed in the service status.
+
+Monitoring tasks currently support owner-scoped price-above and price-below conditions. Each task has a unique ID, symbol, market, threshold, creation time, expiration, and lifecycle state (active, triggered, cancelled, expired). Creation validates parameters and uses a bounded task count; terminal records are reclaimed when capacity is needed. Monitoring does not place or modify paper trades.
+
+Authenticated endpoints:
+
+- `POST /api/assistant/monitoring` creates a monitor with symbol, market, condition, threshold, and optional TTL.
+- `GET /api/assistant/monitoring` lists the caller's monitors.
+- `DELETE /api/assistant/monitoring/{task_id}` cancels a caller-owned monitor.
+- `GET /api/assistant/monitoring/status` reports service and queue health.
+
+Monitoring records are currently process-local and are lost on backend restart. Notifications are represented by monitor state; user-facing push/desktop notification delivery and durable monitoring storage are not implemented in this stage. Market data is only available while the existing scanner/WebSocket infrastructure is running; no continuous monitoring is claimed while the backend is offline.

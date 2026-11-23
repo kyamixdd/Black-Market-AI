@@ -58,6 +58,7 @@ from src_tauri.backend.api.routes.schemas import (
 )
 from src_tauri.backend.api.websocket.manager import WebSocketManager
 from src_tauri.backend.bridge.orchestrator_bridge import get_bridge
+from src_tauri.backend.realtime_intelligence import RealtimeIntelligence
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,9 @@ async def lifespan(app: FastAPI):
     # Create WebSocket manager
     ws_manager = WebSocketManager(orchestrator.event_bus)
     await ws_manager.start()
+    realtime_service = RealtimeIntelligence(orchestrator.event_bus)
+    orchestrator.realtime_intelligence = realtime_service
+    await realtime_service.start()
     event_task = asyncio.create_task(orchestrator.event_bus.run(), name="blackmarket-event-bus")
     orchestrator_task = asyncio.create_task(orchestrator.run(), name="blackmarket-orchestrator")
 
@@ -151,6 +155,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         log_event(logger, logging.INFO, "backend_shutdown_started", component="api")
+        if "realtime_service" in locals():
+            await realtime_service.stop()
         if orchestrator:
             await orchestrator.stop()
         if orchestrator_task and not orchestrator_task.done():
