@@ -63,3 +63,8 @@ def test_extracts_multiple_assets_for_comparison():
     parsed = parse_assistant_request("Compare BTC with ETH")
     assert parsed.entities["assets"] == ["BTCUSDT", "ETHUSDT"]
     assert parsed.confidence == ConfidenceLevel.MEDIUM
+
+
+def test_parses_natural_language_timeframe():
+    parsed = parse_assistant_request("Analyze BTC on the 15-minute timeframe")
+    assert parsed.entities["timeframe"] == "15m"
