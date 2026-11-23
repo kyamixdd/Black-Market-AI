@@ -197,3 +197,24 @@ Automatic adaptation is deliberately narrow. Only repeated `too_detailed` or `to
 Explicit preference correction takes precedence over learned feedback and sets confidence to 1.0. Supported preferences are `response_detail` (`concise` or `detailed`) and `response_format` (`structured` or `narrative`). The query endpoint applies validated preferences to response presentation only. It does not change market calculations, tool selection permissions, risk limits, trading state, or source evidence. Detailed presentation adds a bounded selection of returned top-level evidence fields and excludes secret-like field names.
 
 Feedback comments and corrections are length-limited and checked for common credential patterns. Feedback and preferences are owner-scoped, deletable, and persisted. Preference adaptation remains rule-based; no model training or autonomous production code modification occurs.
+
+
+Feedback request example:
+
+```json
+{
+  "request_id": "a1b2c3d4e5f678901234567890abcdef",
+  "feedback_type": "too_detailed",
+  "correction": "",
+  "comment": ""
+}
+```
+
+Preference correction example:
+
+```json
+{
+  "preference_key": "response_detail",
+  "preference_value": "concise"
+}
+```
