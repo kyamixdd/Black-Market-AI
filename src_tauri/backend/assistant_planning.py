@@ -104,6 +104,8 @@ class TaskExecutionManager:
         self._events.pop(task_id, None)
 
 
+TASK_EXECUTION_MANAGER = TaskExecutionManager()
+
 async def execute_plan(
     plan: AssistantTaskPlan,
     registry: AssistantToolRegistry,
