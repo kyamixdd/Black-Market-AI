@@ -51,6 +51,7 @@ from src_tauri.backend.api.routes import (
     research,
     community,
     share_challenges,
+    evolution,
 )
 from src_tauri.backend.api.routes.schemas import (
     HealthResponse,
@@ -287,6 +288,7 @@ for router in (
     research.router,
     community.router,
     share_challenges.router,
+    evolution.router,
 ):
     app.include_router(router, prefix="/api")
 
