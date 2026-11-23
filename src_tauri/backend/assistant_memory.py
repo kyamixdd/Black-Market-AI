@@ -129,3 +129,14 @@ def apply_assistant_preferences(answer: str, data: Any, preferences: list[dict[s
         else:
             result = "Summary\n" + answer
     return result, applied
+
+
+def preference_adaptation_for_feedback(feedback_type: str, evidence_count: int, *, threshold: int = 3) -> tuple[str, str] | None:
+    """Return a stable preference change only after repeated supported feedback."""
+    if threshold < 1 or evidence_count < threshold:
+        return None
+    if feedback_type == "too_detailed":
+        return "response_detail", "concise"
+    if feedback_type == "too_brief":
+        return "response_detail", "detailed"
+    return None
