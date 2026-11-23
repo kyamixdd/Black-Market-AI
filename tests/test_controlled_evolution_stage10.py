@@ -102,3 +102,23 @@ def test_rollback_requires_explicit_approval(isolated_evolution):
     version = evolution.approve_proposal(proposal["proposal_id"], explicit_approval=True)
     with pytest.raises(PermissionError):
         evolution.rollback_version(version["version_id"], explicit_approval=False)
+
+
+def test_proposal_mode_change_uses_mode_preset(isolated_evolution):
+    proposal = evolution.create_improvement_proposal(
+        {"mode": "fast"}, report(), report(),
+        "Switch to the validated fast preset after benchmark review.",
+    )
+    assert proposal["patch"]["mode"] == "fast"
+    assert proposal["patch"]["max_tool_calls"] == 1
+    assert proposal["patch"]["response_detail"] == "brief"
+
+
+def test_non_finite_candidate_metric_is_rejected(isolated_evolution):
+    invalid = report()
+    invalid["metrics"]["intent_exact_match"] = float("nan")
+    with pytest.raises(ValueError, match="finite"):
+        evolution.create_improvement_proposal(
+            {"mode": "fast"}, invalid, report(),
+            "Reject non-finite values before benchmark promotion.",
+        )
