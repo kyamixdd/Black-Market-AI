@@ -115,7 +115,7 @@ class AssistantQuery(BaseModel):
 async def start_assistant_task(request: Request, payload: AssistantQuery):
     owner_key = _memory_owner(request)
     terminal_states = {"completed", "failed", "partially_completed", "cancelled", "awaiting_clarification"}
-    active = sum(1 for item in _ASYNC_TASKS.values() if item["state"] not in terminal_states and item["state"] != "cancellation_requested")
+    active = sum(1 for item in _ASYNC_TASKS.values() if item["state"] not in terminal_states)
     if active >= 16:
         raise HTTPException(status_code=429, detail="Assistant task capacity reached; retry after an active task finishes.")
     for old_id in list(_ASYNC_TASKS):
