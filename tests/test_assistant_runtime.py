@@ -105,3 +105,28 @@ async def test_runtime_reports_partial_completion_when_one_tool_fails(monkeypatc
     assert result.status == "partial"
     assert "Task partially completed" in result.answer
     assert "market_snapshot" in result.answer
+
+
+@pytest.mark.asyncio
+async def test_runtime_honors_pre_requested_task_cancellation(monkeypatch):
+    from src_tauri.backend.assistant_planning import TASK_EXECUTION_MANAGER
+
+    task_id = "cancel-before-execution"
+    event = TASK_EXECUTION_MANAGER.register(task_id)
+    event.set()
+
+    class Registry:
+        async def invoke(self, *args, **kwargs):
+            raise AssertionError("Cancelled task must not invoke tools")
+
+    monkeypatch.setattr(
+        "src_tauri.backend.assistant_runtime.create_default_registry",
+        lambda: Registry(),
+    )
+    result = await execute_assistant_query(
+        object(), "show current market snapshot", "BTCUSDT", "SPOT", "1h",
+        task_id=task_id,
+    )
+    assert result.task_state == "cancelled"
+    assert result.status == "partial"
+    TASK_EXECUTION_MANAGER.unregister(task_id)
