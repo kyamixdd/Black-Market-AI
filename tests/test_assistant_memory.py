@@ -91,3 +91,19 @@ def test_memory_rejects_invalid_type_and_ttl():
         build_memory_record(owner_key="owner-a", memory_type="unknown", content="Valid memory content")
     with pytest.raises(MemoryValidationError):
         build_memory_record(owner_key="owner-a", memory_type="working", content="Valid memory content", ttl_days=500)
+
+
+def test_memory_deduplicates_same_owner_type_and_content(memory_repo):
+    first = build_memory_record(
+        owner_key="owner-a", memory_type="semantic",
+        content="I prefer detailed market explanations",
+    )
+    second = build_memory_record(
+        owner_key="owner-a", memory_type="semantic",
+        content="i prefer detailed market explanations",
+    )
+    saved_first = memory_repo.save_assistant_memory(first)
+    saved_second = memory_repo.save_assistant_memory(second)
+    assert saved_first["memory_id"] == saved_second["memory_id"]
+    assert saved_second["version"] == 2
+    assert len(memory_repo.retrieve_assistant_memories("owner-a", limit=20)) == 1
