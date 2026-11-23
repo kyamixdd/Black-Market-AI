@@ -6,6 +6,7 @@ proposed actions. Proposals are bounded to validated intelligence settings.
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import uuid
@@ -17,6 +18,7 @@ from core.intelligence_config import (
     IntelligenceConfig,
     get_runtime_intelligence_config,
     save_intelligence_config,
+    config_for_mode,
 )
 from core.runtime_settings_store import SETTINGS_PATH
 from benchmarks.assistant_outcomes.evaluate import promotion_gate
@@ -112,9 +114,15 @@ def create_improvement_proposal(
     if not isinstance(rationale, str) or not 10 <= len(rationale.strip()) <= 1000:
         raise ValueError("Proposal rationale must be 10 to 1000 characters.")
     current = get_runtime_intelligence_config()
-    values = current.model_dump(mode="python")
+    if "mode" in candidate_patch:
+        values = config_for_mode(candidate_patch["mode"]).model_dump(mode="python")
+    else:
+        values = current.model_dump(mode="python")
     values.update(candidate_patch)
     candidate_config = IntelligenceConfig.model_validate(values)
+    _validate_report_metrics(candidate_report, "candidate")
+    if baseline_report is not None:
+        _validate_report_metrics(baseline_report, "baseline")
     gate = promotion_gate(candidate_report, baseline_report, {
         "minimum_intent_exact_match": METRIC_THRESHOLDS["intent_exact_match"],
         "minimum_tool_registry_safety": METRIC_THRESHOLDS["tool_registry_safety"],
