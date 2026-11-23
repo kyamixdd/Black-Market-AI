@@ -986,7 +986,7 @@ function IntelligenceModePanel() {
             <option value="balanced">Balanced</option><option value="fast">Fast</option><option value="research">Research</option><option value="conservative">Conservative</option>
           </select>
         </label>
-        <div className="settings-card"><span><b>Active profile</b><small>{profile ? \`\${profile.max_tool_calls} tool calls · \${profile.response_detail} response · memory \${profile.memory_enabled ? 'on' : 'off'} · provider \${profile.provider_enabled ? 'on' : 'off'}\` : 'Loading configuration…'}</small></span></div>
+        <div className="settings-card"><span><b>Active profile</b><small>{profile ? `${profile.max_tool_calls} tool calls · ${profile.response_detail} response · memory ${profile.memory_enabled ? 'on' : 'off'} · provider ${profile.provider_enabled ? 'on' : 'off'}` : 'Loading configuration…'}</small></span></div>
         <button className="settings-card" disabled={saving || !profile} onClick={async () => {
           setSaving(true); setStatus('')
           try {
