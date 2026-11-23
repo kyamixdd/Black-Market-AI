@@ -87,8 +87,10 @@ class TaskExecutionManager:
         self._events: dict[str, asyncio.Event] = {}
 
     def register(self, task_id: str) -> asyncio.Event:
-        event = asyncio.Event()
-        self._events[task_id] = event
+        event = self._events.get(task_id)
+        if event is None:
+            event = asyncio.Event()
+            self._events[task_id] = event
         return event
 
     def cancel(self, task_id: str) -> bool:
