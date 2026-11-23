@@ -5,8 +5,9 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from uuid import uuid4
+from typing import Any
 
-from .assistant_intelligence import TOOL_NAMES, validate_market, validate_symbol
+from .assistant_intelligence import validate_market, validate_symbol
 
 TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
 COMMON_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK", "LTC", "TRX", "TON", "BCH"}
