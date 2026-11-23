@@ -1,23 +1,20 @@
-"""Deterministic natural-language request parsing for supported assistant workflows.
-
-This parser extracts structured signals without making market claims. It is
-intentionally conservative: unsupported or ambiguous requests are represented
-explicitly rather than silently routed to an unrelated tool.
-"""
+"""Deterministic natural-language understanding for supported assistant requests."""
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
-from .assistant_intelligence import select_tool, validate_market, validate_symbol
+from .assistant_intelligence import TOOL_NAMES, validate_market, validate_symbol
 
 TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
-_TIMEFRAME_RE = re.compile(r"\b(1m|3m|5m|15m|30m|1h|4h|1d|1w)\b", re.I)
-_SYMBOL_RE = re.compile(r"\b([A-Z0-9]{2,12}(?:USDT|USDC|USD|BTC|ETH)?)\b")
+COMMON_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK", "LTC", "TRX", "TON", "BCH"}
+_TIMEFRAME_RE = re.compile(r"(?<![a-z0-9])(1m|3m|5m|15m|30m|1h|4h|1d|1w)(?![a-z0-9])", re.I)
+_PAIR_RE = re.compile(r"\b([A-Z0-9]{2,12})(USDT|USDC|USD|BTC|ETH)\b", re.I)
 _DURATION_RE = re.compile(r"\b(?:last|past|over|for)\s+(\d+)\s+(minute|hour|day|week|month|year)s?\b", re.I)
-_NUMBER_RE = re.compile(r"(?<![A-Z])\b\d+(?:\.\d+)?%?\b", re.I)
+_NUMBER_RE = re.compile(r"\b\d+(?:\.\d+)?%?\b")
 
 
 class ConfidenceLevel(str, Enum):
@@ -28,8 +25,6 @@ class ConfidenceLevel(str, Enum):
 
 @dataclass(frozen=True)
 class ContextSnapshot:
-    """Only explicitly supplied, relevant conversation context."""
-
     symbol: str | None = None
     timeframe: str | None = None
     previous_query: str | None = None
@@ -39,7 +34,7 @@ class ContextSnapshot:
 @dataclass(frozen=True)
 class ParsedIntent:
     name: str
-    tool: str | None
+    tool: str
     evidence_terms: tuple[str, ...] = ()
 
 
@@ -60,28 +55,45 @@ class StructuredAssistantRequest:
     unsupported: bool = False
 
 
-def _intent_matches(text: str) -> list[ParsedIntent]:
-    groups = [
-        ("historical_data", "historical_candles", ("historical", "history", "candles", "ohlc")),
-        ("indicators", "indicator_report", ("indicator", "sma", "ema", "atr", "volatility", "analytics")),
-        ("scanner", "scanner_status", ("scanner", "scan status")),
-        ("signals", "signal_report", ("signal", "signals", "rejected signal")),
-        ("strategy", "strategy_report", ("strategy", "backtest", "weights")),
-        ("positions", "open_positions", ("position", "open trade", "open trades")),
-        ("trade_history", "trade_history", ("trade history", "closed trade", "recent trade")),
-        ("risk", "risk_status", ("risk", "exposure", "risk limit")),
-        ("learning", "learning_evaluation", ("learning", "model evaluation", "accuracy", "prediction")),
-        ("paper_account", "paper_account", ("paper account", "equity", "balance", "pnl", "portfolio")),
-        ("market_snapshot", "market_snapshot", ("market", "price", "regime", "analyze", "analyse", "compare")),
-    ]
-    matches: list[ParsedIntent] = []
-    for name, tool, terms in groups:
-        found = tuple(term for term in terms if term in text)
-        if found:
-            matches.append(ParsedIntent(name=name, tool=tool, evidence_terms=found))
-    # Keep intent order aligned with first evidence occurrence, with a stable tie-break.
-    positions = {intent.name: min(text.find(term) for term in intent.evidence_terms) for intent in matches}
-    return sorted(matches, key=lambda intent: positions[intent.name])
+_INTENT_GROUPS = (
+    ("historical_data", "historical_candles", ("historical", "history", "candles", "ohlc")),
+    ("indicators", "indicator_report", ("indicator", "sma", "ema", "atr", "volatility", "analytics")),
+    ("scanner", "scanner_status", ("scanner", "scan status")),
+    ("signals", "signal_report", ("signal", "signals", "rejected signal")),
+    ("strategy", "strategy_report", ("strategy", "backtest", "weights")),
+    ("positions", "open_positions", ("position", "open trade", "open trades")),
+    ("trade_history", "trade_history", ("trade history", "closed trade", "recent trade")),
+    ("risk", "risk_status", ("risk", "exposure", "risk limit")),
+    ("learning", "learning_evaluation", ("learning", "model evaluation", "accuracy", "prediction")),
+    ("paper_account", "paper_account", ("paper account", "equity", "balance", "pnl", "portfolio")),
+    ("market_snapshot", "market_snapshot", ("market", "price", "regime", "analyze", "analyse", "compare")),
+)
+
+
+def _find_intents(text: str) -> list[ParsedIntent]:
+    found = []
+    for name, tool, terms in _INTENT_GROUPS:
+        matches = tuple(term for term in terms if re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text))
+        if matches:
+            found.append((min(text.find(term) for term in matches), ParsedIntent(name, tool, matches)))
+    found.sort(key=lambda item: item[0])
+    # One intent category may have several trigger words; keep one record per category.
+    return [item[1] for item in found]
+
+
+def _extract_assets(text: str) -> list[str]:
+    assets: list[str] = []
+    for match in _PAIR_RE.finditer(text.upper()):
+        pair = match.group(1) + match.group(2)
+        try:
+            assets.append(validate_symbol(pair))
+        except ValueError:
+            pass
+    for match in re.finditer(r"\b(" + "|".join(sorted(COMMON_ASSETS)) + r")\b", text.upper()):
+        base = match.group(1)
+        if not any(asset.startswith(base) for asset in assets):
+            assets.append(base + "USDT")
+    return list(dict.fromkeys(assets))
 
 
 def parse_assistant_request(
@@ -93,110 +105,79 @@ def parse_assistant_request(
     context: ContextSnapshot | None = None,
     request_id: str | None = None,
 ) -> StructuredAssistantRequest:
-    """Parse supported intent, entities, constraints, and context references."""
-    from uuid import uuid4
-
+    """Extract supported intents, entities, parameters, references and ambiguity."""
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Assistant query must not be empty.")
     original = text.strip()
     normalized = re.sub(r"\s+", " ", original).lower()
-    safe_symbol = validate_symbol(symbol)
-    safe_market = validate_market(market)
-    safe_timeframe = timeframe.strip().lower()
-    if safe_timeframe not in TIMEFRAMES:
+    default_symbol = validate_symbol(symbol)
+    default_market = validate_market(market)
+    default_timeframe = timeframe.strip().lower()
+    if default_timeframe not in TIMEFRAMES:
         raise ValueError("Unsupported timeframe.")
-
     context = context or ContextSnapshot()
-    intent_matches = _intent_matches(normalized)
-    if not intent_matches:
-        selected = select_tool(normalized)
-        # Existing selector's fallback is a snapshot only for clearly market-related asks.
-        if any(word in normalized for word in ("market", "price", "btc", "eth", "crypto", "coin")):
-            intent_matches = [ParsedIntent("market_snapshot", selected, ("market query",))]
-        else:
-            return StructuredAssistantRequest(
-                request_id=request_id or uuid4().hex,
-                original_text=original,
-                normalized_text=normalized,
-                intents=(),
-                entities={},
-                parameters={"symbol": safe_symbol, "market": safe_market, "timeframe": safe_timeframe},
-                constraints=(),
-                context_references=(),
-                confidence=ConfidenceLevel.LOW,
-                confidence_reasons=("No supported intent phrase was identified.",),
-                clarification_required=True,
-                clarification_question="What market or application information should I retrieve?",
-                unsupported=True,
-            )
 
-    explicit_symbol = None
-    # Detect common crypto symbols only when they are explicit in the user text.
-    symbol_candidates = [m.group(1) for m in _SYMBOL_RE.finditer(original) if m.group(1).upper() not in {"I", "IT", "THE", "AND", "OR", "US", "USD", "BTC", "ETH"}]
-    # Recognize common base tickers even when they are not quoted as a pair.
-    common = re.search(r"\b(BTC|ETH|SOL|BNB|XRP|ADA|DOGE|AVAX|DOT|LINK|LTC|TRX)\b", original, re.I)
-    if common:
-        explicit_symbol = common.group(1).upper() + ("USDT" if not common.group(1).upper().endswith(("USDT", "USDC", "USD")) else "")
-    elif symbol_candidates:
-        candidate = symbol_candidates[0].upper()
-        try:
-            explicit_symbol = validate_symbol(candidate)
-        except ValueError:
-            explicit_symbol = None
-
+    intents = _find_intents(normalized)
+    if not intents and re.search(r"\b(market|price|crypto|coin)\b", normalized):
+        intents = [ParsedIntent("market_snapshot", "market_snapshot", ("market query",))]
+    assets = _extract_assets(original)
     timeframe_match = _TIMEFRAME_RE.search(normalized)
     explicit_timeframe = timeframe_match.group(1).lower() if timeframe_match else None
-    references = tuple(ref for ref in ("it", "that asset", "same timeframe", "previous", "earlier", "last result", "continue", "again") if re.search(r"\b" + re.escape(ref) + r"\b", normalized))
-    resolved_symbol = explicit_symbol or (context.symbol if context and references else None) or safe_symbol
-    resolved_timeframe = explicit_timeframe or (context.timeframe if context and references else None) or safe_timeframe
+    references = tuple(ref for ref in ("it", "that asset", "same timeframe", "previous", "earlier", "last result", "continue", "again", "that strategy") if re.search(r"\b" + re.escape(ref) + r"\b", normalized))
+    resolved_symbol = assets[0] if assets else (context.symbol if references and context.symbol else default_symbol)
+    resolved_timeframe = explicit_timeframe or (context.timeframe if references and context.timeframe else default_timeframe)
+    durations = [{"value": int(m.group(1)), "unit": m.group(2).lower()} for m in _DURATION_RE.finditer(normalized)]
+    numbers = _NUMBER_RE.findall(normalized)
+    constraint_phrases = ("exclude low-volume", "without low-volume", "only completed", "paper trading only", "exclude stale", "exclude low volume", "no low-volume")
+    constraints = tuple(phrase for phrase in constraint_phrases if phrase in normalized)
 
-    durations = [
-        {"value": int(m.group(1)), "unit": m.group(2).lower()}
-        for m in _DURATION_RE.finditer(normalized)
-    ]
-    numbers = [m.group(0) for m in _NUMBER_RE.finditer(normalized)]
-    constraints = tuple(
-        phrase for phrase in ("exclude low-volume", "without low-volume", "only completed", "paper trading only", "exclude stale")
-        if phrase in normalized
-    )
     clarification = None
-    needs_clarification = False
-    if references and not explicit_symbol and not (context and context.symbol):
-        needs_clarification = True
+    if not intents:
+        clarification = "What market or application information should I retrieve?"
+    elif references and not assets and not context.symbol:
         clarification = "Which asset are you referring to?"
-    if "same timeframe" in references and not explicit_timeframe and not (context and context.timeframe):
-        needs_clarification = True
+    elif "same timeframe" in references and not explicit_timeframe and not context.timeframe:
         clarification = "Which timeframe should I reuse?"
+    elif len(assets) > 1 and "compare" not in normalized and "versus" not in normalized and " vs " not in normalized:
+        clarification = "Which asset should I analyze first?"
+    needs_clarification = clarification is not None
 
-    reasons = ["Intent terms matched deterministic supported vocabulary."]
     confidence = ConfidenceLevel.HIGH
-    if len(intent_matches) > 1:
+    reasons = ["Supported intent terms were matched deterministically."]
+    if len(intents) > 1 or len(assets) > 1:
         confidence = ConfidenceLevel.MEDIUM
-        reasons.append("Multiple intents detected; current runtime executes one evidence tool per request.")
-    if references and not (context and (context.symbol or context.timeframe)):
+        reasons.append("Multiple intent categories or assets were detected.")
+    if not intents:
         confidence = ConfidenceLevel.LOW
-        reasons.append("A conversational reference lacks a usable context value.")
-    if not explicit_symbol:
-        reasons.append("Asset uses the request's validated symbol parameter.")
+        reasons.append("No supported intent category was identified.")
+    if references and not (context.symbol or context.timeframe):
+        confidence = ConfidenceLevel.LOW
+        reasons.append("Reference resolution has no supplied prior context.")
+    if not assets:
+        reasons.append("Asset falls back to the validated request parameter or context.")
+
+    unsupported = not intents
     return StructuredAssistantRequest(
         request_id=request_id or uuid4().hex,
         original_text=original,
         normalized_text=normalized,
-        intents=tuple(intent_matches),
+        intents=tuple(intents),
         entities={
+            "assets": assets,
             "symbol": resolved_symbol,
-            "explicit_symbol": explicit_symbol,
-            "market": safe_market,
+            "explicit_symbol": assets[0] if assets else None,
+            "market": default_market,
             "timeframe": resolved_timeframe,
             "explicit_timeframe": explicit_timeframe,
             "durations": durations,
             "numbers": numbers,
         },
-        parameters={"symbol": resolved_symbol, "market": safe_market, "timeframe": resolved_timeframe},
+        parameters={"symbol": resolved_symbol, "market": default_market, "timeframe": resolved_timeframe},
         constraints=constraints,
         context_references=references,
         confidence=confidence,
         confidence_reasons=tuple(reasons),
         clarification_required=needs_clarification,
         clarification_question=clarification,
+        unsupported=unsupported,
     )
