@@ -1,8 +1,4 @@
-"""Request orchestration boundary for the deterministic market assistant.
-
-This module coordinates the existing validated evidence tools. It does not
-perform market calculations, change trading state, or grant tool permissions.
-"""
+"""Request orchestration boundary for the deterministic market assistant."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -50,6 +46,17 @@ class AssistantTaskTrace:
             raise ValueError(f"Invalid assistant task transition: {self.state} -> {next_state}")
         self.state = next_state
         self.transitions.append(next_state.value)
+
+
+class AssistantRuntimeError(Exception):
+    """Safe API-facing failure carrying the bounded request lifecycle."""
+
+    def __init__(self, message: str, trace: AssistantTaskTrace, status_code: int):
+        super().__init__(message)
+        self.task_id = trace.task_id
+        self.task_state = trace.state.value
+        self.task_trace = tuple(trace.transitions)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -105,7 +112,15 @@ async def execute_assistant_query(
             sources=(evidence.get("source", "local backend"),),
             interpretation=interpretation,
         )
-    except Exception:
+    except ValueError as exc:
         if trace.state not in {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED}:
             trace.transition(AssistantTaskState.FAILED)
-        raise
+        raise AssistantRuntimeError(str(exc), trace, 422) from exc
+    except Exception as exc:
+        if trace.state not in {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED}:
+            trace.transition(AssistantTaskState.FAILED)
+        raise AssistantRuntimeError(
+            "Assistant request failed while retrieving or validating local evidence.",
+            trace,
+            500,
+        ) from exc
