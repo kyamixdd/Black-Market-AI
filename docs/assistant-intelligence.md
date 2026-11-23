@@ -57,3 +57,35 @@ A provider can add a short interpretation to deterministic evidence. It is disab
 Keep the key in backend environment configuration; never place it in frontend variables or commit it. The compatible endpoint must expose `POST /chat/completions`. Provider timeouts or errors fall back to the deterministic answer. Provider text is labeled as interpretation, not verified fact.
 
 The assistant uses the same authenticated `/api/assistant/query` endpoint as other API routes. Inputs are bounded and symbol, market, and timeframe are validated.
+
+
+## Stage 3 persistent memory
+
+Persistent assistant memories use the existing SQLAlchemy database and `assistant_memories` table. Database initialization creates the table additively through the existing metadata initialization; existing application tables and records are preserved.
+
+Memory categories are `working`, `episodic`, `semantic`, and `procedural`. Records include a generated ID, owner namespace, content, source, importance, confidence, tags, version, access count, creation/update/access timestamps, and optional expiration.
+
+### Memory operations
+
+- `POST /api/assistant/memories`: explicitly save a memory.
+- `GET /api/assistant/memories`: list the owner's bounded memory records.
+- `GET /api/assistant/memories?query=...`: retrieve relevant records using keyword overlap, tags, importance, confidence, and recency.
+- `GET /api/assistant/memories/{memory_id}`: read a memory owned by the caller.
+- `DELETE /api/assistant/memories/{memory_id}`: delete a memory owned by the caller.
+- Assistant query supports explicit `remember that ...` and `what do you remember about ...` commands.
+
+Memory content is validated and capped at 1200 characters. Credential-like patterns are rejected. Working memories expire by default after one day; optional TTL is bounded to 365 days. Expired records are removed on access/list cleanup. Retrieval is bounded to 10 records and candidate scans are capped. Matching same-owner, same-category content is deduplicated and versioned.
+
+### Ownership and privacy
+
+The local API bearer credential is hashed to derive the memory owner namespace. Raw credentials are not stored. All read/update/delete operations are scoped to that owner. In the current local-token architecture, credential rotation creates a new memory namespace; user-account identity and hosted multi-user identity integration are not yet implemented.
+
+Retrieved memory content is returned as contextual data, not executable instructions. The assistant query response includes a bounded `memory_context` field. Deterministic market calculations and tool permissions are not influenced by memory contents.
+
+### Current limitations
+
+- Automatic conversation summarization and durable conversation history are not implemented.
+- Retrieval currently uses lexical overlap and metadata scoring; vector search is not enabled.
+- Memory context is exposed to the assistant API, but deterministic response wording does not yet adapt to stored preferences.
+- Cross-device account synchronization is not implemented.
+- User correction is supported by updating a memory through its ID; automatic contradiction resolution is not implemented.
