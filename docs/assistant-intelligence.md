@@ -17,6 +17,18 @@ The assistant's deterministic mode is enabled by default and requires no API key
 
 Unavailable records are reported as unavailable rather than fabricated. The assistant does not place orders, change balances, change risk settings, or access real-money accounts.
 
+## Stage 1 request orchestration
+
+The API route delegates request execution to `assistant_runtime.execute_assistant_query`. The runtime coordinates the existing deterministic tool selector, input validation, evidence tool execution, result summarization, and optional provider interpretation.
+
+Each request receives a unique task ID and an in-request lifecycle trace:
+
+`received → interpreting → executing → validating → completed`
+
+Validation or execution exceptions move the trace to `failed`. The API returns a bounded task ID, failed state, and lifecycle trace with a sanitized error message. The trace is scoped to the current request and is not durable task storage.
+
+The runtime does not calculate market indicators, change paper-trading state, grant permissions, or execute arbitrary code. Existing allowlisted evidence tools remain authoritative. Multi-step planning, persistent memory, feedback learning, event-driven monitoring, and cancellation are not implemented by this stage.
+
 ## Optional compatible provider
 
 A provider can add a short interpretation to the deterministic evidence. It is disabled by default. Configure these backend environment variables only if a compatible service is available:
