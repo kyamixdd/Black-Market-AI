@@ -96,6 +96,10 @@ async def list_assistant_tools(request: Request):
     return {"tools": create_default_registry().list_tools()}
 
 
+_ASYNC_TASKS: dict[str, dict] = {}
+_ASYNC_TASK_LIMIT = 128
+
+
 class AssistantQuery(BaseModel):
     query: str = Field(min_length=2, max_length=500)
     symbol: str = Field(default="BTCUSDT", min_length=2, max_length=20)
