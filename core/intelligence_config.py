@@ -1,8 +1,4 @@
-"""Validated intelligence-mode configuration with safe runtime loading.
-
-Modes tune assistant reasoning depth and bounded tool planning only. They do not
-change exchange permissions or enable live trading.
-"""
+"""Validated intelligence-mode configuration with safe runtime loading."""
 from __future__ import annotations
 
 import os
@@ -12,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .runtime_settings_store import load_runtime_settings
+from .runtime_settings_store import load_runtime_settings, save_runtime_settings
 
 
 class IntelligenceMode(str, Enum):
@@ -30,57 +26,36 @@ class IntelligenceConfig(BaseModel):
     memory_enabled: bool = True
     feedback_enabled: bool = True
     provider_enabled: bool = True
-    response_detail: str = Field(default="normal")
+    response_detail: str = "normal"
 
     @field_validator("response_detail")
     @classmethod
     def validate_response_detail(cls, value: str) -> str:
-        allowed = {"brief", "normal", "detailed"}
-        if value not in allowed:
+        if value not in {"brief", "normal", "detailed"}:
             raise ValueError("response_detail must be brief, normal, or detailed")
         return value
 
 
 _MODE_DEFAULTS: dict[IntelligenceMode, dict[str, Any]] = {
-    IntelligenceMode.BALANCED: {
-        "max_tool_calls": 3, "memory_enabled": True, "feedback_enabled": True,
-        "provider_enabled": True, "response_detail": "normal",
-    },
-    IntelligenceMode.FAST: {
-        "max_tool_calls": 1, "memory_enabled": False, "feedback_enabled": True,
-        "provider_enabled": False, "response_detail": "brief",
-    },
-    IntelligenceMode.RESEARCH: {
-        "max_tool_calls": 3, "memory_enabled": True, "feedback_enabled": True,
-        "provider_enabled": True, "response_detail": "detailed",
-    },
-    IntelligenceMode.CONSERVATIVE: {
-        "max_tool_calls": 1, "memory_enabled": True, "feedback_enabled": False,
-        "provider_enabled": False, "response_detail": "normal",
-    },
+    IntelligenceMode.BALANCED: {"max_tool_calls": 3, "memory_enabled": True, "feedback_enabled": True, "provider_enabled": True, "response_detail": "normal"},
+    IntelligenceMode.FAST: {"max_tool_calls": 1, "memory_enabled": False, "feedback_enabled": True, "provider_enabled": False, "response_detail": "brief"},
+    IntelligenceMode.RESEARCH: {"max_tool_calls": 3, "memory_enabled": True, "feedback_enabled": True, "provider_enabled": True, "response_detail": "detailed"},
+    IntelligenceMode.CONSERVATIVE: {"max_tool_calls": 1, "memory_enabled": True, "feedback_enabled": False, "provider_enabled": False, "response_detail": "normal"},
 }
 
 
 def config_for_mode(mode: IntelligenceMode | str) -> IntelligenceConfig:
-    """Return the validated preset for a supported mode."""
     parsed_mode = IntelligenceMode(mode)
     return IntelligenceConfig(mode=parsed_mode, **_MODE_DEFAULTS[parsed_mode])
 
 
-def load_intelligence_config(
-    overrides: dict[str, Any] | None = None,
-) -> IntelligenceConfig:
-    """Load validated config from persisted runtime settings and env overrides.
-
-    Precedence: explicit overrides > environment > persisted settings > preset.
-    Invalid persisted configuration raises RuntimeError instead of silently
-    changing the active mode. Environment mode is intentionally allow-listed.
-    """
+def load_intelligence_config(overrides: dict[str, Any] | None = None) -> IntelligenceConfig:
+    """Precedence: explicit overrides > environment > persisted values > preset."""
     persisted = load_runtime_settings()
-    raw_mode = os.environ.get(
-        "BLACKMARKET_INTELLIGENCE_MODE",
-        (overrides or {}).get("mode", persisted.get("intelligence_mode", "balanced")),
-    )
+    persisted_mode = persisted.get("intelligence_mode", "balanced")
+    env_mode = os.environ.get("BLACKMARKET_INTELLIGENCE_MODE")
+    explicit_mode = (overrides or {}).get("mode")
+    raw_mode = explicit_mode if explicit_mode is not None else env_mode if env_mode is not None else persisted_mode
     try:
         mode = IntelligenceMode(raw_mode)
     except (ValueError, TypeError) as exc:
@@ -89,10 +64,9 @@ def load_intelligence_config(
     values = _MODE_DEFAULTS[mode].copy()
     values["mode"] = mode
     persisted_config = persisted.get("intelligence_config", {})
-    if persisted_config:
-        if not isinstance(persisted_config, dict):
-            raise RuntimeError("Persisted intelligence_config must be an object.")
-        values.update(persisted_config)
+    if not isinstance(persisted_config, dict):
+        raise RuntimeError("Persisted intelligence_config must be an object.")
+    values.update(persisted_config)
     if overrides:
         values.update(overrides)
     values["mode"] = mode
@@ -102,9 +76,17 @@ def load_intelligence_config(
         raise RuntimeError("Invalid intelligence configuration.") from exc
 
 
+def save_intelligence_config(config: IntelligenceConfig) -> IntelligenceConfig:
+    """Persist a validated profile and refresh the process cache."""
+    current = load_runtime_settings()
+    current["intelligence_mode"] = config.mode.value
+    current["intelligence_config"] = config.model_dump(mode="json", exclude={"mode"})
+    save_runtime_settings(current)
+    return reload_runtime_intelligence_config()
+
+
 @lru_cache(maxsize=1)
 def get_runtime_intelligence_config() -> IntelligenceConfig:
-    """Cached process-level configuration; clear cache to reload after changes."""
     return load_intelligence_config()
 
 
