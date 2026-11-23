@@ -81,3 +81,27 @@ async def test_runtime_failure_contains_failed_task_trace():
     assert error.value.status_code == 422
     assert error.value.task_state == "failed"
     assert error.value.task_trace == ("received", "interpreting", "failed")
+
+
+@pytest.mark.asyncio
+async def test_runtime_reports_partial_completion_when_one_tool_fails(monkeypatch):
+    monkeypatch.setenv("BLACKMARKET_ASSISTANT_PROVIDER", "disabled")
+
+    class Registry:
+        async def invoke(self, bridge, tool_id, arguments, *, permissions=None):
+            if tool_id == "risk_status":
+                from src_tauri.backend.assistant_tool_registry import ToolRegistryError
+                raise ToolRegistryError("invalid_arguments", "bad input")
+            return {"tool": tool_id, "status": "available", "data": {"price": 12}, "source": "test"}
+
+    monkeypatch.setattr(
+        "src_tauri.backend.assistant_runtime.create_default_registry",
+        lambda: Registry(),
+    )
+    result = await execute_assistant_query(
+        object(), "show market snapshot and risk status", "BTCUSDT", "SPOT", "1h"
+    )
+    assert result.task_state == "partially_completed"
+    assert result.status == "partial"
+    assert "Task partially completed" in result.answer
+    assert "market_snapshot" in result.answer
