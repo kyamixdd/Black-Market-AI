@@ -80,7 +80,7 @@ def test_approval_requires_explicit_human_confirmation(isolated_evolution):
 def test_approval_versions_config_and_rollback_restores_previous(isolated_evolution):
     current, path = isolated_evolution
     proposal = evolution.create_improvement_proposal(
-        {"mode": "fast"}, report(), report(),
+        {"mode": "fast"}, report(mode="fast"), report(),
         "Use a faster mode after passing benchmark gates.",
     )
     version = evolution.approve_proposal(proposal["proposal_id"], explicit_approval=True)
@@ -97,7 +97,7 @@ def test_approval_versions_config_and_rollback_restores_previous(isolated_evolut
 
 def test_rollback_requires_explicit_approval(isolated_evolution):
     proposal = evolution.create_improvement_proposal(
-        {"mode": "fast"}, report(), report(),
+        {"mode": "fast"}, report(mode="fast"), report(),
         "Use a faster mode after passing benchmark gates.",
     )
     version = evolution.approve_proposal(proposal["proposal_id"], explicit_approval=True)
@@ -107,7 +107,7 @@ def test_rollback_requires_explicit_approval(isolated_evolution):
 
 def test_proposal_mode_change_uses_mode_preset(isolated_evolution):
     proposal = evolution.create_improvement_proposal(
-        {"mode": "fast"}, report(), report(),
+        {"mode": "fast"}, report(mode="fast"), report(),
         "Switch to the validated fast preset after benchmark review.",
     )
     assert proposal["patch"]["mode"] == "fast"
