@@ -10,6 +10,7 @@ from src_tauri.backend.assistant_memory import (
     build_memory_record,
     retrieve_relevant_memories,
     apply_assistant_preferences,
+    preference_adaptation_for_feedback,
 )
 
 
@@ -198,3 +199,12 @@ def test_feedback_preference_application_is_validated_and_bounded():
     assert answer.startswith("Summary\nSnapshot summary.")
     assert "price: 100" in answer
     assert "freshness: fresh" in answer
+
+
+def test_feedback_adaptation_requires_repeated_specific_evidence():
+    assert preference_adaptation_for_feedback("too_detailed", 1) is None
+    assert preference_adaptation_for_feedback("too_detailed", 2) is None
+    assert preference_adaptation_for_feedback("too_detailed", 3) == ("response_detail", "concise")
+    assert preference_adaptation_for_feedback("too_brief", 3) == ("response_detail", "detailed")
+    assert preference_adaptation_for_feedback("incorrect", 100) is None
+    assert preference_adaptation_for_feedback("too_detailed", 3, threshold=4) is None
