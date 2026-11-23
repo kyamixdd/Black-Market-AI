@@ -83,19 +83,23 @@ def _find_intents(text: str) -> list[ParsedIntent]:
 
 
 def _extract_assets(text: str) -> list[str]:
-    assets: list[str] = []
-    for match in _PAIR_RE.finditer(text.upper()):
+    ordered: list[tuple[int, str]] = []
+    upper = text.upper()
+    pair_spans: list[tuple[int, int]] = []
+    for match in _PAIR_RE.finditer(upper):
+        pair_spans.append(match.span())
         pair = match.group(1) + match.group(2)
         try:
-            assets.append(validate_symbol(pair))
+            ordered.append((match.start(), validate_symbol(pair)))
         except ValueError:
-            pass
-    for match in re.finditer(r"\b(" + "|".join(sorted(COMMON_ASSETS)) + r")\b", text.upper()):
-        base = match.group(1)
-        if not any(asset.startswith(base) for asset in assets):
-            assets.append(base + "USDT")
-    return list(dict.fromkeys(assets))
-
+            continue
+    asset_pattern = re.compile(r"\b(" + "|".join(sorted(COMMON_ASSETS)) + r")\b")
+    for match in asset_pattern.finditer(upper):
+        if any(start <= match.start() < end for start, end in pair_spans):
+            continue
+        ordered.append((match.start(), match.group(1) + "USDT"))
+    ordered.sort(key=lambda item: item[0])
+    return list(dict.fromkeys(asset for _, asset in ordered))
 
 def parse_assistant_request(
     text: str,
