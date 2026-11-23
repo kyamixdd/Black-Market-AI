@@ -10,7 +10,7 @@ import re
 
 from database.connection import get_session_maker
 from database.repositories import Repository
-from ...assistant_memory import build_memory_record, retrieve_relevant_memories, MemoryValidationError
+from ...assistant_memory import build_memory_record, retrieve_relevant_memories, MemoryValidationError, apply_assistant_preferences
 from fastapi import APIRouter, HTTPException
 
 from ...bridge.orchestrator_bridge import get_bridge
@@ -233,8 +233,11 @@ async def query_assistant(request: Request, payload: AssistantQuery):
         ) from exc
 
     parsed = result.structured_request
+    saved_preferences = repository.get_assistant_preferences(owner_key)
+    adapted_answer, applied_preferences = apply_assistant_preferences(result.answer, result.data, saved_preferences)
     return {
-        "answer": result.answer,
+        "answer": adapted_answer,
+        "applied_preferences": applied_preferences,
         "tool": result.tool,
         "status": result.status,
         "sources": list(result.sources),
