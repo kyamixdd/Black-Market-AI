@@ -20,10 +20,10 @@ class AssistantQuery(BaseModel):
 
 @router.post("/query")
 async def query_assistant(request: AssistantQuery):
-    # Only explicitly supplied symbol/timeframe values act as context.
+    supplied_fields = getattr(request, "model_fields_set", getattr(request, "__fields_set__", set()))
     context = ContextSnapshot(
-        symbol=request.symbol if "symbol" in request.model_fields_set else None,
-        timeframe=request.timeframe if "timeframe" in request.model_fields_set else None,
+        symbol=request.symbol if "symbol" in supplied_fields else None,
+        timeframe=request.timeframe if "timeframe" in supplied_fields else None,
     )
     try:
         result = await execute_assistant_query(
@@ -51,10 +51,7 @@ async def query_assistant(request: AssistantQuery):
         "sources": list(result.sources),
         "data": result.data,
         "understanding": {
-            "intents": [
-                {"name": intent.name, "tool": intent.tool}
-                for intent in parsed.intents
-            ] if parsed else [],
+            "intents": [{"name": intent.name, "tool": intent.tool} for intent in parsed.intents] if parsed else [],
             "entities": parsed.entities if parsed else {},
             "parameters": parsed.parameters if parsed else {},
             "constraints": list(parsed.constraints) if parsed else [],
@@ -63,14 +60,9 @@ async def query_assistant(request: AssistantQuery):
             "confidence_reasons": list(parsed.confidence_reasons) if parsed else [],
             "clarification_required": parsed.clarification_required if parsed else False,
         },
-        "task": {
-            "id": result.task_id,
-            "state": result.task_state,
-            "trace": list(result.task_trace),
-        },
+        "task": {"id": result.task_id, "state": result.task_state, "trace": list(result.task_trace)},
         "disclaimer": (
             "Evidence is limited to returned local application data. "
-            "Observations and calculations are not guaranteed predictions "
-            "or trade instructions."
+            "Observations and calculations are not guaranteed predictions or trade instructions."
         ),
     }
