@@ -4,6 +4,8 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from fastapi import Request
 import hashlib
+import asyncio
+from uuid import uuid4
 import re
 
 from database.connection import get_session_maker
@@ -14,6 +16,7 @@ from fastapi import APIRouter, HTTPException
 from ...bridge.orchestrator_bridge import get_bridge
 from ...assistant_nlu import ContextSnapshot
 from ...assistant_runtime import AssistantRuntimeError, execute_assistant_query
+from ...assistant_planning import TASK_EXECUTION_MANAGER
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -96,11 +99,88 @@ async def list_assistant_tools(request: Request):
     return {"tools": create_default_registry().list_tools()}
 
 
+_ASYNC_TASKS: dict[str, dict] = {}
+_ASYNC_TASK_LIMIT = 128
+
+
 class AssistantQuery(BaseModel):
     query: str = Field(min_length=2, max_length=500)
     symbol: str = Field(default="BTCUSDT", min_length=2, max_length=20)
     market: str = Field(default="SPOT", min_length=4, max_length=7)
     timeframe: str = Field(default="1h", min_length=2, max_length=3)
+
+
+
+@router.post("/tasks", status_code=202)
+async def start_assistant_task(request: Request, payload: AssistantQuery):
+    owner_key = _memory_owner(request)
+    terminal_states = {"completed", "failed", "partially_completed", "cancelled", "awaiting_clarification"}
+    active = sum(1 for item in _ASYNC_TASKS.values() if item["state"] not in terminal_states)
+    if active >= 16:
+        raise HTTPException(status_code=429, detail="Assistant task capacity reached; retry after an active task finishes.")
+    for old_id in list(_ASYNC_TASKS):
+        if len(_ASYNC_TASKS) < _ASYNC_TASK_LIMIT:
+            break
+        if _ASYNC_TASKS[old_id]["state"] in terminal_states:
+            _ASYNC_TASKS.pop(old_id, None)
+    if len(_ASYNC_TASKS) >= _ASYNC_TASK_LIMIT:
+        raise HTTPException(status_code=429, detail="Assistant task history is full; wait for completed records to be evicted.")
+    task_id = uuid4().hex
+    TASK_EXECUTION_MANAGER.register(task_id)
+    _ASYNC_TASKS[task_id] = {"owner": owner_key, "state": "received", "result": None, "error": None}
+
+    async def _run():
+        record = _ASYNC_TASKS.get(task_id)
+        if record is None:
+            TASK_EXECUTION_MANAGER.unregister(task_id)
+            return
+        record["state"] = "running"
+        try:
+            result = await execute_assistant_query(
+                get_bridge(), payload.query, payload.symbol, payload.market,
+                payload.timeframe, task_id=task_id,
+            )
+            record["state"] = result.task_state
+            record["result"] = {
+                "answer": result.answer, "tool": result.tool, "status": result.status,
+                "data": result.data, "sources": list(result.sources),
+                "task": {"id": result.task_id, "state": result.task_state, "trace": list(result.task_trace)},
+            }
+        except AssistantRuntimeError as exc:
+            record["state"] = exc.task_state
+            record["error"] = {"code": exc.error_code, "message": str(exc)}
+            record["task"] = {"id": task_id, "state": exc.task_state, "trace": list(exc.task_trace)}
+        except Exception:
+            record["state"] = "failed"
+            record["error"] = {"code": "assistant_task_failed", "message": "Assistant task failed safely."}
+        finally:
+            TASK_EXECUTION_MANAGER.unregister(task_id)
+
+    asyncio.create_task(_run())
+    return {"task_id": task_id, "state": "received", "status_url": f"/api/assistant/tasks/{task_id}"}
+
+
+@router.get("/tasks/{task_id}")
+async def get_assistant_task(task_id: str, request: Request):
+    owner_key = _memory_owner(request)
+    record = _ASYNC_TASKS.get(task_id)
+    if record is None or record["owner"] != owner_key:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"task_id": task_id, "state": record["state"], "result": record.get("result"), "error": record.get("error")}
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_assistant_task(task_id: str, request: Request):
+    owner_key = _memory_owner(request)
+    record = _ASYNC_TASKS.get(task_id)
+    if record is None or record["owner"] != owner_key:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if record["state"] not in {"received", "running"}:
+        return {"task_id": task_id, "state": record["state"], "cancelled": False}
+    cancelled = TASK_EXECUTION_MANAGER.cancel(task_id)
+    if cancelled:
+        record["state"] = "cancellation_requested"
+    return {"task_id": task_id, "state": record["state"], "cancelled": cancelled}
 
 
 @router.post("/query")

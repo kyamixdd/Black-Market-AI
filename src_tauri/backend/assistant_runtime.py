@@ -14,6 +14,7 @@ from .assistant_intelligence import (
 )
 from .assistant_nlu import ContextSnapshot, StructuredAssistantRequest, parse_assistant_request
 from .assistant_tool_registry import ToolRegistryError, create_default_registry
+from .assistant_planning import TASK_EXECUTION_MANAGER, build_plan, execute_plan
 
 
 class AssistantTaskState(str, Enum):
@@ -24,6 +25,8 @@ class AssistantTaskState(str, Enum):
     VALIDATING = "validating"
     COMPLETED = "completed"
     FAILED = "failed"
+    PARTIALLY_COMPLETED = "partially_completed"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -39,10 +42,12 @@ class AssistantTaskTrace:
             AssistantTaskState.RECEIVED: {AssistantTaskState.INTERPRETING, AssistantTaskState.FAILED},
             AssistantTaskState.INTERPRETING: {AssistantTaskState.AWAITING_CLARIFICATION, AssistantTaskState.EXECUTING, AssistantTaskState.FAILED},
             AssistantTaskState.AWAITING_CLARIFICATION: set(),
-            AssistantTaskState.EXECUTING: {AssistantTaskState.VALIDATING, AssistantTaskState.FAILED},
-            AssistantTaskState.VALIDATING: {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED},
+            AssistantTaskState.EXECUTING: {AssistantTaskState.VALIDATING, AssistantTaskState.FAILED, AssistantTaskState.PARTIALLY_COMPLETED, AssistantTaskState.CANCELLED},
+            AssistantTaskState.VALIDATING: {AssistantTaskState.COMPLETED, AssistantTaskState.FAILED, AssistantTaskState.PARTIALLY_COMPLETED, AssistantTaskState.CANCELLED},
             AssistantTaskState.COMPLETED: set(),
             AssistantTaskState.FAILED: set(),
+            AssistantTaskState.PARTIALLY_COMPLETED: set(),
+            AssistantTaskState.CANCELLED: set(),
         }
         if next_state not in allowed[self.state]:
             raise ValueError(f"Invalid assistant task transition: {self.state} -> {next_state}")
@@ -83,9 +88,10 @@ async def execute_assistant_query(
     market: str = "SPOT",
     timeframe: str = "1h",
     context: ContextSnapshot | None = None,
+    task_id: str | None = None,
 ) -> AssistantExecution:
     """Interpret and execute up to three distinct evidence intents."""
-    trace = AssistantTaskTrace()
+    trace = AssistantTaskTrace(task_id=task_id or uuid4().hex)
     try:
         trace.transition(AssistantTaskState.INTERPRETING)
         parsed = parse_assistant_request(
@@ -127,36 +133,53 @@ async def execute_assistant_query(
             )
 
         trace.transition(AssistantTaskState.EXECUTING)
-        results = []
         registry = create_default_registry()
         arguments = {
             "symbol": parsed.parameters["symbol"],
             "market": parsed.parameters["market"],
             "timeframe": parsed.parameters["timeframe"],
         }
-        for tool in tools:
-            results.append(await registry.invoke(bridge, tool, arguments))
+        plan = build_plan(tools, arguments, task_id=trace.task_id)
+        cancel_event = TASK_EXECUTION_MANAGER.register(trace.task_id)
+        try:
+            plan_result = await execute_plan(plan, registry, bridge, cancel_event=cancel_event)
+        finally:
+            TASK_EXECUTION_MANAGER.unregister(trace.task_id)
+
+        successful = [item["result"] for item in plan_result.step_results if item["state"] == "completed" and item.get("result")]
+        summaries = [summarize_result(query, item) for item in successful]
+        answer = "\n\n".join(
+            f"{item.get('tool', 'evidence')}: {summary}"
+            for item, summary in zip(successful, summaries)
+        )
+        if plan_result.failed_steps or plan_result.blocked_steps:
+            answer += "\n\nTask partially completed. Failed or blocked steps: " + ", ".join(plan_result.failed_steps + plan_result.blocked_steps)
+        if plan_result.cancelled_steps:
+            answer += "\n\nTask cancellation requested. Completed results are retained; remaining steps were cancelled."
+        if not answer:
+            answer = "Task was cancelled before any tool returned a result." if plan_result.state == "cancelled" else "The task could not produce a successful result."
 
         trace.transition(AssistantTaskState.VALIDATING)
-        summaries = [summarize_result(query, item) for item in results]
-        answer = summaries[0] if len(summaries) == 1 else "\n\n".join(
-            f"{item.get('tool', 'evidence')}: {summary}"
-            for item, summary in zip(results, summaries)
-        )
         interpretation = None
-        if len(results) == 1:
-            interpretation = await optional_provider_interpretation(query, results[0])
+        if len(successful) == 1 and plan_result.state == "completed":
+            interpretation = await optional_provider_interpretation(query, successful[0])
             if interpretation:
                 answer += "\n\nOptional provider interpretation (not verified facts): " + interpretation
 
-        trace.transition(AssistantTaskState.COMPLETED)
-        primary = results[0]
+        if plan_result.state == "completed":
+            trace.transition(AssistantTaskState.COMPLETED)
+        elif plan_result.state == "cancelled":
+            trace.transition(AssistantTaskState.CANCELLED)
+        else:
+            trace.transition(AssistantTaskState.PARTIALLY_COMPLETED if successful else AssistantTaskState.FAILED)
+
+        primary = successful[0] if successful else {}
         return AssistantExecution(
             task_id=trace.task_id, task_state=trace.state.value,
             task_trace=tuple(trace.transitions), answer=answer,
-            tool=primary.get("tool"), status="available" if all(r.get("status") == "available" for r in results) else "partial",
-            data=primary.get("data") if len(results) == 1 else [r.get("data") for r in results],
-            sources=tuple(dict.fromkeys(r.get("source", "local backend") for r in results)),
+            tool=primary.get("tool"), status="available" if plan_result.state == "completed" and all(r.get("status") == "available" for r in successful) else "partial",
+            data=primary.get("data") if len(successful) == 1 else [r.get("data") for r in successful],
+            sources=tuple(dict.fromkeys(r.get("source", "local backend") for r in successful)),
             interpretation=interpretation, structured_request=parsed,
         )
     except ToolRegistryError as exc:
