@@ -850,9 +850,11 @@ class Repository:
     def count_assistant_feedback(self, owner_key: str, feedback_type: str, *,
                                  preference_key: str | None = None) -> int:
         with self._get_session() as session:
+            from datetime import timedelta
             stmt = select(func.count()).select_from(AssistantFeedbackModel).where(
                 AssistantFeedbackModel.owner_key == owner_key,
                 AssistantFeedbackModel.feedback_type == feedback_type,
+                AssistantFeedbackModel.created_at >= datetime.now(timezone.utc) - timedelta(days=90),
             )
             if preference_key:
                 stmt = stmt.where(AssistantFeedbackModel.correction == preference_key)
