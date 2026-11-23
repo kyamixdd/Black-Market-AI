@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from exchange.rate_limiter import RateLimiter
-from exchange.websocket_manager import WebSocketManager
+from exchange.websocket_manager import (\n    FUTURES_WS_URL, SPOT_WS_URL, WebSocketManager,\n)
 
 
 @pytest.mark.asyncio
@@ -35,3 +35,15 @@ async def test_websocket_manager():
     # If we received something, it should be parsed correctly
     for data in received_data:
         assert isinstance(data, dict)
+
+
+def test_binance_raw_and_combined_stream_urls():
+    assert WebSocketManager._build_stream_url(
+        SPOT_WS_URL, ["btcusdt@ticker"]
+    ) == "wss://stream.binance.com:9443/ws/btcusdt@ticker"
+    assert WebSocketManager._build_stream_url(
+        SPOT_WS_URL, ["btcusdt@ticker", "ethusdt@ticker"]
+    ) == "wss://stream.binance.com:9443/stream?streams=btcusdt@ticker/ethusdt@ticker"
+    assert WebSocketManager._build_stream_url(
+        FUTURES_WS_URL, ["btcusdt@ticker", "ethusdt@ticker"]
+    ) == "wss://fstream.binance.com/stream?streams=btcusdt@ticker/ethusdt@ticker"
