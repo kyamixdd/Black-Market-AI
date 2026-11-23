@@ -92,7 +92,7 @@ async def test_runtime_reports_partial_completion_when_one_tool_fails(monkeypatc
             if tool_id == "risk_status":
                 from src_tauri.backend.assistant_tool_registry import ToolRegistryError
                 raise ToolRegistryError("invalid_arguments", "bad input")
-            return {"tool": tool_id, "status": "available", "data": {"price": 12}, "source": "test"}
+            return {"tool": tool_id, "status": "available", "data": {"price": 12}, "source": "test", "symbol": arguments["symbol"], "market": arguments["market"], "timeframe": arguments["timeframe"]}
 
     monkeypatch.setattr(
         "src_tauri.backend.assistant_runtime.create_default_registry",
