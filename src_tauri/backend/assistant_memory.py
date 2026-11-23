@@ -89,3 +89,34 @@ def retrieve_relevant_memories(repository, owner_key: str, query: str, *, limit:
         scored.append((score, item))
     scored.sort(key=lambda pair: pair[0], reverse=True)
     return [item for score, item in scored[:max(1, min(int(limit), 10))] if score > 0.05]
+
+
+def apply_assistant_preferences(answer: str, data: Any, preferences: list[dict[str, Any]]) -> tuple[str, dict[str, str]]:
+    """Apply validated response preferences without changing evidence or calculations."""
+    allowed = {
+        "response_detail": {"concise", "detailed"},
+        "response_format": {"structured", "narrative"},
+    }
+    applied: dict[str, str] = {}
+    for item in preferences:
+        key, value = item.get("preference_key"), item.get("preference_value")
+        if key in allowed and value in allowed[key]:
+            applied[key] = value
+
+    result = answer
+    evidence_lines: list[str] = []
+    if applied.get("response_detail") == "detailed" and isinstance(data, dict):
+        for key, value in list(data.items())[:8]:
+            rendered = str(value).replace("\n", " ")
+            if len(rendered) > 180:
+                rendered = rendered[:177] + "..."
+            evidence_lines.append(f"{key}: {rendered}")
+    if evidence_lines:
+        result += "\n\nAdditional returned evidence:\n" + "\n".join(evidence_lines)
+
+    if applied.get("response_format") == "structured":
+        if evidence_lines:
+            result = "Summary\n" + answer + "\n\nEvidence\n" + "\n".join(evidence_lines)
+        else:
+            result = "Summary\n" + answer
+    return result, applied
