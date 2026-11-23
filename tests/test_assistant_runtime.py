@@ -2,6 +2,7 @@
 import pytest
 
 from src_tauri.backend.assistant_runtime import (
+    AssistantRuntimeError,
     AssistantTaskState,
     AssistantTaskTrace,
     execute_assistant_query,
@@ -23,7 +24,9 @@ def test_task_trace_enforces_terminal_state():
 
 
 @pytest.mark.asyncio
-async def test_runtime_returns_trace_and_evidence_only():
+async def test_runtime_returns_trace_and_evidence_only(monkeypatch):
+    monkeypatch.setenv("BLACKMARKET_ASSISTANT_PROVIDER", "disabled")
+
     class Bridge:
         def get_market_snapshot(self, symbol, market):
             return {
@@ -51,8 +54,12 @@ async def test_runtime_returns_trace_and_evidence_only():
 
 
 @pytest.mark.asyncio
-async def test_runtime_marks_failure_when_tool_rejects_input():
-    with pytest.raises(ValueError):
+async def test_runtime_failure_contains_failed_task_trace():
+    with pytest.raises(AssistantRuntimeError) as error:
         await execute_assistant_query(
             object(), "show current market snapshot", "BTC/USDT", "SPOT", "1h"
         )
+
+    assert error.value.status_code == 422
+    assert error.value.task_state == "failed"
+    assert error.value.task_trace == ("received", "interpreting", "failed")
