@@ -258,6 +258,92 @@ async def query_assistant(request: Request, payload: AssistantQuery):
     }
 
 
+class AssistantFeedbackCreate(BaseModel):
+    model_config = {"extra": "forbid"}
+    request_id: str = Field(min_length=8, max_length=64, pattern="^[a-fA-F0-9-]+$")
+    feedback_type: str = Field(pattern="^(helpful|not_helpful|incorrect|too_detailed|too_brief|wrong_asset|wrong_timeframe|tool_failure|interpretation_error|missing_context)$")
+    correction: str = Field(default="", max_length=500)
+    comment: str = Field(default="", max_length=500)
+
+
+class AssistantPreferenceCorrection(BaseModel):
+    model_config = {"extra": "forbid"}
+    preference_key: str = Field(pattern="^(response_detail|response_format)$")
+    preference_value: str = Field(pattern="^(concise|detailed|structured|narrative)$")
+
+
+@router.post("/feedback")
+async def submit_assistant_feedback(request: Request, payload: AssistantFeedbackCreate):
+    owner_key = _memory_owner(request)
+    if payload.feedback_type == "too_detailed":
+        preference_key, preference_value = "response_detail", "concise"
+    elif payload.feedback_type == "too_brief":
+        preference_key, preference_value = "response_detail", "detailed"
+    else:
+        preference_key = preference_value = None
+
+    # Do not persist credential-like strings in optional user comments/corrections.
+    secret_pattern = re.compile(r"(?i)(api[_ -]?key|password|token|secret)\\s*[:=]|\\bBearer\\s+")
+    correction = payload.correction.strip()
+    comment = payload.comment.strip()
+    if secret_pattern.search(correction) or secret_pattern.search(comment):
+        raise HTTPException(status_code=422, detail="Feedback cannot contain credentials or secrets.")
+
+    repository = _memory_repository()
+    feedback_id = uuid4().hex
+    saved = repository.save_assistant_feedback({
+        "feedback_id": feedback_id, "owner_key": owner_key,
+        "request_id": payload.request_id.lower(), "feedback_type": payload.feedback_type,
+        "correction": preference_key or correction[:500], "comment": comment[:500],
+    })
+    adapted = None
+    threshold = 3
+    if preference_key:
+        evidence = repository.count_assistant_feedback(
+            owner_key, payload.feedback_type, preference_key=preference_key,
+        )
+        # Repeated preference-specific feedback is required; isolated ratings never adapt.
+        if evidence >= threshold:
+            adapted = repository.set_assistant_preference(
+                owner_key, preference_key, preference_value, source="feedback",
+                evidence_count=evidence, confidence=min(0.85, 0.55 + 0.05 * evidence),
+            )
+    return {"status": "recorded", "feedback": saved, "adapted_preference": adapted,
+            "adaptation_threshold": threshold}
+
+
+@router.get("/preferences")
+async def list_assistant_preferences(request: Request):
+    owner_key = _memory_owner(request)
+    return {"preferences": _memory_repository().get_assistant_preferences(owner_key)}
+
+
+@router.put("/preferences")
+async def correct_assistant_preference(request: Request, payload: AssistantPreferenceCorrection):
+    owner_key = _memory_owner(request)
+    key, value = payload.preference_key, payload.preference_value
+    valid_values = {
+        "response_detail": {"concise", "detailed"},
+        "response_format": {"structured", "narrative"},
+    }
+    if value not in valid_values[key]:
+        raise HTTPException(status_code=422, detail="Preference value is not valid for this preference.")
+    preference = _memory_repository().set_assistant_preference(
+        owner_key, key, value, source="user_correction", evidence_count=1, confidence=1.0,
+    )
+    return {"status": "corrected", "preference": preference}
+
+
+@router.delete("/preferences/{preference_key}")
+async def delete_assistant_preference(preference_key: str, request: Request):
+    owner_key = _memory_owner(request)
+    if preference_key not in {"response_detail", "response_format"}:
+        raise HTTPException(status_code=404, detail="Preference not found")
+    if not _memory_repository().delete_assistant_preference(owner_key, preference_key):
+        raise HTTPException(status_code=404, detail="Preference not found")
+    return {"status": "deleted", "preference_key": preference_key}
+
+
 class MonitoringTaskCreate(BaseModel):
     model_config = {"extra": "forbid"}
     symbol: str = Field(min_length=2, max_length=32)
