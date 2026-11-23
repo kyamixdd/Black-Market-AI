@@ -141,7 +141,7 @@ async function invoke<T>(command: string): Promise<T> {
   const { invoke: tauriInvoke } = await import('@tauri-apps/api/core')
   return tauriInvoke<T>(command)
 }
-const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
+const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '1w']
 const WEBSOCKET_CHANNELS: WebSocketChannel[] = [
   'market_updates',
   'price_updates',
@@ -547,14 +547,33 @@ function App() {
     historyGenerationRef.current += 1
     historyKeyRef.current = marketKey
     lastHistoryRequestAtRef.current = 0
+    let marketRequestGeneration = 0
     const refreshMarket = async () => {
+      const requestGeneration = ++marketRequestGeneration
       const marketQuery = `?market=${marketType}`
       const candleQuery = `?market=${marketType}&timeframe=${timeframe}&limit=1000`
-      const [snapshotPayload, candlePayload] = await Promise.all([
-        requestJson<MarketSnapshot>(`/markets/${encodeURIComponent(symbol)}${marketQuery}`),
-        requestJson<unknown>(`/markets/${encodeURIComponent(symbol)}/candles${candleQuery}`),
-      ])
-      if (!active) return
+      let snapshotPayload: MarketSnapshot | null = null
+      let candlePayload: unknown = null
+      try {
+        ;[snapshotPayload, candlePayload] = await Promise.all([
+          requestJson<MarketSnapshot>(`/markets/${encodeURIComponent(symbol)}${marketQuery}`),
+          requestJson<unknown>(`/markets/${encodeURIComponent(symbol)}/candles${candleQuery}`),
+        ])
+      } catch {
+        // Network/API failures must not leave the chart looking live with old
+        // data. Ignore failures from stale refreshes and report only the latest.
+        if (!active || requestGeneration !== marketRequestGeneration) return
+        setData((current) => ({ ...current, market: null, candles: [] }))
+        setMarketDataStatus('error')
+        setMarketDataStatusKey(marketKey)
+        loadedMarketKeyRef.current = ''
+        setLoadedMarketKey('')
+        setConnection('offline')
+        return
+      }
+      // Polling and websocket-triggered refreshes can overlap. Only the newest
+      // request for this market key may update the visible quote and candles.
+      if (!active || requestGeneration !== marketRequestGeneration) return
       const emptyCandleSeries = typeof candlePayload === 'object'
         && candlePayload !== null
         && 'candles' in candlePayload
@@ -1178,7 +1197,15 @@ function App() {
               <div className="chart-controls">
                 <span className="control-label">INTERVAL</span>
                 {TIMEFRAMES.map((item) => (
-                  <button key={item} className={`timeframe-button ${timeframe === item ? 'selected' : ''}`} onClick={() => setTimeframe(item)}>{item}</button>
+                  <button
+                    key={item}
+                    type="button"
+                    className={`timeframe-button ${timeframe === item ? 'selected' : ''}`}
+                    aria-pressed={timeframe === item}
+                    onClick={() => setTimeframe(item)}
+                  >
+                    {item}
+                  </button>
                 ))}
                 <button className="icon-button chart-tools" aria-label="Chart options" onClick={() => setPopup((current) => current === 'chart' ? null : 'chart')}><SlidersHorizontal size={13} /></button>
               </div>

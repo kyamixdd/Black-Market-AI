@@ -50,7 +50,7 @@ SCAN_ALL_ELIGIBLE_SYMBOLS = _env_bool("SCAN_ALL_ELIGIBLE_SYMBOLS", True)
 SPOT_ENABLED = _env_bool("SPOT_ENABLED", True)
 USDM_FUTURES_ENABLED = _env_bool("USDM_FUTURES_ENABLED", True)
 
-TIMEFRAMES = _env_str("TIMEFRAMES", "1m,3m,5m,15m,30m,1h,4h,1d,1w").split(",")
+TIMEFRAMES = _env_str("TIMEFRAMES", "1m,3m,5m,15m,30m,1h,2h,4h,6h,12h,1d,1w").split(",")
 
 # --- Paper capital ---
 SPOT_INITIAL_BALANCE = _env_float("SPOT_INITIAL_BALANCE", 500.0)

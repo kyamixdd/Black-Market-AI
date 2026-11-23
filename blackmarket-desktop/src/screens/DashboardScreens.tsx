@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { mutateJson, requestJson } from '../services/backendClient'
 import { DataTable as Table, DetailCard, EmptyState, ScreenHeader, SummaryCard, TableHead } from '../components/ui/TerminalPrimitives'
@@ -956,6 +956,53 @@ function ActivityScreen({ events }: { events: WorkspaceEvent[] }) {
   )
 }
 
+
+function IntelligenceModePanel() {
+  type Mode = 'balanced' | 'fast' | 'research' | 'conservative'
+  type Profile = { mode: Mode; max_tool_calls: number; memory_enabled: boolean; feedback_enabled: boolean; provider_enabled: boolean; response_detail: 'brief' | 'normal' | 'detailed' }
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [selected, setSelected] = useState<Mode>('balanced')
+  const [saving, setSaving] = useState(false)
+  const [status, setStatus] = useState('')
+  useEffect(() => {
+    let active = true
+    void requestJson<Profile>('/settings/intelligence').then((result) => {
+      if (active && result) { setProfile(result); setSelected(result.mode) }
+    }).catch((error) => { if (active) setStatus(error instanceof Error ? error.message : 'Could not load intelligence mode.') })
+    return () => { active = false }
+  }, [])
+  const descriptions: Record<Mode, string> = {
+    balanced: 'Balanced evidence gathering, memory and optional provider interpretation.',
+    fast: 'Single-tool requests, brief answers and no optional provider interpretation.',
+    research: 'Multi-tool evidence requests with memory and detailed output.',
+    conservative: 'Single-tool requests with provider interpretation and feedback adaptation disabled.',
+  }
+  return (
+    <>
+      <h2 className="workspace-section-title">Assistant intelligence · persistent</h2>
+      <div className="settings-card-list">
+        <label className="settings-card"><span><b>Intelligence mode</b><small>{descriptions[selected]}</small></span>
+          <select className="workspace-select" value={selected} onChange={(event) => setSelected(event.target.value as Mode)}>
+            <option value="balanced">Balanced</option><option value="fast">Fast</option><option value="research">Research</option><option value="conservative">Conservative</option>
+          </select>
+        </label>
+        <div className="settings-card"><span><b>Active profile</b><small>{profile ? `${profile.max_tool_calls} tool calls · ${profile.response_detail} response · memory ${profile.memory_enabled ? 'on' : 'off'} · provider ${profile.provider_enabled ? 'on' : 'off'}` : 'Loading configuration…'}</small></span></div>
+        <button className="settings-card" disabled={saving || !profile} onClick={async () => {
+          setSaving(true); setStatus('')
+          try {
+            const result = await mutateJson<Profile>('/settings/intelligence', 'PUT', { mode: selected })
+            if (result) { setProfile(result); setSelected(result.mode) }
+            setStatus('Intelligence mode saved and reloaded.')
+          } catch (error) { setStatus(error instanceof Error ? error.message : 'Could not save intelligence mode.') }
+          finally { setSaving(false) }
+        }}><span><b>{saving ? 'Saving…' : 'Apply intelligence mode'}</b><small>Changes apply to subsequent assistant requests.</small></span></button>
+        {status && <p role="status" className="settings-status">{status}</p>}
+      </div>
+    </>
+  )
+}
+
+
 function SettingsScreen({
   settings,
   preferences,
@@ -975,6 +1022,7 @@ function SettingsScreen({
   return (
     <>
       <ScreenHeader title="Settings" description="Engine settings are validated, saved locally by the backend, and applied to the running scanner and risk controls." />
+      <IntelligenceModePanel />
       <h2 className="workspace-section-title">Dashboard preferences · this device</h2>
       <div className="settings-card-list">
         {([
@@ -989,13 +1037,40 @@ function SettingsScreen({
       </div>
       <h2 className="workspace-section-title">Engine configuration · persistent</h2>
       <form className="settings-card-list" onSubmit={async (event) => {
-        event.preventDefault(); setSaving(true); setMessage('')
+        event.preventDefault()
+        setMessage('')
+        const numberKeys = ['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions']
+        const numericValues: Record<string, number> = {}
+        for (const key of numberKeys) {
+          if (draft[key] === undefined || draft[key] === '') continue
+          const parsed = Number(draft[key])
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            setMessage(`${key.replaceAll('_', ' ')} must be a finite number greater than zero.`)
+            return
+          }
+          if (['risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct'].includes(key) && parsed > 100) {
+            setMessage(`${key.replaceAll('_', ' ')} cannot exceed 100%.`)
+            return
+          }
+          if (['max_spot_positions','max_futures_positions'].includes(key) && !Number.isInteger(parsed)) {
+            setMessage(`${key.replaceAll('_', ' ')} must be a whole number.`)
+            return
+          }
+          numericValues[key] = parsed
+        }
+        const timeframeValues = draft.timeframes === undefined
+          ? undefined
+          : draft.timeframes.split(',').map((item) => item.trim()).filter(Boolean)
+        if (timeframeValues && (!timeframeValues.length || timeframeValues.some((item) => !/^(\d+[smhdw]|1M)$/.test(item)))) {
+          setMessage('Enter one or more valid interval values separated by commas (for example: 1m, 15m, 1h, 1d).')
+          return
+        }
+        setSaving(true)
         const payload: Record<string, unknown> = {}
         const boolKeys = ['spot_enabled','futures_enabled','scan_all_eligible_symbols','telegram_enabled']
-        const numberKeys = ['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions']
         for (const key of boolKeys) if (draft[key] !== undefined) payload[key] = draft[key] === 'true'
-        for (const key of numberKeys) if (draft[key] !== undefined && draft[key] !== '') payload[key] = Number(draft[key])
-        if (draft.timeframes !== undefined) payload.timeframes = draft.timeframes.split(',').map((item) => item.trim()).filter(Boolean)
+        Object.assign(payload, numericValues)
+        if (timeframeValues) payload.timeframes = timeframeValues
         try { await onSettingsSave(payload); setDraft({}); setMessage('Settings saved and applied.') }
         catch (error) { setMessage(error instanceof Error ? error.message : 'Settings could not be saved.') }
         finally { setSaving(false) }
@@ -1057,6 +1132,8 @@ type CommunityStrategy = {
 
 function CommunityLibraryScreen() {
   const [items, setItems] = useState<CommunityStrategy[]>([])
+  const listRequestId = useRef(0)
+  const [listLoading, setListLoading] = useState(false)
   const [query, setQuery] = useState('')
   const [strategyKey, setStrategyKey] = useState('')
   const [assetFilter, setAssetFilter] = useState('')
@@ -1065,8 +1142,11 @@ function CommunityLibraryScreen() {
   const [showFavorites, setShowFavorites] = useState(false)
   const [sort, setSort] = useState('recent')
   const [selected, setSelected] = useState<CommunityStrategy | null>(null)
+  const detailRequestId = useRef(0)
   const [busy, setBusy] = useState(false)
+  const publishLock = useRef(false)
   const [notice, setNotice] = useState('')
+  const [pendingItemActions, setPendingItemActions] = useState<Set<string>>(() => new Set())
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [key, setKey] = useState('momentum')
@@ -1079,27 +1159,84 @@ function CommunityLibraryScreen() {
   const [sourceReportId, setSourceReportId] = useState('')
 
   const load = async () => {
-    const params = new URLSearchParams({ q: query, sort, limit: '50' })
+    const requestId = ++listRequestId.current
+    const normalizedAsset = assetFilter.trim().toUpperCase()
+    const normalizedTimeframe = timeframeFilter.trim()
+    const validTimeframes = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d','1w']
+    if (normalizedAsset && !/^[A-Z0-9]{2,20}$/.test(normalizedAsset)) {
+      setNotice('Asset filter must be a valid market symbol, such as BTCUSDT.')
+      return
+    }
+    if (normalizedTimeframe && !validTimeframes.includes(normalizedTimeframe)) {
+      setNotice('Choose a supported timeframe: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d, or 1w.')
+      return
+    }
+    if (!['recent','updated','name'].includes(sort)) {
+      setNotice('Unsupported sort order. Please select a valid option.')
+      return
+    }
+    const params = new URLSearchParams({ q: query.trim(), sort, limit: '50' })
     if (strategyKey) params.set('strategy_key', strategyKey)
-    if (assetFilter) params.set('asset', assetFilter.toUpperCase())
-    if (timeframeFilter) params.set('timeframe', timeframeFilter)
-    const result = await requestJson<{ strategies: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
-    if (result) setItems(result.strategies ?? [])
+    if (normalizedAsset) params.set('asset', normalizedAsset)
+    if (normalizedTimeframe) params.set('timeframe', normalizedTimeframe)
+    setListLoading(true)
+    try {
+      const result = await requestJson<{ strategies?: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
+      if (requestId !== listRequestId.current) return
+      if (!result || !Array.isArray(result.strategies)) {
+        setNotice('Community library returned an invalid response. Please refresh and try again.')
+        return
+      }
+      setItems(result.strategies.filter(item => item && typeof item.public_id === 'string' && typeof item.name === 'string'))
+      setNotice('')
+    } catch (error) {
+      if (requestId !== listRequestId.current) return
+      setNotice(error instanceof Error ? error.message : 'Unable to load community strategies.')
+    } finally {
+      if (requestId === listRequestId.current) setListLoading(false)
+    }
   }
-  useEffect(() => { void load() }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load() }, 250)
+    return () => {
+      window.clearTimeout(timer)
+      listRequestId.current += 1
+    }
+  }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
 
   const publish = async (event: FormEvent) => {
     event.preventDefault()
+    if (publishLock.current) return
+    publishLock.current = true
     setBusy(true)
     setNotice('')
     try {
+      const parsedRules: unknown = JSON.parse(rules)
+      const parsedRisk: unknown = JSON.parse(risk)
+      const parsedReport: unknown = JSON.parse(report)
+      const supportedAssets = assets.split(',').map(value => value.trim().toUpperCase()).filter(Boolean)
+      const supportedTimeframes = timeframes.split(',').map(value => value.trim()).filter(Boolean)
+      const validTimeframes = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d','1w']
+      if (name.trim().length < 2 || name.trim().length > 120) throw new Error('Strategy name must be between 2 and 120 characters.')
+      if (description.length > 2000) throw new Error('Description must be 2,000 characters or fewer.')
+      if (!supportedAssets.length || supportedAssets.some(value => !/^[A-Z0-9]{2,20}$/.test(value))) throw new Error('Enter valid comma-separated market symbols.')
+      if (!supportedTimeframes.length || supportedTimeframes.some(value => !validTimeframes.includes(value))) throw new Error('Enter supported comma-separated timeframes.')
+      if (new Set(supportedAssets).size !== supportedAssets.length || new Set(supportedTimeframes).size !== supportedTimeframes.length) throw new Error('Remove duplicate assets or timeframes.')
+      if (!parsedRules || typeof parsedRules !== 'object' || Array.isArray(parsedRules)) throw new Error('Rules JSON must be an object.')
+      if (!parsedRisk || typeof parsedRisk !== 'object' || Array.isArray(parsedRisk)) throw new Error('Risk configuration JSON must be an object.')
+      if (!parsedReport || typeof parsedReport !== 'object' || Array.isArray(parsedReport)) throw new Error('Backtest report JSON must be an object.')
+      const riskConfig = parsedRisk as Record<string, unknown>
+      for (const field of ['risk_per_trade_pct','max_position_pct']) {
+        const value = Number(riskConfig[field])
+        if (!Number.isFinite(value) || value <= 0 || value > 100) throw new Error(`${field} must be greater than 0 and at most 100.`)
+      }
       const payload = {
-        name, description, strategy_key: key,
-        supported_assets: assets.split(',').map(value => value.trim()).filter(Boolean),
-        supported_timeframes: timeframes.split(',').map(value => value.trim()).filter(Boolean),
-        rules: JSON.parse(rules), risk_configuration: JSON.parse(risk),
+        name: name.trim(), description: description.trim(), strategy_key: key,
+        supported_assets: supportedAssets,
+        supported_timeframes: supportedTimeframes,
+        rules: parsedRules, risk_configuration: parsedRisk,
         known_limitations: limitations.split('\n').map(value => value.trim()).filter(Boolean),
-        backtest_report: JSON.parse(report),
+        backtest_report: parsedReport,
         ...(sourceReportId.trim() ? { source_report_id: sourceReportId.trim() } : {}),
       }
       await mutateJson(editingId ? `/community/strategies/${editingId}` : '/community/strategies', editingId ? 'PUT' : 'POST', payload)
@@ -1110,16 +1247,43 @@ function CommunityLibraryScreen() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to publish strategy.')
     } finally {
+      publishLock.current = false
       setBusy(false)
     }
   }
 
   const openDetails = async (item: CommunityStrategy) => {
-    const detail = await requestJson<CommunityStrategy>(`/community/strategies/${item.public_id}`)
-    if (detail) setSelected(detail)
+    const requestId = ++detailRequestId.current
+    try {
+      const detail = await requestJson<CommunityStrategy>(`/community/strategies/${item.public_id}`)
+      if (requestId !== detailRequestId.current) return
+      const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
+      const history = detail?.version_history
+      const validHistory = history == null || (Array.isArray(history) && history.every(version =>
+        version && Number.isInteger(version.version) && version.version > 0 &&
+        (version.created_at == null || typeof version.created_at === 'string') &&
+        isRecord(version.snapshot) &&
+        (version.snapshot.name == null || typeof version.snapshot.name === 'string')))
+      if (!detail || detail.public_id !== item.public_id || typeof detail.name !== 'string' ||
+          typeof detail.description !== 'string' ||
+          !Array.isArray(detail.supported_assets) || !detail.supported_assets.every(value => typeof value === 'string') ||
+          !Array.isArray(detail.supported_timeframes) || !detail.supported_timeframes.every(value => typeof value === 'string') ||
+          !Array.isArray(detail.known_limitations) || !detail.known_limitations.every(value => typeof value === 'string') ||
+          !isRecord(detail.backtest_report) || !isRecord(detail.rules) || !isRecord(detail.risk_configuration) ||
+          typeof detail.report_provenance !== 'string' || typeof detail.report_sha256 !== 'string' ||
+          !validHistory) {
+        setNotice('Strategy details or version history are incomplete or invalid. The details panel was not opened.')
+        return
+      }
+      setSelected({ ...detail, version_history: history ?? [] })
+    } catch (error) {
+      if (requestId !== detailRequestId.current) return
+      setNotice(error instanceof Error ? error.message : 'Unable to load strategy details.')
+    }
   }
 
   const editStrategy = (item: CommunityStrategy) => {
+    if (busy) { setNotice('Wait for the current publish operation to finish before editing.'); return }
     setEditingId(item.public_id)
     setName(item.name)
     setDescription(item.description)
@@ -1134,22 +1298,47 @@ function CommunityLibraryScreen() {
     setNotice(`Editing your published strategy. Saving creates version ${item.version + 1}.`)
   }
 
+  const beginItemAction = (publicId: string) => {
+    if (pendingItemActions.has(publicId)) return false
+    setPendingItemActions(current => new Set(current).add(publicId))
+    return true
+  }
+  const finishItemAction = (publicId: string) => {
+    setPendingItemActions(current => {
+      const next = new Set(current)
+      next.delete(publicId)
+      return next
+    })
+  }
+
   const toggleFavorite = async (item: CommunityStrategy) => {
+    if (!beginItemAction(item.public_id)) return
+    const nextFavorite = !item.is_favorite
     try {
-      await mutateJson(`/community/strategies/${item.public_id}/favorite`, 'POST', { favorite: !item.is_favorite })
-      await load()
-      if (selected?.public_id === item.public_id) setSelected({ ...selected, is_favorite: !item.is_favorite })
+      await mutateJson(`/community/strategies/${item.public_id}/favorite`, 'POST', { favorite: nextFavorite })
+      setItems(current => current.map(entry => entry.public_id === item.public_id
+        ? { ...entry, is_favorite: nextFavorite, favorite_count: Math.max(0, entry.favorite_count + (nextFavorite ? 1 : -1)) }
+        : entry))
+      setSelected(current => current?.public_id === item.public_id
+        ? { ...current, is_favorite: nextFavorite, favorite_count: Math.max(0, current.favorite_count + (nextFavorite ? 1 : -1)) }
+        : current)
+      setNotice(nextFavorite ? 'Strategy saved to favorites.' : 'Strategy removed from favorites.')
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to update favorite.')
+    } finally {
+      finishItemAction(item.public_id)
     }
   }
 
   const reportItem = async (item: CommunityStrategy) => {
+    if (!beginItemAction(item.public_id)) return
     try {
       await mutateJson(`/community/strategies/${item.public_id}/report`, 'POST', { reason: 'misleading_results', details: 'Please review this strategy listing.' })
       setNotice('Report submitted for review.')
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to report listing.')
+    } finally {
+      finishItemAction(item.public_id)
     }
   }
 
@@ -1171,6 +1360,7 @@ function CommunityLibraryScreen() {
         </select>
       </div>
       {notice && <p className="workspace-note" role="status">{notice}</p>}
+      {listLoading && <p className="workspace-note" role="status">Loading community strategies…</p>}
       <div className="workspace-summary-grid">
         {items.map(item => <article className="workspace-panel" key={item.public_id}>
           <h3>{item.name}</h3>
@@ -1180,15 +1370,15 @@ function CommunityLibraryScreen() {
           <div className="workspace-actions">
             <button className="table-action" onClick={() => void openDetails(item)}>Details</button>
             {item.is_owner && <button className="table-action" onClick={() => editStrategy(item)}>Edit / new version</button>}
-            <button className="table-action" onClick={() => void toggleFavorite(item)}>{item.is_favorite ? '★ Saved' : '☆ Save'} · {item.favorite_count}</button>
-            <button className="table-action" onClick={() => void reportItem(item)}>Report</button>
+            <button className="table-action" disabled={pendingItemActions.has(item.public_id)} aria-pressed={item.is_favorite} onClick={() => void toggleFavorite(item)}>{pendingItemActions.has(item.public_id) ? 'Updating…' : item.is_favorite ? '★ Saved' : '☆ Save'} · {item.favorite_count}</button>
+            <button className="table-action" disabled={pendingItemActions.has(item.public_id)} onClick={() => void reportItem(item)}>{pendingItemActions.has(item.public_id) ? 'Submitting…' : 'Report'}</button>
           </div>
         </article>)}
       </div>
-      {!items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
+      {!listLoading && !items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
     </section>
     {selected && <section className="workspace-panel">
-      <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => setSelected(null)}>Close</button></div>
+      <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => { detailRequestId.current += 1; setSelected(null) }}>Close</button></div>
       <p>{selected.description}</p>
       <p className="workspace-note">Shared report: {selected.report_provenance.replaceAll('_',' ')} · SHA-256 {selected.report_sha256 || 'not available'}. Reproducibility: {selected.reproducibility_status ?? 'NOT_REPLAYED'} · Verification: {selected.verification_status ?? 'NOT_VERIFIED'}. The digest confirms stored content integrity only; locally generated reports have not been independently replayed or verified.</p>
       <h3>Submitted backtest summary</h3><pre className="workspace-code">{JSON.stringify(selected.backtest_report, null, 2)}</pre>
@@ -1200,7 +1390,7 @@ function CommunityLibraryScreen() {
     </section>}
     <section className="workspace-panel">
       <h2>{editingId ? 'Update published strategy' : 'Publish a strategy'}</h2>
-      {editingId && <button className="table-action" type="button" onClick={() => { setEditingId(null); setName(''); setNotice('Editing cancelled.') }}>Cancel version update</button>}
+      {editingId && <button className="table-action" type="button" onClick={() => { if (busy) return; setEditingId(null); setName(''); setDescription(''); setNotice('Editing cancelled.') }}>Cancel version update</button>}
       <p className="workspace-note">Only the fields below are published. Account balances, credentials, private trades, and personal settings are not sent. Backtest metrics are marked user-submitted, not verified.</p>
       <form className="workspace-form" onSubmit={publish}>
         <label>Strategy name<input className="workspace-search" required minLength={2} maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
@@ -1248,12 +1438,19 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
 }) {
   const [dna, setDna] = useState<any>(null)
   const [dnaError, setDnaError] = useState('')
+  const localDateValue = (date: Date) => {
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const day = String(date.getDate()).padStart(2, '0')
+    return date.getFullYear() + '-' + month + '-' + day
+  }
+  const defaultEndDate = localDateValue(new Date())
+  const defaultStartDate = localDateValue(new Date(Date.now() - 60 * 86400000))
   const [strategy, setStrategy] = useState('momentum')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
   const [timeframe, setTimeframe] = useState('1h')
-  const [start, setStart] = useState('2026-09-15')
-  const [end, setEnd] = useState('2026-11-21')
+  const [start, setStart] = useState(defaultStartDate)
+  const [end, setEnd] = useState(defaultEndDate)
   const [capital, setCapital] = useState('1000')
   const [risk, setRisk] = useState('1')
   const [mode, setMode] = useState('risk_pct')
@@ -1280,19 +1477,24 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   const [loadedWorkspace, setLoadedWorkspace] = useState<any>(null)
   const [persistenceMessage, setPersistenceMessage] = useState('')
   const reloadSaved = async () => {
-    const [strategies, reports, workspaces] = await Promise.all([
-      requestJson<{ strategies?: any[] }>('/research/strategies'),
-      requestJson<{ reports?: any[] }>('/research/reports'),
-      requestJson<{ workspaces?: any[] }>('/research/workspaces'),
-    ])
-    setSavedStrategies(strategies?.strategies ?? [])
-    setSavedReports(reports?.reports ?? [])
-    setSavedWorkspaces(workspaces?.workspaces ?? [])
-    if (!strategies || !reports || !workspaces) {
-      setPersistenceMessage('Saved research could not be loaded. Check the backend connection and try again.')
+    try {
+      const [strategies, reports, workspaces] = await Promise.all([
+        requestJson<{ strategies?: any[] }>('/research/strategies'),
+        requestJson<{ reports?: any[] }>('/research/reports'),
+        requestJson<{ workspaces?: any[] }>('/research/workspaces'),
+      ])
+      if (!strategies || !reports || !workspaces || !Array.isArray(strategies.strategies) || !Array.isArray(reports.reports) || !Array.isArray(workspaces.workspaces)) {
+        setPersistenceMessage('Saved research response was incomplete or invalid. Existing selections were kept.')
+        return false
+      }
+      setSavedStrategies(strategies.strategies)
+      setSavedReports(reports.reports)
+      setSavedWorkspaces(workspaces.workspaces)
+      return true
+    } catch (reason) {
+      setPersistenceMessage(reason instanceof Error ? reason.message : 'Saved research could not be loaded.')
       return false
     }
-    return true
   }
   useEffect(() => { void reloadSaved() }, [])
   useEffect(() => {
@@ -1301,6 +1503,9 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     return () => { active = false }
   }, [])
   const saveCurrentStrategy = async () => {
+    const validationError = validateBacktestInputs()
+    if (validationError) { setPersistenceMessage(validationError); return }
+    if (strategyName.trim().length > 120) { setPersistenceMessage('Strategy name must be 120 characters or fewer.'); return }
     try {
       const saved = await mutateJson<any>('/research/strategies', 'POST', {
         name: strategyName.trim() || strategy,
@@ -1327,22 +1532,45 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   }
   const loadChosenStrategy = () => {
     const saved = savedStrategies.find(item => item.strategy_id === chosenStrategyId)
-    if (!saved) return
-    const definition = saved.definition ?? {}
+    if (!saved) { setPersistenceMessage('Choose a saved strategy first.'); return }
+    const allowedStrategies = ['momentum','breakout','trend_following','mean_reversion','reversal']
+    const definition = saved.definition
+    if (!allowedStrategies.includes(saved.strategy_key) || !definition || typeof definition !== 'object' || Array.isArray(definition)) {
+      setPersistenceMessage('This saved strategy has an unsupported key or invalid definition. Nothing was loaded.')
+      return
+    }
+    if (typeof definition.symbol !== 'string' || !/^[A-Za-z0-9]{2,20}$/.test(definition.symbol) ||
+        !['SPOT','FUTURES'].includes(definition.market) ||
+        !['1m','3m','5m','15m','30m','1h','4h','1d','1w'].includes(definition.timeframe) ||
+        !['risk_pct','fixed_notional'].includes(definition.sizing_mode)) {
+      setPersistenceMessage('Saved strategy contains invalid market, symbol, timeframe, or sizing settings. Nothing was loaded.')
+      return
+    }
+    const requiredNumbers = [definition.initial_capital, definition.risk_per_trade_pct, definition.fixed_notional, definition.max_position_pct, definition.strategy_parameters?.min_score]
+    if (requiredNumbers.some(value => value == null || !Number.isFinite(Number(value)) || Number(value) <= 0) ||
+        Number(definition.risk_per_trade_pct) > 100 || Number(definition.max_position_pct) > 100) {
+      setPersistenceMessage('Saved strategy contains invalid numeric settings. Nothing was loaded.')
+      return
+    }
+    const optionalNumbers = [definition.fee_rate, definition.slippage_bps, definition.spread_bps, definition.funding_rate]
+    if (optionalNumbers.some(value => value != null && !Number.isFinite(Number(value)))) {
+      setPersistenceMessage('Saved strategy contains invalid optional cost assumptions. Nothing was loaded.')
+      return
+    }
     setStrategy(saved.strategy_key)
-    if (definition.symbol) setSymbol(String(definition.symbol))
-    if (definition.market === 'SPOT' || definition.market === 'FUTURES') setMarket(definition.market)
-    if (definition.timeframe) setTimeframe(String(definition.timeframe))
-    if (definition.sizing_mode) setMode(String(definition.sizing_mode))
-    if (definition.initial_capital != null) setCapital(String(definition.initial_capital))
-    if (definition.risk_per_trade_pct != null) setRisk(String(definition.risk_per_trade_pct))
-    if (definition.fixed_notional != null) setNotional(String(definition.fixed_notional))
-    if (definition.max_position_pct != null) setMaxPosition(String(definition.max_position_pct))
-    if (definition.strategy_parameters?.min_score != null) setMinScore(String(definition.strategy_parameters.min_score))
-    if (definition.fee_rate != null) setFeeRate(String(definition.fee_rate))
-    if (definition.slippage_bps != null) setSlippage(String(definition.slippage_bps))
-    if (definition.spread_bps != null) setSpread(String(definition.spread_bps))
-    if (definition.funding_rate != null) setFunding(String(definition.funding_rate))
+    setSymbol(definition.symbol)
+    setMarket(definition.market)
+    setTimeframe(definition.timeframe)
+    setMode(definition.sizing_mode)
+    setCapital(String(definition.initial_capital))
+    setRisk(String(definition.risk_per_trade_pct))
+    setNotional(String(definition.fixed_notional))
+    setMaxPosition(String(definition.max_position_pct))
+    setMinScore(String(definition.strategy_parameters.min_score))
+    setFeeRate(definition.fee_rate == null ? '' : String(definition.fee_rate))
+    setSlippage(definition.slippage_bps == null ? '' : String(definition.slippage_bps))
+    setSpread(definition.spread_bps == null ? '' : String(definition.spread_bps))
+    setFunding(definition.funding_rate == null ? '' : String(definition.funding_rate))
     setPersistenceMessage('Saved strategy configuration loaded into the form.')
   }
   const loadChosenReport = async () => {
@@ -1354,6 +1582,10 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
       const report = await requestJson<any>(`/research/reports/${encodeURIComponent(chosenReportId)}`)
       if (!report) {
         setPersistenceMessage('Unable to open this report. Check the backend connection and try again.')
+        return
+      }
+      if (typeof report !== 'object' || report.report_id !== chosenReportId || !report.backtest_report || typeof report.backtest_report !== 'object' || Array.isArray(report.backtest_report)) {
+        setPersistenceMessage('The saved report response is invalid or incomplete. The report was not opened.')
         return
       }
       setLoadedReport(report)
@@ -1391,9 +1623,25 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
         setPersistenceMessage('Unable to restore this workspace. Check the backend connection and try again.')
         return
       }
+      if (typeof workspace !== 'object' || workspace.schema_version !== 1 || !workspace.payload || typeof workspace.payload !== 'object') {
+        setPersistenceMessage('Unsupported workspace schema or invalid payload. Nothing was restored.')
+        return
+      }
+      const savedLab = workspace.payload.strategyLab
+      if (savedLab != null && (typeof savedLab !== 'object' || Array.isArray(savedLab))) {
+        setPersistenceMessage('Invalid Strategy Lab workspace data. Nothing was restored.')
+        return
+      }
+      if (savedLab && typeof savedLab === 'object' && savedLab.start != null && savedLab.end != null) {
+        const startTime = Date.parse(String(savedLab.start) + 'T00:00:00Z')
+        const endTime = Date.parse(String(savedLab.end) + 'T00:00:00Z')
+        if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime >= endTime) {
+          setPersistenceMessage('Invalid saved backtest date range. Nothing was restored.')
+          return
+        }
+      }
       setLoadedWorkspace(workspace)
       onWorkspaceLoad(workspace)
-      const savedLab = workspace.payload?.strategyLab
       if (savedLab && typeof savedLab === 'object') {
         if (typeof savedLab.strategy === 'string') setStrategy(savedLab.strategy)
         if (typeof savedLab.symbol === 'string') setSymbol(savedLab.symbol)
@@ -1415,8 +1663,25 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
       setPersistenceMessage(reason instanceof Error ? reason.message : String(reason))
     }
   }
+  const validateBacktestInputs = () => {
+    const startTime = Date.parse(start + 'T00:00:00Z')
+    const endTime = Date.parse(end + 'T00:00:00Z')
+    if (!/^[A-Z0-9]{2,30}$/.test(symbol.trim().toUpperCase())) return 'Enter a valid market symbol using letters and numbers.'
+    if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) return 'Choose valid start and end dates.'
+    if (startTime >= endTime) return 'The start date must be earlier than the end date.'
+    const values = [capital, risk, notional, maxPosition, minScore]
+    if (values.some(value => value.trim() === '' || !Number.isFinite(Number(value)) || Number(value) <= 0)) return 'Capital, risk, notional, position limit, and minimum score must be valid positive numbers.'
+    if (Number(risk) > 100 || Number(maxPosition) > 100) return 'Risk and maximum position percentages cannot exceed 100%.'
+    const optionalValues = [feeRate, slippage, spread]
+    if (optionalValues.some(value => value !== '' && (!Number.isFinite(Number(value)) || Number(value) < 0))) return 'Fee, slippage, and spread must be non-negative numbers.'
+    if (funding !== '' && (!Number.isFinite(Number(funding)) || Number(funding) < -100 || Number(funding) > 100)) return 'Funding rate must be between -100 and 100.'
+    return ''
+  }
   const run = async (event: FormEvent) => {
     event.preventDefault()
+    if (busy) return
+    const validationError = validateBacktestInputs()
+    if (validationError) { setError(validationError); return }
     setBusy(true); setError(''); setResult(null); setSelectedTrade(null)
     try {
       const data = await onRun({
@@ -1437,6 +1702,9 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     finally { setBusy(false) }
   }
   const compare = async () => {
+    if (busy) return
+    const validationError = validateBacktestInputs()
+    if (validationError) { setError(validationError); return }
     setBusy(true); setError(''); setComparison(null)
     try {
       const compared = await onCompare({

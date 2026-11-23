@@ -386,3 +386,54 @@ class ShareableAnalysisModel(Base):
     payload_json = Column(Text, nullable=False)
     content_sha256 = Column(String(64), nullable=False, index=True)
     created_at = Column(DateTime, default=now_utc, nullable=False, index=True)
+
+
+class AssistantMemoryModel(Base):
+    """User-scoped, explicit assistant memory with bounded metadata and expiry."""
+    __tablename__ = "assistant_memories"
+
+    memory_id = Column(String(32), primary_key=True)
+    owner_key = Column(String(64), nullable=False, index=True)
+    memory_type = Column(String(16), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    source = Column(String(32), nullable=False, default="user_explicit")
+    importance = Column(Float, nullable=False, default=0.5)
+    confidence = Column(Float, nullable=False, default=1.0)
+    tags_json = Column(Text, nullable=False, default="[]")
+    version = Column(Integer, nullable=False, default=1)
+    access_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=now_utc, nullable=False, index=True)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+    last_accessed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("idx_assistant_memory_owner_type_created", "owner_key", "memory_type", "created_at"),
+    )
+
+
+class AssistantFeedbackModel(Base):
+    """Owner-scoped feedback tied to an assistant request, without storing full chats."""
+    __tablename__ = "assistant_feedback"
+
+    feedback_id = Column(String(32), primary_key=True)
+    owner_key = Column(String(64), nullable=False, index=True)
+    request_id = Column(String(64), nullable=False, index=True)
+    feedback_type = Column(String(32), nullable=False, index=True)
+    correction = Column(Text, nullable=False, default="")
+    comment = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime, default=now_utc, nullable=False, index=True)
+
+
+class AssistantPreferenceModel(Base):
+    """Owner-scoped adapted or explicitly corrected assistant response preferences."""
+    __tablename__ = "assistant_preferences"
+
+    owner_key = Column(String(64), primary_key=True)
+    preference_key = Column(String(32), primary_key=True)
+    preference_value = Column(String(32), nullable=False)
+    source = Column(String(16), nullable=False, default="feedback")
+    evidence_count = Column(Integer, nullable=False, default=0)
+    confidence = Column(Float, nullable=False, default=1.0)
+    version = Column(Integer, nullable=False, default=1)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)

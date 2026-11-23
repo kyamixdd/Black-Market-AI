@@ -1,5 +1,6 @@
-// Risk analytics panel with circular risk visualization.
-import { useEffect, useState } from 'react';
+// Risk analytics panel with a compact, source-backed risk visualization.
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { api } from '../../services/api';
 
 interface RiskData {
   current_exposure_pct: number;
@@ -18,205 +19,127 @@ interface RiskData {
   max_asset_exposure_pct: number;
 }
 
+const percent = (value: number | null | undefined) =>
+  Number.isFinite(value) ? `${(value as number).toFixed(2)}%` : '—';
+
+const boundedPercent = (value: number | null | undefined) =>
+  Math.min(100, Math.max(0, Number.isFinite(value) ? value as number : 0));
+
+const statusLabel = (status: string) => status.replace(/_/g, ' ').toLowerCase();
+
 export const RiskPanel: React.FC = () => {
   const [data, setData] = useState<RiskData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requestInFlight = useRef(false);
+  const mounted = useRef(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
     try {
-      const response = await fetch('/api/risk/status');
-      const data = await response.json();
-      setData(data);
-    } catch (e) {
-      console.error('Failed to load risk data', e);
+      const payload = await api.getRiskStatus() as RiskData;
+      if (!payload || typeof payload !== 'object'
+        || !Number.isFinite(payload.current_exposure_pct)
+        || !Number.isFinite(payload.used_risk_capacity_pct)
+        || !Number.isFinite(payload.daily_loss_capacity_pct)
+        || typeof payload.risk_manager_status !== 'string') {
+        throw new Error('Risk service returned invalid data');
+      }
+      if (mounted.current) {
+        setData(payload);
+        setError(null);
+      }
+    } catch (cause) {
+      if (mounted.current) {
+        setError(cause instanceof Error ? cause.message : 'Risk data unavailable');
+      }
     } finally {
-      setLoading(false);
+      requestInFlight.current = false;
+      if (mounted.current) setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
   }, []);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'NORMAL': return 'text-gray-200';
-      case 'WARNING': return 'text-gray-200';
-      case 'CRITICAL': return 'text-gray-200';
-      default: return 'text-gray-400';
-    }
-  };
+  useEffect(() => {
+    mounted.current = true;
+    void fetchData();
+    const interval = window.setInterval(() => void fetchData(), 10_000);
+    return () => {
+      mounted.current = false;
+      window.clearInterval(interval);
+    };
+  }, [fetchData]);
 
-  const getStatusDot = (status: string) => {
-    switch (status) {
-      case 'NORMAL': return 'bg-gray-200';
-      case 'WARNING': return 'bg-gray-200';
-      case 'CRITICAL': return 'bg-gray-200';
-      default: return 'bg-gray-400';
-    }
-  };
-
-  if (loading) {
+  if (loading && !data) {
     return (
-      <div className="panel h-80 flex items-center justify-center">
-        <div className="spinner"></div>
-      </div>
+      <section className="panel risk-panel" aria-label="Risk analytics">
+        <div className="panel-heading"><h2>Risk analytics</h2></div>
+        <div className="workspace-empty" role="status">Loading risk data…</div>
+      </section>
     );
   }
 
-  if (!data) return null;
+  if (!data) {
+    return (
+      <section className="panel risk-panel" aria-label="Risk analytics">
+        <div className="panel-heading"><h2>Risk analytics</h2></div>
+        <div className="workspace-empty" role="alert">{error || 'Risk data unavailable'}</div>
+        <div className="risk-foot">
+          <button type="button" className="table-action" onClick={() => { setLoading(true); void fetchData(); }}>
+            Retry
+          </button>
+        </div>
+      </section>
+    );
+  }
 
-  const exposureDegrees = (data.current_exposure_pct / 100) * 360;
-  const riskCapacityDegrees = (data.used_risk_capacity_pct / 100) * 360;
+  const exposure = boundedPercent(data.current_exposure_pct);
+  const usedCapacity = boundedPercent(data.used_risk_capacity_pct);
+  const status = data.risk_manager_status.toUpperCase();
+  const statusTone = status === 'NORMAL' ? 'positive' : status === 'CRITICAL' ? 'negative' : '';
 
   return (
-    <div className="panel h-full">
-      <div className="panel-header">Risk Analytics</div>
-      <div className="p-4 space-y-4">
-        {/* Circular Risk Visualization */}
-        <div className="flex items-center justify-center">
-          <div className="relative w-48 h-48">
-            {/* Background circle */}
-            <svg className="w-48 h-48 transform -rotate-90">
-              <circle
-                cx="96"
-                cy="96"
-                r="80"
-                fill="none"
-                stroke="#303235"
-                strokeWidth="8"
-              />
-              {/* Exposure arc */}
-              <circle
-                cx="96"
-                cy="96"
-                r="80"
-                fill="none"
-                stroke="#bfc3c5"
-                strokeWidth="8"
-                strokeDasharray={`${(data.current_exposure_pct / 100) * 502.65} 502.65`}
-                strokeLinecap="round"
-                strokeDashoffset="0"
-                style={{ transform: 'rotate(-90deg)', transformOrigin: 'center' }}
-              />
-              {/* Risk capacity arc */}
-              <circle
-                cx="96"
-                cy="96"
-                r="68"
-                fill="none"
-                stroke="#858a8f"
-                strokeWidth="6"
-                strokeDasharray={`${(data.used_risk_capacity_pct / 100) * 427.26} 427.26`}
-                strokeLinecap="round"
-                strokeDashoffset="0"
-                style={{ transform: 'rotate(-90deg)', transformOrigin: 'center' }}
-              />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-xs text-muted">Exposure</span>
-              <span className="text-2xl font-mono font-bold">{data.current_exposure_pct.toFixed(1)}%</span>
-              <span className="text-xs text-muted mt-1">of 100% limit</span>
-            </div>
+    <section className="panel risk-panel" aria-label="Risk analytics">
+      <div className="panel-heading">
+        <h2>Risk analytics</h2>
+        <span className={`risk-status ${statusTone}`} role="status">{statusLabel(status)}</span>
+      </div>
+      <div className="risk-content">
+        <div
+          className="risk-dial"
+          aria-label={`Risk capacity used ${percent(data.used_risk_capacity_pct)}`}
+          style={{ background: `conic-gradient(var(--text-secondary) ${usedCapacity}%, var(--border-subtle) 0)` }}
+        >
+          <div>
+            <strong className="risk-digit">{percent(data.current_exposure_pct)}</strong>
+            <span className="risk-caption">Exposure</span>
           </div>
         </div>
-
-        {/* Risk Metrics Grid */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="metric-card">
-            <div className="metric-label">Exposure</div>
-            <div className="metric-value text-xl">{data.current_exposure_pct.toFixed(1)}%</div>
-            <div className="text-xs text-muted mt-1">of 100% max</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Risk Capacity Used</div>
-            <div className="metric-value text-xl">{data.used_risk_capacity_pct.toFixed(1)}%</div>
-            <div className="text-xs text-muted mt-1">of 100% max</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Daily Loss Capacity</div>
-            <div className="metric-value text-xl">{data.daily_loss_capacity_pct.toFixed(1)}%</div>
-            <div className="text-xs text-muted mt-1">of 2% daily limit</div>
-          </div>
-          <div className="metric-card">
-            <div className="metric-label">Risk Manager Status</div>
-            <div className="flex items-center gap-2 mt-1">
-              <span className={`status-dot ${getStatusDot(data.risk_manager_status)}`}></span>
-              <span className={`font-mono ${getStatusColor(data.risk_manager_status)}`}>
-                {data.risk_manager_status}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Position Limits */}
-        <div className="pt-2 border-t border-gray-700">
-          <div className="text-xs text-muted mb-2">Position Limits</div>
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div className="metric-card py-2">
-              <div className="text-xs text-muted">Max Spot</div>
-              <div className="font-mono text-lg">{data.max_spot_positions}</div>
-            </div>
-            <div className="metric-card py-2">
-              <div className="text-xs text-muted">Max Futures</div>
-              <div className="font-mono text-lg">{data.max_futures_positions}</div>
-            </div>
-            <div className="metric-card py-2">
-              <div className="text-xs text-muted">Max Leverage</div>
-              <div className="font-mono text-lg">{data.max_leverage}x</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Risk Limits */}
-        <div className="pt-2 border-t border-gray-700">
-          <div className="text-xs text-muted mb-2">Risk Parameters</div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-center">
-            <div className="metric-card py-2">
-              <div className="text-xs text-muted">Per Trade</div>
-              <div className="font-mono text-lg">{data.risk_per_trade_pct}%</div>
-            </div>
-            <div className="metric-card py-2">
-              <div className="text-xs text-muted">Daily Loss</div>
-              <div className="font-mono text-lg">{data.max_daily_loss_pct}%</div>
-            </div>
-            <div className="metric-card py-2">
-              <div className="text-xs text-muted">Total Open Risk</div>
-              <div className="font-mono text-lg">{data.max_total_open_pct}%</div>
-            </div>
-            <div className="metric-card py-2">
-              <div className="text-xs text-muted">Max Position</div>
-              <div className="font-mono text-lg">{data.max_position_size_pct}% equity</div>
-            </div>
-            <div className="metric-card py-2">
-              <div className="text-xs text-muted">Max Asset Exposure</div>
-              <div className="font-mono text-lg">{data.max_asset_exposure_pct}% equity</div>
-            </div>
-          </div>
+        <div className="risk-stats">
+          <div className="risk-stat"><span>Capacity used</span><b>{percent(data.used_risk_capacity_pct)}</b></div>
+          <div className="risk-stat"><span>Capacity available</span><b>{percent(data.available_risk_capacity_pct)}</b></div>
+          <div className="risk-stat"><span>Open trade risk</span><b>{percent(data.open_trade_risk_pct)}</b></div>
+          <div className="risk-stat"><span>Daily loss capacity</span><b>{percent(data.daily_loss_capacity_pct)}</b></div>
         </div>
       </div>
-    </div>
+      <div className="risk-foot">
+        <span>Risk / trade <b>{percent(data.risk_per_trade_pct)}</b></span>
+        <span>Max leverage <b>{Number.isFinite(data.max_leverage) ? `${data.max_leverage}×` : '—'}</b></span>
+      </div>
+      <div className="risk-foot">
+        <span>Spot positions <b>{Number.isFinite(data.max_spot_positions) ? data.max_spot_positions : '—'}</b></span>
+        <span>Futures <b>{Number.isFinite(data.max_futures_positions) ? data.max_futures_positions : '—'}</b></span>
+      </div>
+      <div className="risk-foot">
+        <span>Max daily loss <b>{percent(data.max_daily_loss_pct)}</b></span>
+        <span>Total open <b>{percent(data.max_total_open_pct)}</b></span>
+      </div>
+      <div className="risk-foot">
+        <span>Position cap <b>{percent(data.max_position_size_pct)}</b></span>
+        <span>Asset cap <b>{percent(data.max_asset_exposure_pct)}</b></span>
+      </div>
+    </section>
   );
 };
-
-function getStatusColor(status: string): string {
-  switch (status) {
-    case 'NORMAL': return 'text-green-400';
-    case 'WARNING': return 'text-yellow-400';
-    case 'CRITICAL': return 'text-red-400';
-    default: return 'text-gray-400';
-  }
-}
-
-function getStatusDot(status: string): string {
-  switch (status) {
-    case 'NORMAL': return 'bg-green-400';
-    case 'WARNING': return 'bg-yellow-400';
-    case 'CRITICAL': return 'bg-red-400';
-    default: return 'bg-gray-400';
-  }
-}
 
 export default RiskPanel;

@@ -1,7 +1,7 @@
 # Security Policy and Threat Model
 
 Last reviewed: 23 November 2026  
-Target: `black-market-ai-beta` (source reviewed at `ee602590442d9d29060d525e1aff5539dc42f01c`; documentation snapshot `c9e488f14814b670308574582c6e7cb175c2b51b`)
+Target: `black-market-ai-beta` (application-source baseline `49e6841215303ed296ced4fc1ef3039b9959426d`; this security document retains historical findings and requires re-review for release)
 
 ## Security scope
 
@@ -149,3 +149,19 @@ Hosted login and proxy requests reject cross-origin state-changing requests. Log
 - Session revocation and rate limits are process-local. Multi-instance/serverless deployments need shared persistent session/revocation and rate-limit storage or a suitable upstream identity/gateway.
 - The hosted backend must use HTTPS, a high-entropy server-only API token, restrictive ingress, and durable protected storage. A public health endpoint reveals only service readiness, not authentication material.
 - Desktop local bearer-token and WebSocket authentication remain separate and unchanged by the website password/session implementation.
+
+
+## Current repository status — 23 November 2026
+
+This document is maintained against the `black-market-ai-beta` branch. The latest application-source baseline reviewed for the comprehensive product audit is `49e6841215303ed296ced4fc1ef3039b9959426d`. Subsequent commits in this branch update documentation only; verify the branch head before treating this snapshot as current runtime or CI evidence.
+
+Current product classification: **Windows desktop beta candidate; hosted website private preview**. The application is local-first market research and paper-trading software. Paper trading is the only execution mode; no real-money exchange order execution is supported or verified. The deterministic assistant is read-only by default; an optional OpenAI-compatible endpoint may provide interpretation. ML training and model registration do not establish profitability or promotion without the configured validation evidence.
+
+Current audit corrections and outstanding items:
+- A root `LICENSE` file exists and identifies the project as proprietary. Older statements that the root license is absent are stale.
+- Existing CI run #605 passed for an earlier source commit, not the current source baseline. Fresh current-head CI and release-artifact verification remain required.
+- The website is a private preview with a shared-password session gate, not a multi-user SaaS identity and isolation system. Hosted backend, durable storage, streaming and restore acceptance remain release gates.
+- The repository tree contains 30 generated compressed shutdown database backups under `data/backups/` with the `.db.gz` suffix. The current ignore rules do not exclude that suffix. Their contents were not inspected in this audit; review them safely and remove generated database artifacts from version control after confirming data-handling requirements.
+- The application does not encrypt SQLite databases, model artifacts or backup archives. SHA-256 manifests provide integrity checking, not confidentiality.
+
+This status block records source/documentation evidence only. It does not claim a live deployment test, fresh training run, new backtest, current-head CI pass, security certification or trading performance result.

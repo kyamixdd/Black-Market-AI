@@ -30,6 +30,9 @@ from .models import (
     PublicStrategyVersionModel,
     StrategyFavoriteModel,
     StrategyReportFlagModel,
+    AssistantMemoryModel,
+    AssistantFeedbackModel,
+    AssistantPreferenceModel,
 )
 
 logger = logging.getLogger(__name__)
@@ -834,3 +837,169 @@ class Repository:
                 payload["status"] = status
                 ev.payload = json.dumps(payload)
                 session.commit()
+
+    # --- Assistant feedback and preference adaptation ---
+    def save_assistant_feedback(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._get_session() as session:
+            obj = AssistantFeedbackModel(**record)
+            session.add(obj)
+            session.commit()
+            return {"feedback_id": obj.feedback_id, "request_id": obj.request_id,
+                    "feedback_type": obj.feedback_type, "created_at": obj.created_at.isoformat()}
+
+    def count_assistant_feedback(self, owner_key: str, feedback_type: str, *,
+                                 preference_key: str | None = None) -> int:
+        with self._get_session() as session:
+            from datetime import timedelta
+            stmt = select(func.count()).select_from(AssistantFeedbackModel).where(
+                AssistantFeedbackModel.owner_key == owner_key,
+                AssistantFeedbackModel.feedback_type == feedback_type,
+                AssistantFeedbackModel.created_at >= datetime.now(timezone.utc) - timedelta(days=90),
+            )
+            if preference_key:
+                stmt = stmt.where(AssistantFeedbackModel.correction == preference_key)
+            return int(session.scalar(stmt) or 0)
+
+    def get_assistant_preferences(self, owner_key: str) -> list[dict[str, Any]]:
+        with self._get_session() as session:
+            rows = list(session.scalars(select(AssistantPreferenceModel).where(
+                AssistantPreferenceModel.owner_key == owner_key
+            ).order_by(AssistantPreferenceModel.updated_at.desc())).all())
+            return [{"preference_key": row.preference_key, "preference_value": row.preference_value,
+                     "source": row.source, "evidence_count": row.evidence_count,
+                     "confidence": row.confidence, "version": row.version,
+                     "updated_at": row.updated_at.isoformat()} for row in rows]
+
+    def set_assistant_preference(self, owner_key: str, preference_key: str,
+                                 preference_value: str, *, source: str,
+                                 evidence_count: int, confidence: float) -> dict[str, Any]:
+        with self._get_session() as session:
+            obj = session.get(AssistantPreferenceModel, (owner_key, preference_key))
+            if obj is None:
+                obj = AssistantPreferenceModel(owner_key=owner_key, preference_key=preference_key,
+                    preference_value=preference_value, source=source, evidence_count=evidence_count,
+                    confidence=confidence)
+                session.add(obj)
+            else:
+                obj.preference_value = preference_value
+                obj.source = source
+                obj.evidence_count = evidence_count
+                obj.confidence = confidence
+                obj.version += 1
+                obj.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            return {"preference_key": obj.preference_key, "preference_value": obj.preference_value,
+                    "source": obj.source, "evidence_count": obj.evidence_count,
+                    "confidence": obj.confidence, "version": obj.version}
+
+    def delete_assistant_preference(self, owner_key: str, preference_key: str) -> bool:
+        with self._get_session() as session:
+            obj = session.get(AssistantPreferenceModel, (owner_key, preference_key))
+            if obj is None:
+                return False
+            session.delete(obj)
+            session.commit()
+            return True
+
+    # --- Persistent assistant memory ---
+    def save_assistant_memory(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._get_session() as session:
+            existing = session.get(AssistantMemoryModel, record["memory_id"])
+            if existing is None:
+                existing = session.scalars(select(AssistantMemoryModel).where(
+                    AssistantMemoryModel.owner_key == record["owner_key"],
+                    AssistantMemoryModel.memory_type == record["memory_type"],
+                    func.lower(AssistantMemoryModel.content) == str(record["content"]).strip().lower(),
+                ).limit(1)).first()
+            values = {
+                "owner_key": record["owner_key"],
+                "memory_type": record["memory_type"],
+                "content": record["content"],
+                "source": record.get("source", "user_explicit"),
+                "importance": float(record.get("importance", 0.5)),
+                "confidence": float(record.get("confidence", 1.0)),
+                "tags_json": self._json_value(record.get("tags", [])),
+                "expires_at": record.get("expires_at"),
+            }
+            if existing is not None:
+                if existing.owner_key != record["owner_key"]:
+                    raise PermissionError("Memory ownership mismatch.")
+                for key, value in values.items():
+                    setattr(existing, key, value)
+                existing.version += 1
+                existing.updated_at = datetime.now(timezone.utc)
+                obj = existing
+            else:
+                obj = AssistantMemoryModel(memory_id=record["memory_id"], **values)
+                session.add(obj)
+            session.commit()
+            return self._assistant_memory_dict(obj)
+
+    def get_assistant_memory(self, memory_id: str, owner_key: str) -> dict[str, Any] | None:
+        with self._get_session() as session:
+            obj = session.get(AssistantMemoryModel, memory_id)
+            if obj is None or obj.owner_key != owner_key:
+                return None
+            if obj.expires_at is not None and obj.expires_at.replace(tzinfo=None) <= datetime.now(timezone.utc).replace(tzinfo=None):
+                session.delete(obj)
+                session.commit()
+                return None
+            return self._assistant_memory_dict(obj)
+
+    def retrieve_assistant_memories(self, owner_key: str, *, memory_types: list[str] | None = None,
+                                    limit: int = 8) -> list[dict[str, Any]]:
+        from sqlalchemy import or_
+        now = datetime.now(timezone.utc)
+        with self._get_session() as session:
+            stmt = select(AssistantMemoryModel).where(
+                AssistantMemoryModel.owner_key == owner_key,
+                or_(AssistantMemoryModel.expires_at.is_(None), AssistantMemoryModel.expires_at > now),
+            ).order_by(AssistantMemoryModel.importance.desc(), AssistantMemoryModel.updated_at.desc())
+            if memory_types:
+                stmt = stmt.where(AssistantMemoryModel.memory_type.in_(memory_types))
+            rows = list(session.scalars(stmt.limit(max(1, min(int(limit), 20)))).all())
+            for row in rows:
+                row.access_count += 1
+                row.last_accessed_at = now
+            session.commit()
+            return [self._assistant_memory_dict(row) for row in rows]
+
+    def delete_assistant_memory(self, memory_id: str, owner_key: str) -> bool:
+        with self._get_session() as session:
+            obj = session.get(AssistantMemoryModel, memory_id)
+            if obj is None or obj.owner_key != owner_key:
+                return False
+            session.delete(obj)
+            session.commit()
+            return True
+
+    def delete_expired_assistant_memories(self, *, now: datetime | None = None) -> int:
+        from sqlalchemy import delete
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is not None:
+            current = current.replace(tzinfo=None)
+        with self._get_session() as session:
+            result = session.execute(delete(AssistantMemoryModel).where(
+                AssistantMemoryModel.expires_at.is_not(None),
+                AssistantMemoryModel.expires_at <= current,
+            ))
+            session.commit()
+            return int(result.rowcount or 0)
+
+    @staticmethod
+    def _assistant_memory_dict(obj: AssistantMemoryModel) -> dict[str, Any]:
+        return {
+            "memory_id": obj.memory_id,
+            "memory_type": obj.memory_type,
+            "content": obj.content,
+            "source": obj.source,
+            "importance": obj.importance,
+            "confidence": obj.confidence,
+            "tags": json.loads(obj.tags_json),
+            "version": obj.version,
+            "access_count": obj.access_count,
+            "created_at": obj.created_at.isoformat() if obj.created_at else None,
+            "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
+            "last_accessed_at": obj.last_accessed_at.isoformat() if obj.last_accessed_at else None,
+            "expires_at": obj.expires_at.isoformat() if obj.expires_at else None,
+        }
