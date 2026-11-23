@@ -1,6 +1,9 @@
 name: Assistant outcome benchmark
 
 on:
+  pull_request:
+    branches:
+      - black-market-ai-beta
   workflow_dispatch:
     inputs:
       baseline_report:
