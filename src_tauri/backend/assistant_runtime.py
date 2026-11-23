@@ -6,7 +6,7 @@ perform market calculations, change trading state, or grant tool permissions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
 from typing import Any
 from uuid import uuid4
 
@@ -20,7 +20,7 @@ from .assistant_intelligence import (
 )
 
 
-class AssistantTaskState(StrEnum):
+class AssistantTaskState(str, Enum):
     RECEIVED = "received"
     INTERPRETING = "interpreting"
     EXECUTING = "executing"
