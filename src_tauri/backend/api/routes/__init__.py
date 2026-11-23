@@ -16,7 +16,6 @@ from . import (
     backup,
     research,
     community,
-    intelligence_config,
 )
 
 __all__ = [
@@ -34,5 +33,4 @@ __all__ = [
     "backup",
     "research",
     "community",
-    "intelligence_config",
 ]
