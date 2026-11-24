@@ -32,6 +32,9 @@ models/registry/
 
 # Backup files
 data/backups/*.db
+data/backups/*.db.*
+data/backups/*.sqlite*
+data/backups/*.sqlite3*
 data/backups/*.zip
 backups/*.zip
 
