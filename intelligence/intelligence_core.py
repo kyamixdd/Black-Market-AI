@@ -79,7 +79,24 @@ class IntelligenceCore:
                     # Add market regime
                     trend = self.trend_analyzer.get_trend_summary(market, symbol)
                     signal["regime"] = trend.get("regime", "UNKNOWN")
-                    signal["data_freshness"] = "LIVE"
+                    # Freshness is derived from the timestamps of the candles
+                    # actually used, not asserted unconditionally as LIVE.
+                    newest_close_ms = 0
+                    newest_tf_seconds = 60
+                    for timeframe in ohlc_data:
+                        candles = self.candles.get_series(market, symbol, timeframe, limit=1)
+                        if candles:
+                            close_ms = int(candles[-1].get("close_time", candles[-1]["open_time"]))
+                            if close_ms > newest_close_ms:
+                                newest_close_ms = close_ms
+                                from market.candle_manager import TIMEFRAME_SECONDS
+                                newest_tf_seconds = TIMEFRAME_SECONDS.get(timeframe, 60)
+                    age_seconds = max(0.0, time.time() - newest_close_ms / 1000) if newest_close_ms else None
+                    freshness_limit = max(90.0, newest_tf_seconds * 2.0)
+                    signal["data_age_seconds"] = age_seconds
+                    signal["data_freshness"] = (
+                        "LIVE" if age_seconds is not None and age_seconds <= freshness_limit else "STALE"
+                    )
                     # Multi-timeframe scoring using strategy selector
                     weight = self.strategy_selector.get_weight(signal["strategy"], signal.get("regime"))
                     signal["_weight"] = weight
