@@ -20,6 +20,13 @@ class DecisionEngine:
 
     async def evaluate_signal(self, signal: dict[str, Any]) -> None:
         """Validate a proposed signal and publish if high quality."""
+        # Stale data is not eligible for a validated signal, regardless of confidence.
+        if signal.get("data_freshness") == "STALE":
+            await self.event_bus.publish(make_event(
+                EventType.SIGNAL_REJECTED, "decision_engine",
+                reason="Stale market data", **signal
+            ))
+            return
         # Check basic rules
         is_valid, reason = self.validator.validate(signal)
         if not is_valid:
