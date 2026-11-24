@@ -4,10 +4,14 @@ on:
   pull_request:
     branches:
       - black-market-ai-beta
+      - beta-updates
+      - release-readiness-fixes
       - main
   push:
     branches:
       - black-market-ai-beta
+      - beta-updates
+      - release-readiness-fixes
       - main
 
 permissions:

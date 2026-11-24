@@ -7,3 +7,15 @@ __pycache__/
 dist/
 build/
 .env*
+!/.env.example
+
+# Runtime state, local databases, backups, and generated artifacts
+/data/
+logs/
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.log
+models/
