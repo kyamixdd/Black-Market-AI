@@ -159,8 +159,20 @@ class HistoricalBacktester:
         if config.holdout_start:
             oos_result = self._run_out_of_sample(config)
 
-        # 3. Run main backtest simulation
-        trades, equity_curve = self._simulate_backtest(config)
+        # 3. Keep holdout data out of the in-sample simulation.
+        in_sample = config
+        if config.holdout_start:
+            if not config.start_date < config.holdout_start < config.end_date:
+                raise ValueError("holdout_start must be strictly between start_date and end_date")
+            in_sample = BacktestConfig(
+                start_date=config.start_date, end_date=config.holdout_start,
+                initial_balance=config.initial_balance, max_positions=config.max_positions,
+                risk_per_trade_pct=config.risk_per_trade_pct, max_daily_loss_pct=config.max_daily_loss_pct,
+                max_leverage=config.max_leverage, timeframes=config.timeframes, symbols=config.symbols,
+                markets=config.markets, strategies=config.strategies, min_confidence=config.min_confidence,
+                regime_filter=config.regime_filter, parameter_grid=config.parameter_grid,
+            )
+        trades, equity_curve = self._simulate_backtest(in_sample)
 
         # 4. Calculate metrics
         metrics = self._calculate_metrics(trades, equity_curve, config.initial_balance)
@@ -308,7 +320,8 @@ class HistoricalBacktester:
         for tf in config.timeframes:
             series = self.candles.get_series(market, symbol, tf, limit=200)
             # Filter to only candles before current_time
-            historical = [c for c in series if c["open_time"] <= int(current_time.timestamp() * 1000)]
+            cutoff_ms = int(current_time.timestamp() * 1000)
+            historical = [c for c in series if c.get("close_time", c["open_time"]) <= cutoff_ms]
             if len(historical) >= 50:
                 ohlc_data[tf] = {
                     "open": np.array([c["open"] for c in historical]),
@@ -321,9 +334,13 @@ class HistoricalBacktester:
         if not ohlc_data:
             return None
 
-        # Get regime
-        trend = self.trend_analyzer.get_trend_summary(market, symbol)
-        regime = trend.get("regime", "UNKNOWN")
+        # Derive regime from the same cutoff-filtered features; live cache would leak future bars.
+        regime = "UNKNOWN"
+        if ohlc_data:
+            regime_tf = max(ohlc_data, key=lambda tf: self._tf_to_seconds(tf))
+            from market.regime_detector import RegimeDetector
+            d = ohlc_data[regime_tf]
+            regime = RegimeDetector.detect(d["close"], d["high"], d["low"])
 
         # Check regime filter
         if config.regime_filter and regime not in config.regime_filter:
@@ -423,12 +440,13 @@ class HistoricalBacktester:
 
     def _check_exit(self, trade: BacktestTrade, current_time: datetime, config: BacktestConfig) -> Optional[tuple[float, str]]:
         """Check if position should be closed."""
-        # Get current price from candles
-        series = self.candles.get_series(trade.market, trade.symbol, "1m", limit=1)
-        if not series:
+        # Use only fully closed candles at or before the simulation clock.
+        cutoff_ms = int(current_time.timestamp() * 1000)
+        series = self.candles.get_series(trade.market, trade.symbol, "1m", limit=500)
+        eligible = [c for c in series if c.get("close_time", c["open_time"]) <= cutoff_ms]
+        if not eligible:
             return None
-
-        current_price = series[-1]["close"]
+        current_price = float(eligible[-1]["close"])
 
         # Check stop loss
         if trade.side in ("LONG", "BUY"):
@@ -608,7 +626,8 @@ class HistoricalBacktester:
         win_rate = len(wins) / len(closed_trades) if closed_trades else 0
         avg_win = np.mean([t.pnl for t in wins]) if wins else 0
         avg_loss = np.mean([t.pnl for t in losses]) if losses else 0
-        profit_factor = abs(sum(t.pnl for t in wins) / sum(t.pnl for t in losses)) if losses else float('inf')
+        # Avoid Infinity: strict JSON serialization cannot represent it.
+        profit_factor = abs(sum(t.pnl for t in wins) / sum(t.pnl for t in losses)) if losses else None
 
         max_dd, max_dd_pct = self._calculate_drawdown(equity_curve, initial_balance)
         daily_returns = self._calculate_daily_returns(equity_curve)
