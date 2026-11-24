@@ -283,12 +283,22 @@ class HistoricalBacktester:
             equity_curve.append((current_time, current_balance))
             current_time += timedelta(seconds=tf_seconds)
 
-        # Close any remaining positions at end
-        for trade in open_positions.values():
-            self._close_trade(trade, trade.entry_price, "END_OF_TEST", end_time, config)
+        # Close remaining positions at the last completed historical candle.
+        end_ms = int(end_time.timestamp() * 1000)
+        for trade in list(open_positions.values()):
+            series = self.candles.get_series(trade.market, trade.symbol, "1m", limit=500)
+            eligible = [c for c in series if c.get("close_time", c["open_time"]) <= end_ms]
+            if not eligible:
+                raise ValueError(f"No completed 1m candle available to close {trade.symbol} at test end")
+            candle = eligible[-1]
+            close_ms = candle.get("close_time", candle["open_time"])
+            close_time = datetime.fromtimestamp(close_ms / 1000, tz=timezone.utc)
+            self._close_trade(trade, float(candle["close"]), "END_OF_TEST", close_time, config)
             trades.append(trade)
             current_balance += trade.pnl
 
+        if equity_curve:
+            equity_curve.append((end_time, current_balance))
         return trades, equity_curve
 
     def _generate_signal(self, symbol: str, market: str, current_time: datetime, config: BacktestConfig) -> Optional[dict]:
