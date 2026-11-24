@@ -258,20 +258,15 @@ class HistoricalBacktester:
                 current_time += timedelta(seconds=tf_seconds)
                 continue
 
-            # Check position limit
-            if len(open_positions) >= config.max_positions:
-                current_time += timedelta(seconds=tf_seconds)
-                continue
-
-            # Scan for signals on each symbol
-            for symbol in (config.symbols or self._get_eligible_symbols(config)):
-                for market in config.markets:
-                    signal = self._generate_signal(symbol, market, current_time, config)
-                    if signal and self._should_take_signal(signal, config):
-                        trade = self._execute_trade(signal, current_time, config, current_balance)
-                        if trade:
-                            trades.append(trade)
-                            open_positions[trade.trade_id] = trade
+            # Always evaluate exits; the position limit only blocks new entries.
+            if len(open_positions) < config.max_positions:
+                for symbol in (config.symbols or self._get_eligible_symbols(config)):
+                    for market in config.markets:
+                        signal = self._generate_signal(symbol, market, current_time, config)
+                        if signal and self._should_take_signal(signal, config):
+                            trade = self._execute_trade(signal, current_time, config, current_balance)
+                            if trade:
+                                open_positions[trade.trade_id] = trade
 
             # Update open positions
             for trade_id, trade in list(open_positions.items()):
