@@ -1,0 +1,240 @@
+{
+  "benchmark_id": "black-market-assistant-outcome-benchmark",
+  "version": "1.0.0",
+  "description": "Deterministic regression cases for assistant intent, tool availability, memory relevance, and task completion.",
+  "intent_cases": [
+    {
+      "id": "intent-001",
+      "query": "Analyze BTC on the 15m timeframe",
+      "expected_tools": [
+        "market_snapshot"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-002",
+      "query": "Show BTC indicators and risk status",
+      "expected_tools": [
+        "indicator_report",
+        "risk_status"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-003",
+      "query": "Show historical candles for ETH",
+      "expected_tools": [
+        "historical_candles"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-004",
+      "query": "Check the market scanner",
+      "expected_tools": [
+        "scanner_status"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-005",
+      "query": "Show recent signals for SOL",
+      "expected_tools": [
+        "signal_report"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-006",
+      "query": "Evaluate strategy backtest for BTC",
+      "expected_tools": [
+        "strategy_report"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-007",
+      "query": "Show my paper account balance",
+      "expected_tools": [
+        "paper_account"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-008",
+      "query": "Show my open positions",
+      "expected_tools": [
+        "open_positions"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-009",
+      "query": "Show recent trade history",
+      "expected_tools": [
+        "trade_history"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-010",
+      "query": "What is my portfolio risk exposure",
+      "expected_tools": [
+        "risk_status"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-011",
+      "query": "Show model evaluation accuracy",
+      "expected_tools": [
+        "learning_evaluation"
+      ],
+      "clarification": false
+    },
+    {
+      "id": "intent-012",
+      "query": "Compare BTC with ETH",
+      "expected_tools": [
+        "market_snapshot"
+      ],
+      "clarification": true
+    },
+    {
+      "id": "intent-013",
+      "query": "Analyze it again",
+      "expected_tools": [],
+      "clarification": true
+    },
+    {
+      "id": "intent-014",
+      "query": "Remember that I prefer detailed explanations",
+      "expected_tools": [],
+      "clarification": true
+    }
+  ],
+  "memory_cases": [
+    {
+      "id": "memory-001",
+      "query": "preferred explanation detail",
+      "memories": [
+        {
+          "memory_id": "m-detail",
+          "content": "Prefers detailed explanations for market analysis",
+          "importance": 0.8,
+          "confidence": 1,
+          "tags": [
+            "explanation",
+            "detail"
+          ]
+        },
+        {
+          "memory_id": "m-food",
+          "content": "Likes spicy food",
+          "importance": 0.9,
+          "confidence": 1,
+          "tags": [
+            "food"
+          ]
+        }
+      ],
+      "expected_top_ids": [
+        "m-detail"
+      ]
+    },
+    {
+      "id": "memory-002",
+      "query": "BTC 15m analysis workflow",
+      "memories": [
+        {
+          "memory_id": "m-btc",
+          "content": "Uses BTC market analysis on 15m timeframe",
+          "importance": 0.7,
+          "confidence": 0.9,
+          "tags": [
+            "btc",
+            "market",
+            "15m"
+          ]
+        },
+        {
+          "memory_id": "m-eth",
+          "content": "Uses ETH analysis on 4h timeframe",
+          "importance": 0.8,
+          "confidence": 0.9,
+          "tags": [
+            "eth",
+            "market",
+            "4h"
+          ]
+        }
+      ],
+      "expected_top_ids": [
+        "m-btc"
+      ]
+    },
+    {
+      "id": "memory-003",
+      "query": "paper trading risk limits",
+      "memories": [
+        {
+          "memory_id": "m-risk",
+          "content": "Paper trading risk settings and exposure limits",
+          "importance": 0.8,
+          "confidence": 0.9,
+          "tags": [
+            "paper",
+            "risk",
+            "exposure"
+          ]
+        },
+        {
+          "memory_id": "m-song",
+          "content": "Music production project notes",
+          "importance": 0.8,
+          "confidence": 0.9,
+          "tags": [
+            "music",
+            "song"
+          ]
+        }
+      ],
+      "expected_top_ids": [
+        "m-risk"
+      ]
+    }
+  ],
+  "completion_cases": [
+    {
+      "id": "completion-001",
+      "query": "show current market snapshot",
+      "expected_state": "completed",
+      "expected_status": "available"
+    },
+    {
+      "id": "completion-002",
+      "query": "Compare BTC with ETH",
+      "expected_state": "awaiting_clarification",
+      "expected_status": "clarification_required"
+    },
+    {
+      "id": "completion-003",
+      "query": "show market snapshot and risk status",
+      "expected_state": "completed",
+      "expected_status": "available"
+    }
+  ],
+  "scoring": {
+    "intent_exact_match": 1,
+    "tool_registry_safety": 1,
+    "memory_top1_relevance": 1,
+    "completion_state_and_status": 1
+  },
+  "promotion_policy": {
+    "minimum_intent_exact_match": 0.9,
+    "minimum_tool_registry_safety": 1,
+    "minimum_memory_top1_relevance": 0.8,
+    "minimum_completion_accuracy": 0.9,
+    "no_metric_regression": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T05:24:35.092387+00:00",
+  "description": "shutdown",
+  "database_name": "tmpnmaaadu8",
+  "compressed": true,
+  "backup_file": "tmpnmaaadu8_20261124_052435_019236_shutdown.db.gz",
+  "backup_size_bytes": 6332,
+  "sha256": "f02e8bf5d1af372ef9c7b07e34d9a30fa55ff465dcdbb55b673fb2339d2b01b6",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

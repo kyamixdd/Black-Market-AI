@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-23T21:28:52.187305+00:00",
+  "description": "shutdown",
+  "database_name": "tmp22xmdjz4",
+  "compressed": true,
+  "backup_file": "tmp22xmdjz4_20261123_212851_684490_shutdown.db.gz",
+  "backup_size_bytes": 6176,
+  "sha256": "5cc5bd98e88d06a0babdda0ed3762ab9081cf8c65c5529fccf0ae501211c07fa",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

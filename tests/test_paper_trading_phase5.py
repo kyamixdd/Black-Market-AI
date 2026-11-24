@@ -1,0 +1,1555 @@
+"""Test Phase 5 paper trading features: slippage, spread, limit orders, funding, liquidation, risk management."""
+
+from datetime import datetime, timedelta, timezone
+
+import asyncio
+
+import pytest
+
+from core.event_bus import EventBus
+from paper_trading.fee_calculator import FeeCalculator
+from paper_trading.funding_calculator import FundingCalculator
+from paper_trading.liquidation_engine import LiquidationEngine
+from paper_trading.risk_manager import RiskManager
+from paper_trading.simulator import Simulator
+
+
+class TestFeeCalculator:
+    """Test fee, slippage, and spread calculations."""
+
+    def test_spot_fee_calculation(self):
+        calc = FeeCalculator()
+        fee = calc.calculate("SPOT", "BUY", 0.1, 50000.0, 1.0)
+        expected = 0.1 * 50000.0 * 0.001  # 0.1%
+        assert fee == expected
+
+    def test_futures_fee_calculation(self):
+        calc = FeeCalculator()
+        fee = calc.calculate("FUTURES", "LONG", 0.1, 50000.0, 3.0)
+        expected = 0.1 * 50000.0 * 0.0005  # 0.05% of notional, independent of leverage
+        assert fee == expected
+
+    def test_slippage_market_order_spot(self):
+        calc = FeeCalculator()
+        slip = calc.calculate_slippage("SPOT", "MARKET", 0.1, 50000.0, 1.0, 1000000.0)
+        # Base slippage 5 bps = 0.05%
+        assert slip > 0
+
+    def test_slippage_limit_order(self):
+        calc = FeeCalculator()
+        slip = calc.calculate_slippage("SPOT", "LIMIT", 0.1, 50000.0)
+        assert slip == 0.0
+
+    def test_fill_price_buy(self):
+        calc = FeeCalculator()
+        fill = calc.get_fill_price("SPOT", "BUY", "MARKET", 50000.0, 0.1, 1.0, 1000000.0)
+        assert fill > 50000.0  # Buy fills higher
+
+    def test_fill_price_sell(self):
+        calc = FeeCalculator()
+        fill = calc.get_fill_price("SPOT", "SELL", "MARKET", 50000.0, 0.1, 1.0, 1000000.0)
+        assert fill < 50000.0  # Sell fills lower
+
+    def test_spread_calculation(self):
+        calc = FeeCalculator()
+        spread = calc.calculate_spread("SPOT", 50000.0)
+        expected = 50000.0 * 2 / 10000  # 2 bps
+        assert spread == expected
+
+
+class TestRiskManager:
+    """Test risk management functions."""
+
+    def test_daily_loss_check(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        # Daily loss 1% of balance - should pass
+        assert rm.check_daily_loss(-5.0, 500.0) is True
+        # Daily loss 3% of balance - should fail (exceeds 2%)
+        assert rm.check_daily_loss(-15.0, 500.0) is False
+
+    def test_position_limit_check(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        positions = {"p1": {"status": "OPEN"}, "p2": {"status": "OPEN"}}
+        assert rm.check_position_limit(positions, 5) is True
+        assert rm.check_position_limit(positions, 2) is False
+
+    def test_symbol_exposure_check(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        positions = {"p1": {"symbol": "BTCUSDT", "status": "OPEN"}}
+        assert rm.check_symbol_exposure(positions, "BTCUSDT") is False
+        assert rm.check_symbol_exposure(positions, "ETHUSDT") is True
+
+    def test_total_risk_check(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        # Current risk $10, new risk $5, balance $500 -> 3% = limit
+        assert rm.check_total_risk(10.0, 5.0, 500.0) is True
+        # New risk $6 -> 3.2% > 3% limit
+        assert rm.check_total_risk(10.0, 6.0, 500.0) is False
+
+    def test_position_size_calculation(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        # Balance $500, risk per trade 0.5% = $2.5 risk budget, risk amount $100 -> 0.025 units
+        size = rm.calculate_position_size(500.0, 100.0)
+        assert size == 0.025
+
+    def test_leverage_validation(self):
+        rm = RiskManager(0.5, 2.0, 3.0, 3.0, 5, 5)
+        assert rm.validate_leverage("SPOT", 5.0) == 5.0  # No cap on spot
+        assert rm.validate_leverage("FUTURES", 5.0) == 3.0  # Capped at 3x
+
+
+class TestLiquidationEngine:
+    """Test futures liquidation logic."""
+
+    def test_long_liquidation_price(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
+        liq_price = le.calculate_liquidation_price(pos)
+        # 50000 * (1 - 1/3 + 0.05) = 50000 * 0.7167 = 35833.33
+        assert abs(liq_price - 35833.33) < 1.0
+
+    def test_short_liquidation_price(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "SHORT", "entry_price": 50000.0, "leverage": 3.0}
+        liq_price = le.calculate_liquidation_price(pos)
+        # 50000 * (1 + 1/3 - 0.05) = 50000 * 1.2833 = 64166.67
+        assert abs(liq_price - 64166.67) < 1.0
+
+    def test_long_liquidation_check(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
+        assert le.check_liquidation(pos, 35000.0) is True  # Below liq price
+        assert le.check_liquidation(pos, 40000.0) is False  # Above liq price
+
+    def test_short_liquidation_check(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "SHORT", "entry_price": 50000.0, "leverage": 3.0}
+        assert le.check_liquidation(pos, 65000.0) is True  # Above liq price
+        assert le.check_liquidation(pos, 60000.0) is False  # Below liq price
+
+    def test_spot_not_liquidated(self):
+        le = LiquidationEngine()
+        pos = {"market": "SPOT", "side": "LONG", "entry_price": 50000.0}
+        assert le.check_liquidation(pos, 10000.0) is False
+
+    def test_margin_ratio(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
+        # At entry price, margin ratio = 3.0
+        assert abs(le.get_margin_ratio(pos, 50000.0) - 3.0) < 0.01
+        # At 45000, pnl = -10%, margin ratio = 0.9 * 3 = 2.7
+        assert abs(le.get_margin_ratio(pos, 45000.0) - 2.7) < 0.01
+
+    def test_margin_risk_detection(self):
+        le = LiquidationEngine()
+        pos = {"market": "FUTURES", "side": "LONG", "entry_price": 50000.0, "leverage": 3.0}
+        # At 38000, margin ratio ~ 2.28, threshold * MMR = 1.2 * 0.05 = 0.06
+        # 2.28 > 0.06, so not at risk
+        assert le.is_at_risk(pos, 38000.0) is False
+        # At 36000, margin ratio ~ 2.16, still above 0.06
+        assert le.is_at_risk(pos, 36000.0) is False
+
+
+class TestFundingCalculator:
+    """Test funding payment calculations."""
+
+    def test_long_funding_payment(self):
+        fc = FundingCalculator()
+        pos = {"market": "FUTURES", "side": "LONG", "amount": 0.1, "entry_price": 50000.0, "leverage": 3.0}
+        payment = fc.calculate(pos, 0.0001)  # 0.01%
+        # Funding uses current position notional; leverage does not multiply it.
+        expected = 0.1 * 50000.0 * 0.0001
+        assert payment == expected
+
+    def test_short_funding_payment(self):
+        fc = FundingCalculator()
+        pos = {"market": "FUTURES", "side": "SHORT", "amount": 0.1, "entry_price": 50000.0, "leverage": 3.0}
+        payment = fc.calculate(pos, 0.0001)
+        expected = 0.1 * 50000.0 * 0.0001
+        # Shorts receive when rate is positive (negative payment = they receive)
+        assert payment == -expected
+
+    def test_spot_no_funding(self):
+        fc = FundingCalculator()
+        pos = {"market": "SPOT", "side": "LONG", "amount": 0.1, "entry_price": 50000.0}
+        payment = fc.calculate(pos, 0.0001)
+        assert payment == 0.0
+
+    def test_funding_intervals(self):
+        fc = FundingCalculator()
+        times = fc.get_funding_times(0, 24 * 3600 * 1000 - 1)  # Just before 24h
+        # Should have 3 funding times in 24 hours (0, 8h, 16h)
+        assert len(times) == 3
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_slippage():
+    """Test that slippage is applied to fills."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-SLIP-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    pos_id = await sim.execute_signal(signal)
+    assert pos_id is not None
+    position = sim.spot_positions[pos_id]
+    # Fill price should be worse than signal entry due to spread+slippage
+    assert position["entry_price"] > 50000.0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_limit_order():
+    """Test limit order placement and filling."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-LIMIT-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,  # Below current price
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    # Place limit order
+    order_id = await sim.place_limit_order(signal)
+    assert order_id is not None
+    assert order_id in sim.open_orders
+
+    # Price moves down to limit price - should fill
+    await sim.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert order_id not in sim.open_orders
+    assert len(sim.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_funding():
+    """Test funding payments are applied."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-FUND-001",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 3.0,
+    }
+
+    pos_id = await sim.execute_signal(signal)
+    position = sim.futures_positions[pos_id]
+    # This test covers an eligible position at a scheduled settlement boundary,
+    # not the immediate first update after opening.
+    position["opened_at"] = datetime.now(timezone.utc) - timedelta(hours=9)
+    initial_balance = sim.futures_balance
+
+    # Apply funding
+    await sim._apply_funding(position, 0.0001)  # 0.01%
+
+    # Balance should decrease (longs pay when rate positive)
+    assert sim.futures_balance < initial_balance
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_liquidation():
+    """Test futures liquidation."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    # Set stop_loss below liquidation price so liquidation triggers first
+    # Liquidation price for 3x LONG at 50000 = 50000 * (1 - 1/3 + 0.05) = 35833
+    signal = {
+        "signal_id": "SIG-LIQ-001",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 35000.0,  # Below liquidation price
+        "take_profit": [52000.0],
+        "leverage": 3.0,
+    }
+
+    await sim.execute_signal(signal)
+    assert len(sim.futures_positions) == 1
+
+    # Price drops to liquidation level (~35833 for 3x long)
+    await sim.update_prices("FUTURES", "BTCUSDT", 35000.0, mark_price=35000.0)
+    assert len(sim.futures_positions) == 0
+    assert len(sim.closed_trades) == 1
+    assert sim.closed_trades[0]["close_reason"] == "LIQUIDATION"
+
+
+@pytest.mark.asyncio
+async def test_risk_daily_loss_protection():
+    """Test daily loss limit prevents new positions."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    # Mark a $25 account-equity loss against the $1000 day-start baseline.
+    sim.daily_start_equity = 1000.0
+    sim.spot_balance -= 25.0
+    sim.daily_pnl = -25.0
+
+    signal = {
+        "signal_id": "SIG-RISK-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    pos_id = await sim.execute_signal(signal)
+    assert pos_id is None  # Should be rejected
+
+
+@pytest.mark.asyncio
+async def test_risk_max_positions():
+    """Test max positions limit."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    # Fill up to max (5 for spot)
+    for i in range(5):
+        signal = {
+            "signal_id": f"SIG-MAX-{i}",
+            "symbol": f"COIN{i}USDT",
+            "market": "SPOT",
+            "direction": "LONG",
+            "entry": 100.0 + i,
+            "stop_loss": 90.0 + i,
+            "take_profit": [120.0 + i],
+            "leverage": 1.0,
+        }
+        await sim.execute_signal(signal)
+
+    assert len(sim.spot_positions) == 5
+
+    # 6th should fail
+    signal = {
+        "signal_id": "SIG-MAX-6",
+        "symbol": "COIN6USDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 106.0,
+        "stop_loss": 96.0,
+        "take_profit": [126.0],
+        "leverage": 1.0,
+    }
+    pos_id = await sim.execute_signal(signal)
+    assert pos_id is None
+
+
+@pytest.mark.asyncio
+async def test_risk_symbol_exposure():
+    """Test one position per symbol limit."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal1 = {
+        "signal_id": "SIG-EXP-1",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    await sim.execute_signal(signal1)
+    assert len(sim.spot_positions) == 1
+
+    # Second signal same symbol
+    signal2 = {
+        "signal_id": "SIG-EXP-2",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 51000.0,
+        "stop_loss": 50000.0,
+        "take_profit": [53000.0],
+        "leverage": 1.0,
+    }
+    pos_id = await sim.execute_signal(signal2)
+    assert pos_id is None
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_state_snapshot():
+    """Test state snapshot and restore for restart recovery."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-STATE-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    await sim.execute_signal(signal)
+
+    # Get snapshot
+    state = sim.get_state_snapshot()
+    assert state["spot_balance"] < 500.0
+    assert len(state["spot_positions"]) == 1
+    assert len(state["closed_trades"]) == 0
+
+    # Create new simulator and restore
+    bus2 = EventBus()
+    sim2 = Simulator(bus2)
+    sim2.restore_state(state)
+
+    assert sim2.spot_balance == state["spot_balance"]
+    assert len(sim2.spot_positions) == 1
+
+
+def test_daily_pnl_rolls_over_at_utc_day_boundary():
+    simulator = Simulator(EventBus())
+    yesterday = datetime.now(timezone.utc).date() - timedelta(days=1)
+    simulator.daily_pnl = -12.0
+    simulator.daily_pnl_date = yesterday
+
+    assert simulator.get_daily_pnl() == 0.0
+
+    simulator.restore_state({"daily_pnl": -8.0, "daily_pnl_date": yesterday.isoformat()})
+    assert simulator.get_daily_pnl() == 0.0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_short_pnl():
+    """Test short position P&L calculation."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-SHORT-001",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "SHORT",
+        "entry": 50000.0,
+        "stop_loss": 51000.0,
+        "take_profit": [48000.0],
+        "leverage": 3.0,
+    }
+
+    await sim.execute_signal(signal)
+
+    # Price drops - short should profit
+    await sim.update_prices("FUTURES", "BTCUSDT", 48000.0)
+    assert len(sim.futures_positions) == 0
+    assert len(sim.closed_trades) == 1
+    assert sim.closed_trades[0]["pnl"] > 0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_stop_loss():
+    """Test stop loss execution."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-SL-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    await sim.execute_signal(signal)
+
+    # Price hits stop loss
+    await sim.update_prices("SPOT", "BTCUSDT", 48900.0)
+    assert len(sim.spot_positions) == 0
+    assert len(sim.closed_trades) == 1
+    assert sim.closed_trades[0]["close_reason"] == "STOP_LOSS"
+    assert sim.closed_trades[0]["pnl"] < 0
+
+
+@pytest.mark.asyncio
+async def test_paper_trading_take_profit():
+    """Test take profit execution."""
+    bus = EventBus()
+    sim = Simulator(bus)
+
+    signal = {
+        "signal_id": "SIG-TP-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    await sim.execute_signal(signal)
+
+    # Price hits take profit
+    await sim.update_prices("SPOT", "BTCUSDT", 52100.0)
+    assert len(sim.spot_positions) == 0
+    assert len(sim.closed_trades) == 1
+    assert sim.closed_trades[0]["close_reason"] == "TAKE_PROFIT"
+    assert sim.closed_trades[0]["pnl"] > 0
+
+
+@pytest.mark.asyncio
+async def test_realized_trade_pnl_includes_entry_and_exit_fees():
+    sim = Simulator(EventBus())
+    sim.fee_calc.calculate = lambda *args: 0.1
+    sim.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-FEE-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    await sim.execute_signal(signal)
+    await sim.update_prices("SPOT", "BTCUSDT", 52000.0)
+
+    trade = sim.closed_trades[0]
+    assert trade["fee"] == 0.2
+    assert sim.spot_balance == pytest.approx(500.0 + trade["pnl"])
+    assert sim.daily_pnl == pytest.approx(trade["pnl"])
+
+@pytest.mark.asyncio
+async def test_limit_order_remains_open_when_execution_is_temporarily_rejected():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-RETRY",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    order = simulator.open_orders[order_id]
+
+    # Simulate a balance/risk change after order placement but before the fill.
+    simulator.spot_balance = 0.0
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert simulator.open_orders[order_id] is order
+    assert order["status"] == "OPEN"
+    assert simulator.spot_positions == {}
+
+    # Once the account can support the order again, the same order can fill.
+    simulator.spot_balance = simulator.initial_spot_balance
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert order_id not in simulator.open_orders
+    assert order["status"] == "FILLED"
+    assert len(simulator.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_limit_order_execution_exception_does_not_lose_pending_order():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-EXCEPTION",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    original_execute = simulator.execute_signal
+
+    async def fail_execution(*_args, **_kwargs):
+        raise RuntimeError("simulated execution failure")
+
+    simulator.execute_signal = fail_execution
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert simulator.open_orders[order_id]["status"] == "OPEN"
+
+    simulator.execute_signal = original_execute
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert order_id not in simulator.open_orders
+    assert len(simulator.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_limit_order_is_idempotent_and_publishes_cancellation():
+    bus = EventBus()
+    simulator = Simulator(bus)
+    signal = {
+        "signal_id": "SIG-LIMIT-CANCEL",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    cancelled = await simulator.cancel_limit_order(order_id)
+    assert cancelled is not None
+    assert cancelled["status"] == "CANCELLED"
+    assert order_id not in simulator.open_orders
+    assert await simulator.cancel_limit_order(order_id) is None
+
+    placed_event = bus._queue.get_nowait()
+    cancelled_event = bus._queue.get_nowait()
+    assert placed_event.event_type == "ORDER_PLACED"
+    assert cancelled_event.event_type == "TRADE_CANCELLED"
+    assert cancelled_event.payload["order"]["status"] == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_price_updates_cannot_double_fill_one_limit_order():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-CONCURRENT",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_execute = simulator.execute_signal
+    executions = 0
+
+    async def delayed_execute(*args, **kwargs):
+        nonlocal executions
+        executions += 1
+        started.set()
+        await release.wait()
+        return await original_execute(*args, **kwargs)
+
+    simulator.execute_signal = delayed_execute
+    first = asyncio.create_task(simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0))
+    await started.wait()
+
+    assert simulator.open_orders[order_id]["status"] == "FILLING"
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert executions == 1
+
+    release.set()
+    await first
+    assert executions == 1
+    assert order_id not in simulator.open_orders
+    assert len(simulator.spot_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_position_close_is_idempotent_and_does_not_double_credit_balance():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *args: 0.0
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-ONCE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before_close = simulator.spot_balance
+
+    assert await simulator._close_position(position, 51000.0, "MANUAL") is True
+    balance_after_close = simulator.spot_balance
+    assert balance_after_close > balance_before_close
+    assert await simulator._close_position(position, 51000.0, "MANUAL") is False
+    assert simulator.spot_balance == pytest.approx(balance_after_close)
+    assert len(simulator.closed_trades) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_position_close_attempts_only_realize_once():
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "POSITION_CLOSED":
+                started.set()
+                await release.wait()
+            await super().publish(event)
+
+    simulator = Simulator(BlockingEventBus())
+    simulator.fee_calc.calculate = lambda *args: 0.0
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-RACE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+
+    first = asyncio.create_task(simulator._close_position(position, 51000.0, "MANUAL"))
+    await started.wait()
+    assert position["status"] == "CLOSED"
+    second = await simulator._close_position(position, 52000.0, "TAKE_PROFIT")
+    assert second is False
+    assert len(simulator.closed_trades) == 1
+
+    release.set()
+    assert await first is True
+    assert len(simulator.closed_trades) == 1
+
+
+def test_restore_marks_ambiguous_inflight_order_for_manual_reconciliation():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-IN-FLIGHT": {
+            "order_id": "ORD-IN-FLIGHT",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+
+    assert restored.open_orders["ORD-IN-FLIGHT"]["status"] == "RECOVERY_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_non_finite_fee_without_mutating_account():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.get_fill_price = lambda market, side, order_type, price, *args: price
+    signal = {
+        "signal_id": "SIG-CLOSE-BAD-FEE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before = simulator.spot_balance
+    simulator.fee_calc.calculate = lambda *args: float("nan")
+
+    with pytest.raises(ValueError, match="non-finite"):
+        await simulator._close_position(position, 51000.0, "MANUAL")
+
+    assert position["status"] == "OPEN"
+    assert position_id in simulator.spot_positions
+    assert simulator.spot_balance == pytest.approx(balance_before)
+    assert simulator.closed_trades == []
+
+
+@pytest.mark.asyncio
+async def test_liquidation_does_not_emit_false_alert_after_concurrent_manual_close():
+    margin_alert_started = asyncio.Event()
+    release_margin_alert = asyncio.Event()
+
+    class PausingEventBus(EventBus):
+        def __init__(self):
+            super().__init__()
+            self.published = []
+
+        async def publish(self, event):
+            self.published.append(event)
+            payload = event.payload.get("payload", {})
+            if event.event_type == "RISK_ALERT" and payload.get("alert_type") == "MARGIN_RISK":
+                margin_alert_started.set()
+                await release_margin_alert.wait()
+            await super().publish(event)
+
+    bus = PausingEventBus()
+    simulator = Simulator(bus)
+    signal = {
+        "signal_id": "SIG-LIQ-CLOSE-RACE",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 35000.0,
+        "take_profit": [52000.0],
+        "leverage": 3.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.futures_positions[position_id]
+    simulator.liquidation.is_at_risk = lambda *_args: True
+    simulator.liquidation.check_liquidation = lambda *_args: True
+    simulator.liquidation.calculate_liquidation_price = lambda *_args: 36000.0
+
+    liquidation_task = asyncio.create_task(simulator._check_liquidation(position, 36000.0))
+    await margin_alert_started.wait()
+
+    assert await simulator._close_position(position, 40000.0, "MANUAL") is True
+    release_margin_alert.set()
+    await liquidation_task
+
+    liquidation_alerts = [
+        event for event in bus.published
+        if event.event_type == "RISK_ALERT"
+        and event.payload.get("payload", {}).get("alert_type") == "LIQUIDATION"
+    ]
+    assert liquidation_alerts == []
+    assert len(simulator.closed_trades) == 1
+
+
+@pytest.mark.asyncio
+async def test_limit_order_is_not_retried_if_position_commits_before_event_failure():
+    class FailingPositionEventBus(EventBus):
+        def __init__(self):
+            super().__init__()
+            self.fail_position_event = True
+
+        async def publish(self, event):
+            if event.event_type == "POSITION_OPENED" and self.fail_position_event:
+                self.fail_position_event = False
+                raise RuntimeError("simulated event persistence failure")
+            await super().publish(event)
+
+    simulator = Simulator(FailingPositionEventBus())
+    signal = {
+        "signal_id": "SIG-LIMIT-COMMIT-THEN-FAIL",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert order_id not in simulator.open_orders
+    assert len(simulator.spot_positions) == 1
+    position = next(iter(simulator.spot_positions.values()))
+    assert position["order_id"] == order_id
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+    assert len(simulator.spot_positions) == 1
+
+
+def test_restore_marks_order_filled_when_matching_position_was_persisted():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-PERSISTED-FILL": {
+            "order_id": "ORD-PERSISTED-FILL",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+    state["spot_positions"] = {
+        "POS-RECOVERED": {"position_id": "POS-RECOVERED", "order_id": "ORD-PERSISTED-FILL", "status": "OPEN"}
+    }
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+
+    assert "ORD-PERSISTED-FILL" not in restored.open_orders
+
+
+@pytest.mark.asyncio
+async def test_limit_order_persistence_callback_records_state_transitions():
+    simulator = Simulator(EventBus())
+    persisted_statuses = []
+    simulator.persist_order_callback = lambda order: persisted_statuses.append(order["status"])
+    signal = {
+        "signal_id": "SIG-LIMIT-PERSIST",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 49000.0)
+
+    assert persisted_statuses == ["OPEN", "FILLING", "FILLED"]
+
+
+@pytest.mark.asyncio
+async def test_position_persistence_failure_rolls_back_opening_balance_and_position():
+    simulator = Simulator(EventBus())
+    balance_before = simulator.spot_balance
+
+    def fail_persist(_position):
+        raise RuntimeError("database write failed")
+
+    simulator.persist_position_callback = fail_persist
+    signal = {
+        "signal_id": "SIG-PERSIST-ROLLBACK",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    with pytest.raises(RuntimeError, match="database write failed"):
+        await simulator.execute_signal(signal)
+
+    assert simulator.spot_positions == {}
+    assert simulator.spot_balance == pytest.approx(balance_before)
+
+
+@pytest.mark.asyncio
+async def test_trade_persistence_failure_rolls_back_close_and_balance():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-CLOSE-PERSIST-ROLLBACK",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    position_id = await simulator.execute_signal(signal)
+    position = simulator.spot_positions[position_id]
+    balance_before = simulator.spot_balance
+
+    def fail_persist(_trade):
+        raise RuntimeError("trade write failed")
+
+    simulator.persist_trade_callback = fail_persist
+    with pytest.raises(RuntimeError, match="trade write failed"):
+        await simulator._close_position(position, 51000.0, "MANUAL")
+
+    assert position["status"] == "OPEN"
+    assert position_id in simulator.spot_positions
+    assert simulator.spot_balance == pytest.approx(balance_before)
+    assert simulator.closed_trades == []
+
+
+def test_restore_reconciles_filling_order_against_closed_trade_history():
+    simulator = Simulator(EventBus())
+    state = simulator.get_state_snapshot()
+    state["open_orders"] = {
+        "ORD-CLOSED-BEFORE-RESTART": {
+            "order_id": "ORD-CLOSED-BEFORE-RESTART",
+            "status": "FILLING",
+            "symbol": "BTCUSDT",
+            "market": "SPOT",
+            "side": "BUY",
+            "entry_price": 50000.0,
+            "amount": 0.001,
+        }
+    }
+    state["closed_trades"] = [
+        {"position_id": "POS-CLOSED", "order_id": "ORD-CLOSED-BEFORE-RESTART"}
+    ]
+
+    simulator.restore_state(state)
+
+    assert "ORD-CLOSED-BEFORE-RESTART" not in simulator.open_orders
+
+
+@pytest.mark.asyncio
+async def test_durable_market_open_survives_event_publication_failure():
+    class FailingOpenEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "POSITION_OPENED":
+                raise RuntimeError("event bus unavailable")
+            await super().publish(event)
+
+    simulator = Simulator(FailingOpenEventBus())
+    persisted = []
+    simulator.persist_position_callback = lambda position: persisted.append(dict(position))
+    signal = {
+        "signal_id": "SIG-DURABLE-MARKET-OPEN",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    position_id = await simulator.execute_signal(signal)
+
+    assert position_id in simulator.spot_positions
+    assert persisted[0]["position_id"] == position_id
+
+
+@pytest.mark.asyncio
+async def test_durable_limit_placement_survives_order_event_failure():
+    class FailingOrderEventBus(EventBus):
+        async def publish(self, event):
+            if event.event_type == "ORDER_PLACED":
+                raise RuntimeError("event bus unavailable")
+            await super().publish(event)
+
+    simulator = Simulator(FailingOrderEventBus())
+    persisted = []
+    simulator.persist_order_callback = lambda order: persisted.append(order["status"])
+    signal = {
+        "signal_id": "SIG-DURABLE-ORDER-PLACE",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    order_id = await simulator.place_limit_order(signal)
+
+    assert order_id in simulator.open_orders
+    assert persisted == ["OPEN"]
+
+
+
+def test_funding_uses_current_mark_notional_and_ignores_leverage():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "amount": 0.25,
+        "entry_price": 40000.0,
+        "current_price": 42000.0,
+        "leverage": 20.0,
+    }
+
+    assert calculator.calculate(position, 0.001) == pytest.approx(10.5)
+
+
+@pytest.mark.parametrize(("side", "expected"), [
+    ("LONG", 5.0),
+    ("BUY", 5.0),
+    ("SHORT", -5.0),
+    ("SELL", -5.0),
+])
+def test_funding_direction_aliases_are_consistent(side, expected):
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": side,
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "current_price": 100.0,
+        "leverage": 10.0,
+    }
+
+    assert calculator.calculate(position, 0.05) == pytest.approx(expected)
+
+
+def test_funding_rejects_unknown_position_side():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "SIDEWAYS",
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "leverage": 1.0,
+    }
+
+    with pytest.raises(ValueError, match="Unsupported futures position side"):
+        calculator.calculate(position, 0.001)
+
+
+
+def test_funding_uses_exchange_mark_price_when_available():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "current_price": 105.0,
+        "leverage": 5.0,
+    }
+
+    # The exchange mark price is the funding reference, not last-traded price.
+    assert calculator.calculate(position, 0.01, mark_price=110.0) == pytest.approx(1.1)
+
+
+def test_funding_rejects_invalid_mark_price():
+    calculator = FundingCalculator()
+    position = {
+        "market": "FUTURES",
+        "side": "LONG",
+        "amount": 1.0,
+        "entry_price": 100.0,
+        "leverage": 1.0,
+    }
+
+    with pytest.raises(ValueError, match="Funding mark price"):
+        calculator.calculate(position, 0.01, mark_price=float("nan"))
+
+
+
+def test_futures_fee_is_independent_of_leverage():
+    calc = FeeCalculator()
+    low = calc.calculate("FUTURES", "LONG", 0.2, 50000.0, 1.0)
+    high = calc.calculate("FUTURES", "LONG", 0.2, 50000.0, 20.0)
+    assert low == pytest.approx(5.0)
+    assert high == pytest.approx(low)
+
+
+def test_spot_fee_is_independent_of_leverage_argument():
+    calc = FeeCalculator()
+    low = calc.calculate("SPOT", "BUY", 0.2, 50000.0, 1.0)
+    high = calc.calculate("SPOT", "BUY", 0.2, 50000.0, 5.0)
+    assert low == pytest.approx(10.0)
+    assert high == pytest.approx(low)
+
+
+def test_slippage_volume_impact_uses_notional_not_leveraged_margin():
+    calc = FeeCalculator()
+    low = calc.calculate_slippage("FUTURES", "MARKET", 1.0, 100.0, 1.0, 10000.0)
+    high = calc.calculate_slippage("FUTURES", "MARKET", 1.0, 100.0, 20.0, 10000.0)
+    assert high == pytest.approx(low)
+
+
+
+@pytest.mark.parametrize(("side", "expected"), [
+    ("LONG", 20.0),
+    ("BUY", 20.0),
+    ("SHORT", -20.0),
+    ("SELL", -20.0),
+])
+def test_futures_realized_pnl_uses_underlying_notional_not_leverage(side, expected):
+    from paper_trading.pnl_calculator import PnLCalculator
+
+    position = {
+        "side": side,
+        "entry_price": 100.0,
+        "amount": 1.0,
+        "leverage": 10.0,
+    }
+    assert PnLCalculator().realized(position, 120.0) == pytest.approx(expected if side in ("LONG", "BUY") else -20.0)
+
+
+def test_futures_unrealized_pnl_is_independent_of_leverage():
+    from paper_trading.pnl_calculator import PnLCalculator
+
+    calculator = PnLCalculator()
+    base = {"side": "LONG", "entry_price": 100.0, "amount": 2.0, "leverage": 1.0}
+    leveraged = {**base, "leverage": 25.0}
+
+    assert calculator.unrealized(base, 110.0) == pytest.approx(20.0)
+    assert calculator.unrealized(leveraged, 110.0) == pytest.approx(20.0)
+
+
+def test_short_realized_pnl_direction_is_correct_without_leverage_multiplier():
+    from paper_trading.pnl_calculator import PnLCalculator
+
+    position = {"side": "SHORT", "entry_price": 100.0, "amount": 2.0, "leverage": 20.0}
+    calculator = PnLCalculator()
+
+    assert calculator.realized(position, 90.0) == pytest.approx(20.0)
+    assert calculator.realized(position, 110.0) == pytest.approx(-20.0)
+
+
+
+@pytest.mark.asyncio
+async def test_futures_margin_is_reserved_and_released_on_close():
+    sim = Simulator(EventBus())
+    sim.futures_balance = 1000.0
+    signal = {
+        "signal_id": "MARGIN-OPEN",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 96.0,
+        "take_profit": [120.0],
+        "leverage": 2.0,
+        "order_type": "LIMIT",
+    }
+    position_id = await sim.execute_signal(signal, quantity_override=0.1)
+    assert position_id is not None
+    position = sim.futures_positions[position_id]
+    expected_margin = position["entry_price"] * position["amount"] / position["leverage"]
+    assert position["reserved_margin"] == pytest.approx(expected_margin)
+    assert sim.futures_balance == pytest.approx(1000.0 - expected_margin - position["fees_paid"])
+
+    assert await sim._close_position(position, 110.0, "MANUAL") is True
+    assert position_id not in sim.futures_positions
+    # The close fill includes the simulator's exit slippage and fees. The
+    # account-level invariant is that released margin plus net realized P&L
+    # returns to the available balance; do not reconstruct it from the
+    # requested trigger price.
+    assert sim.futures_balance == pytest.approx(1000.0 + position["realized_pnl"])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_futures_entries_cannot_allocate_same_margin_twice():
+    simulator = Simulator(EventBus())
+    simulator.futures_balance = 100.0
+    simulator.risk_manager.max_risk_pct = 2.0
+    simulator.risk_manager.max_open_risk_pct = 5.0
+    simulator.risk_manager.max_position_size_pct = 100.0
+    simulator.risk_manager.max_asset_exposure_pct = 100.0
+    simulator.validate_new_position = lambda *_args: (True, "OK")
+    signal = {
+        "signal_id": "CONCURRENT-MARGIN",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": 1.0,
+    }
+    first, second = await asyncio.gather(
+        simulator.execute_signal(signal, quantity_override=0.9),
+        simulator.execute_signal({**signal, "symbol": "ETHUSDT"}, quantity_override=0.9),
+    )
+    opened = [value for value in (first, second) if value]
+    assert len(opened) == 2
+    assert opened[0] == opened[1]  # duplicate signal is idempotently acknowledged, never filled twice
+    assert simulator.futures_balance >= -1e-9
+    assert len(simulator.futures_positions) == 1
+
+
+@pytest.mark.asyncio
+async def test_partial_futures_close_releases_proportional_margin_and_records_trade():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *_args: 0.0
+    simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
+    signal = {
+        "signal_id": "PARTIAL-MARGIN",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": 2.0,
+    }
+    position_id = await simulator.execute_signal(signal, quantity_override=0.1)
+    position = simulator.futures_positions[position_id]
+    original_margin = position["reserved_margin"]
+    original_balance = simulator.futures_balance
+
+    assert await simulator._partial_close_position(position, 110.0, 0.04) is True
+    assert position["amount"] == pytest.approx(0.06)
+    assert position["reserved_margin"] == pytest.approx(original_margin * 0.6)
+    assert simulator.futures_balance == pytest.approx(original_balance + original_margin * 0.4 + 0.4)
+    assert len(simulator.closed_trades) == 1
+    assert simulator.closed_trades[0]["amount"] == pytest.approx(0.04)
+    assert position_id in simulator.futures_positions
+
+
+@pytest.mark.asyncio
+async def test_partial_close_rejects_full_or_excess_quantity_without_mutation():
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *_args: 0.0
+    signal = {
+        "signal_id": "PARTIAL-INVALID",
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 90.0,
+        "take_profit": [120.0],
+        "leverage": 2.0,
+    }
+    position_id = await simulator.execute_signal(signal, quantity_override=0.1)
+    position = simulator.futures_positions[position_id]
+    before = dict(position)
+    with pytest.raises(ValueError):
+        await simulator._partial_close_position(position, 110.0, 0.1)
+    assert position == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("market,leverage,collateral_key,available_key,collateral", [
+    ("SPOT", 1.0, "reserved_notional", "spot_available_balance", 100.0),
+    ("FUTURES", 3.0, "reserved_margin", "futures_available_balance", 100.0 / 3.0),
+])
+async def test_opening_position_at_entry_price_preserves_portfolio_equity(
+    market, leverage, collateral_key, available_key, collateral
+):
+    from src_tauri.backend.bridge.orchestrator_bridge import OrchestratorBridge
+
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *_args: 0.0
+    simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
+    simulator.risk_manager.max_risk_pct = 2.0
+    simulator.validate_new_position = lambda *_args: (True, "OK")
+    simulator._calculate_order_quantity = lambda *_args: (1.0, leverage)
+
+    bridge = object.__new__(OrchestratorBridge)
+    bridge.simulator = simulator
+    bridge._all_closed_trades = lambda: []
+    bridge.get_trade_statistics = lambda: {"max_drawdown_pct": 0.0}
+
+    before = bridge.get_portfolio_summary()
+    signal = {
+        "signal_id": f"PORTFOLIO-EQUITY-{market}",
+        "symbol": "BTCUSDT",
+        "market": market,
+        "direction": "LONG",
+        "entry": 100.0,
+        "stop_loss": 96.0,
+        "take_profit": [120.0],
+        "leverage": leverage,
+    }
+    position_id = await simulator.execute_signal(signal, quantity_override=1.0)
+    assert position_id is not None
+    await simulator.update_prices(market, "BTCUSDT", 100.0)
+    after = bridge.get_portfolio_summary()
+    account = simulator.get_account_equity_breakdown()
+
+    assert after["total_balance"] == pytest.approx(before["total_balance"])
+    assert after["total_return_pct"] == pytest.approx(before["total_return_pct"])
+    assert account[available_key] == pytest.approx(
+        (simulator.initial_spot_balance if market == "SPOT" else simulator.initial_futures_balance) - collateral
+    )
+    assert account["total_used_capital"] >= collateral
+    assert account["total_equity"] == pytest.approx(before["total_balance"])
+    assert simulator._get_positions(market)[position_id][collateral_key] == pytest.approx(collateral)
+
+@pytest.mark.asyncio
+async def test_daily_loss_gate_includes_unrealized_losses_and_total_equity():
+    simulator = Simulator(EventBus())
+    simulator.spot_balance -= 100.0
+    simulator.spot_positions["POS-DAY-LOSS"] = {
+        "position_id": "POS-DAY-LOSS", "symbol": "ETHUSDT", "market": "SPOT",
+        "side": "BUY", "entry_price": 100.0, "amount": 1.0,
+        "current_price": 75.0, "reserved_notional": 100.0,
+        "unrealized_pnl": -25.0, "stop_loss": 70.0, "status": "OPEN",
+    }
+    assert simulator.get_account_equity_breakdown()["total_equity"] == pytest.approx(975.0)
+    assert simulator.get_daily_pnl() == pytest.approx(-25.0)
+    assert simulator.get_daily_equity_baseline() == pytest.approx(1000.0)
+
+    signal = {
+        "signal_id": "SIG-UNREALIZED-DAILY-LOSS", "symbol": "BTCUSDT",
+        "market": "FUTURES", "direction": "LONG", "entry": 100.0,
+        "stop_loss": 90.0, "take_profit": [120.0], "leverage": 1.0,
+    }
+    allowed, reason = simulator.validate_new_position(signal)
+    assert allowed is False
+    assert reason == "Daily loss limit exceeded"
+
+
+def test_daily_equity_baseline_persists_and_restores():
+    simulator = Simulator(EventBus())
+    simulator.daily_start_equity = 1000.0
+    simulator.spot_balance -= 30.0
+    state = simulator.get_state_snapshot()
+
+    restored = Simulator(EventBus())
+    restored.restore_state(state)
+
+    assert restored.daily_start_equity == pytest.approx(1000.0)
+    assert restored.get_daily_pnl() == pytest.approx(-30.0)
+
+
+def test_daily_equity_baseline_resets_on_utc_rollover():
+    simulator = Simulator(EventBus())
+    simulator.spot_balance -= 35.0
+    simulator.daily_pnl_date = datetime.now(timezone.utc).date() - timedelta(days=1)
+    simulator.daily_pnl = -35.0
+
+    assert simulator.get_daily_pnl() == pytest.approx(0.0)
+    assert simulator.daily_start_equity == pytest.approx(965.0)
+
+def test_daily_equity_risk_state_round_trip(tmp_path):
+    from datetime import date
+    from core.daily_equity_state import load_daily_equity_state, save_daily_equity_state
+
+    path = tmp_path / "daily-equity.json"
+    save_daily_equity_state("2026-11-22", 987.65, path)
+    assert load_daily_equity_state(path) == {
+        "date": date(2026, 11, 22),
+        "equity": pytest.approx(987.65),
+    }
+
+
+def test_daily_equity_risk_state_rejects_corrupt_file(tmp_path):
+    from core.daily_equity_state import load_daily_equity_state
+
+    path = tmp_path / "daily-equity.json"
+    path.write_text("{invalid", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="daily equity risk state"):
+        load_daily_equity_state(path)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_limit_order_never_fills_and_duplicate_cancel_is_noop():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-CANCEL-REGRESSION",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+
+    cancelled = await simulator.cancel_limit_order(order_id)
+    assert cancelled is not None
+    assert cancelled["status"] == "CANCELLED"
+    assert order_id not in simulator.open_orders
+    assert await simulator.cancel_limit_order(order_id) is None
+
+    await simulator.check_limit_orders("SPOT", "BTCUSDT", 48000.0)
+    assert simulator.spot_positions == {}
+    assert simulator.spot_balance == pytest.approx(simulator.initial_spot_balance)
+
+
+@pytest.mark.asyncio
+async def test_order_id_makes_execution_idempotent_and_blocks_reexecution_after_close():
+    simulator = Simulator(EventBus())
+    signal = {
+        "signal_id": "SIG-IDEMPOTENT-ORDER",
+        "order_id": "ORD-IDEMPOTENT-001",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 50000.0,
+        "stop_loss": 49000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+
+    first_position_id = await simulator.execute_signal(signal)
+    assert first_position_id is not None
+    balance_after_open = simulator.spot_balance
+    duplicate_position_id = await simulator.execute_signal(signal)
+    assert duplicate_position_id == first_position_id
+    assert len(simulator.spot_positions) == 1
+    assert simulator.spot_balance == pytest.approx(balance_after_open)
+
+    position = simulator.spot_positions[first_position_id]
+    assert await simulator._close_position(position, 51000.0, "TEST") is True
+    balance_after_close = simulator.spot_balance
+    assert await simulator.execute_signal(signal) is None
+    assert simulator.spot_positions == {}
+    assert len(simulator.closed_trades) == 1
+    assert simulator.spot_balance == pytest.approx(balance_after_close)
+
+    restored = Simulator(EventBus())
+    restored.restore_state(simulator.get_state_snapshot())
+    restored_balance = restored.spot_balance
+    assert await restored.execute_signal(signal) is None
+    assert restored.spot_balance == pytest.approx(restored_balance)
+    assert len(restored.closed_trades) == 1
+
+
+@pytest.mark.asyncio
+async def test_closed_trade_preserves_excursions_prediction_and_independent_pnl_audit():
+    import json
+
+    simulator = Simulator(EventBus())
+    simulator.fee_calc.calculate = lambda *_args: 0.0
+    simulator.fee_calc.get_fill_price = lambda _market, _side, _type, price, *_args: price
+    signal = {
+        "signal_id": "AUDIT-OUTCOME-001", "symbol": "BTCUSDT", "market": "SPOT",
+        "direction": "LONG", "entry": 100.0, "stop_loss": 90.0,
+        "take_profit": [120.0], "leverage": 1.0, "_model_evidence": {
+            "available": True, "predicted_class": "UP", "confidence": 0.71,
+            "model_version": "validated-fixture",
+        },
+    }
+    position_id = await simulator.execute_signal(signal, quantity_override=0.1)
+    assert position_id is not None
+    await simulator.update_prices("SPOT", "BTCUSDT", 102.0)
+    position = simulator.spot_positions[position_id]
+    assert position["max_favorable_excursion_pct"] == pytest.approx(2.0)
+    assert await simulator._close_position(position, 103.0, "TEST")
+    trade = simulator.closed_trades[-1]
+    assert trade["max_favorable_excursion_pct"] == pytest.approx(2.0)
+    assert trade["prediction_correct"] is True
+    assert trade["risk_calculation_verified"] is True
+    assert json.loads(trade["calculation_audit_json"])["status"] == "VERIFIED"
+
+
+@pytest.mark.asyncio
+async def test_order_cancellation_emits_trade_cancelled_event():
+    bus = EventBus()
+    simulator = Simulator(bus)
+    signal = {
+        "signal_id": "SIG-CANCEL-EVENT",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "direction": "LONG",
+        "entry": 49000.0,
+        "stop_loss": 48000.0,
+        "take_profit": [52000.0],
+        "leverage": 1.0,
+    }
+    order_id = await simulator.place_limit_order(signal)
+    assert order_id is not None
+    await simulator.cancel_limit_order(order_id)
+
+    events = []
+    while bus.pending:
+        events.append(bus._queue.get_nowait())
+    assert any(event.event_type == "TRADE_CANCELLED" for event in events)

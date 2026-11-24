@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T05:24:34.769778+00:00",
+  "description": "shutdown",
+  "database_name": "tmpxlon23np",
+  "compressed": true,
+  "backup_file": "tmpxlon23np_20261124_052434_696765_shutdown.db.gz",
+  "backup_size_bytes": 6180,
+  "sha256": "878783803adcf77ff7ec3b7fbc1cdd5340c9986bb200781777d99540102f3e05",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-23T21:06:55.083119+00:00",
+  "description": "shutdown",
+  "database_name": "tmp7omhirv8",
+  "compressed": true,
+  "backup_file": "tmp7omhirv8_20261123_210655_031663_shutdown.db.gz",
+  "backup_size_bytes": 6335,
+  "sha256": "e319aaf12fd961f95541f7bab5687e557bde99edeb99554e25dfae232b048213",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

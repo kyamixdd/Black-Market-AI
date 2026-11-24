@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T05:43:12.196586+00:00",
+  "description": "shutdown",
+  "database_name": "tmpjmwu_g2r",
+  "compressed": true,
+  "backup_file": "tmpjmwu_g2r_20261124_054312_110980_shutdown.db.gz",
+  "backup_size_bytes": 6336,
+  "sha256": "16a95888720565d7bd094eab5b6957aced490dc639c9f39d8612c9c59bf17390",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

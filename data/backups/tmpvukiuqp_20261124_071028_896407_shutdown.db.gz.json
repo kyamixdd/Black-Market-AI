@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T07:10:29.358436+00:00",
+  "description": "shutdown",
+  "database_name": "tmpvukiuqp",
+  "compressed": true,
+  "backup_file": "tmpvukiuqp_20261124_071028_896407_shutdown.db.gz",
+  "backup_size_bytes": 6190,
+  "sha256": "87c6a30a127ddebf8f140eb19509deb9733604fd58f191db3312e722bb5affd7",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

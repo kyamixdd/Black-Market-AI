@@ -1,0 +1,67 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "BlackMarket AI",
+  "version": "1.0.0",
+  "identifier": "com.blackmarket.ai",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:3000",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "create": false,
+        "title": "BlackMarket AI",
+        "visible": true,
+        "width": 1600,
+        "height": 1000,
+        "resizable": true,
+        "fullscreen": false,
+        "minWidth": 1200,
+        "minHeight": 800
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:8765 ws://127.0.0.1:8765; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": {
+      "../../config.py": "blackmarket_backend/config.py",
+      "../../core/*.py": "blackmarket_backend/core/",
+      "../../database/*.py": "blackmarket_backend/database/",
+      "../../exchange/*.py": "blackmarket_backend/exchange/",
+      "../../intelligence/*.py": "blackmarket_backend/intelligence/",
+      "../../learning/*.py": "blackmarket_backend/learning/",
+      "../../market/*.py": "blackmarket_backend/market/",
+      "../../monitoring/*.py": "blackmarket_backend/monitoring/",
+      "../../notifications/*.py": "blackmarket_backend/notifications/",
+      "../../paper_trading/*.py": "blackmarket_backend/paper_trading/",
+      "../../risk/*.py": "blackmarket_backend/risk/",
+      "../../strategies/*.py": "blackmarket_backend/strategies/",
+      "../../src_tauri/backend/*.py": "blackmarket_backend/src_tauri/backend/",
+      "../../src_tauri/backend/api/*.py": "blackmarket_backend/src_tauri/backend/api/",
+      "../../src_tauri/backend/api/routes/*.py": "blackmarket_backend/src_tauri/backend/api/routes/",
+      "../../src_tauri/backend/api/websocket/*.py": "blackmarket_backend/src_tauri/backend/api/websocket/",
+      "../../src_tauri/backend/bridge/*.py": "blackmarket_backend/src_tauri/backend/bridge/",
+      "resources/backend/": "blackmarket_backend/backend/"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

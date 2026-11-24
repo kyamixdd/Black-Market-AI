@@ -1,0 +1,269 @@
+"""Walk-forward validation for time-series models."""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import numpy as np
+import xgboost as xgb
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, f1_score, precision_recall_fscore_support, precision_score, recall_score
+from sklearn.model_selection import TimeSeriesSplit
+
+from config import (
+    MIN_VALIDATION_ACCURACY,
+    MIN_VALIDATION_F1,
+    VALIDATION_METRIC,
+    WALK_FORWARD_MIN_SAMPLES,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class WalkForwardValidator:
+    """Walk-forward validation for time-ordered data."""
+
+    def __init__(
+        self, n_splits: int = 5,
+        min_train_size: int = WALK_FORWARD_MIN_SAMPLES,
+        test_size: int | None = None,
+        gap: int = 0,
+        max_train_size: int | None = None,
+    ):
+        if n_splits < 1 or min_train_size < 1 or gap < 0:
+            raise ValueError("n_splits/min_train_size must be positive and gap non-negative")
+        self.n_splits = n_splits
+        self.min_train_size = min_train_size
+        self.test_size = test_size
+        self.gap = gap
+        self.max_train_size = max_train_size
+
+    def validate(
+        self, X: np.ndarray, y: np.ndarray, model_factory: Any,
+        metric: str | None = None, timestamps: Any = None,
+        gap: int | None = None, label_horizon: int = 0,
+        test_size: int | None = None,
+        purge_gap_ms: int = 0,
+    ) -> dict[str, Any]:
+        """
+        Perform walk-forward validation.
+
+        Args:
+            X: Feature matrix (time-ordered)
+            y: Target vector (time-ordered)
+            model_factory: Function returning a fresh model instance
+            metric: Metric to optimize ('accuracy', 'f1', 'precision', 'recall'). Defaults to config VALIDATION_METRIC.
+
+        Returns:
+            Dict with validation results and metrics
+        """
+        metric = (metric or VALIDATION_METRIC).lower()
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if X.ndim != 2 or y.ndim != 1 or len(X) != len(y):
+            raise ValueError("X must be 2D and y must be a 1D aligned target")
+        if label_horizon < 0 or purge_gap_ms < 0:
+            raise ValueError("label_horizon and purge_gap_ms cannot be negative")
+        effective_gap = max(self.gap if gap is None else gap, label_horizon)
+        if effective_gap < 0:
+            raise ValueError("gap cannot be negative")
+        time_values = None
+        if timestamps is not None:
+            time_values = np.asarray(timestamps)
+            if time_values.ndim != 1 or len(time_values) != len(X):
+                raise ValueError("timestamps must be a 1D array aligned with X and y")
+            normalized = []
+            for value in time_values:
+                if isinstance(value, np.datetime64):
+                    if np.isnat(value):
+                        raise ValueError("timestamps cannot contain NaT")
+                    value = value.astype("datetime64[ns]").astype(np.int64)
+                elif hasattr(value, "timestamp") and callable(value.timestamp):
+                    value = int(value.timestamp() * 1000)
+                elif isinstance(value, (int, float, np.integer, np.floating)):
+                    value = value.item() if hasattr(value, "item") else value
+                normalized.append(value)
+            time_values = np.asarray(normalized)
+            try:
+                # Multiple symbols can legitimately share a candle close time.
+                # Preserve their separate training rows while requiring the
+                # combined data to remain chronological.
+                if any(normalized[i] > normalized[i + 1] for i in range(len(normalized)-1)):
+                    raise ValueError("timestamps must be in chronological order")
+            except TypeError as exc:
+                raise ValueError("timestamps must have a comparable type") from exc
+
+        if len(X) < self.min_train_size * 2:
+            logger.warning("Insufficient data for walk-forward: %d samples", len(X))
+            return {"valid": False, "reason": "insufficient_data"}
+
+        fold_test_size = test_size if test_size is not None else self.test_size
+        tscv = TimeSeriesSplit(
+            n_splits=self.n_splits,
+            test_size=fold_test_size,
+            max_train_size=self.max_train_size,
+            gap=effective_gap,
+        )
+        fold_metrics = []
+        out_of_fold = []
+
+        split_source = np.unique(time_values) if time_values is not None else X
+        for fold, (candidate_train_idx, candidate_test_idx) in enumerate(tscv.split(split_source)):
+            if time_values is not None:
+                test_times = split_source[candidate_test_idx]
+                test_start_time, test_end_time = test_times[0], test_times[-1]
+                test_idx = np.flatnonzero((time_values >= test_start_time) & (time_values <= test_end_time))
+                train_idx = np.flatnonzero(time_values < test_start_time)
+                # Preserve the row-based label horizon in addition to the
+                # elapsed-time purge. Target windows of the final training
+                # rows must not overlap the test fold.
+                if effective_gap > 0:
+                    train_idx = train_idx[:-effective_gap] if len(train_idx) > effective_gap else np.array([], dtype=int)
+                if purge_gap_ms > 0:
+                    cutoff = test_start_time - purge_gap_ms
+                    train_idx = train_idx[time_values[train_idx] < cutoff]
+            else:
+                train_idx, test_idx = candidate_train_idx, candidate_test_idx
+            if len(train_idx) < self.min_train_size:
+                continue
+
+            if train_idx[-1] >= test_idx[0]:
+                raise RuntimeError("walk-forward training overlaps the future test window")
+            X_train, X_test = X[train_idx], X[test_idx]
+            y_train, y_test = y[train_idx], y[test_idx]
+
+            # Train model
+            model = model_factory()
+            model.fit(X_train, y_train)
+
+            # Predict
+            y_pred = model.predict(X_test)
+            if hasattr(model, "predict_proba"):
+                try:
+                    raw_probabilities = np.asarray(model.predict_proba(X_test), dtype=float)
+                    model_classes = np.asarray(getattr(model, "classes_", np.unique(y_train)))
+                    probabilities = np.zeros((len(X_test), 3), dtype=float)
+                    for class_index, class_value in enumerate(model_classes):
+                        class_id = int(class_value)
+                        if class_id in (0, 1, 2) and class_index < raw_probabilities.shape[1]:
+                            probabilities[:, class_id] = raw_probabilities[:, class_index]
+                    row_sums = probabilities.sum(axis=1, keepdims=True)
+                    probabilities = np.divide(probabilities, row_sums, out=np.zeros_like(probabilities), where=row_sums > 0)
+                except Exception:
+                    probabilities = np.eye(3, dtype=float)[np.clip(np.asarray(y_pred, dtype=int), 0, 2)]
+            else:
+                probabilities = np.eye(3, dtype=float)[np.clip(np.asarray(y_pred, dtype=int), 0, 2)]
+            for row_index, truth, prediction, probability in zip(test_idx, y_test, y_pred, probabilities):
+                out_of_fold.append({
+                    "index": int(row_index), "y_true": int(truth), "y_pred": int(prediction),
+                    "probabilities": probability.tolist(),
+                })
+
+            # Calculate metrics
+            fold_result = {
+                "fold": fold,
+                "train_size": len(train_idx),
+                "test_size": len(test_idx),
+                "train_start_index": int(train_idx[0]),
+                "train_end_index": int(train_idx[-1]),
+                "test_start_index": int(test_idx[0]),
+                "test_end_index": int(test_idx[-1]),
+                "purged_samples": int(test_idx[0] - train_idx[-1] - 1),
+                "purge_gap_ms": int(purge_gap_ms),
+                "accuracy": float(accuracy_score(y_test, y_pred)),
+                "precision_macro": float(precision_score(y_test, y_pred, average="macro", zero_division=0)),
+                "recall_macro": float(recall_score(y_test, y_pred, average="macro", zero_division=0)),
+                "f1_macro": float(f1_score(y_test, y_pred, average="macro", zero_division=0)),
+                "per_class": {
+                    label: {
+                        "precision": float(values[0]),
+                        "recall": float(values[1]),
+                        "f1": float(values[2]),
+                        "support": int(values[3]),
+                    }
+                    for label, values in zip(
+                        ("DOWN", "FLAT", "UP"),
+                        zip(*precision_recall_fscore_support(
+                            y_test, y_pred, labels=[0, 1, 2], zero_division=0
+                        )),
+                    )
+                },
+                "calibration_score": float(1.0 - np.square(
+                    probabilities - np.eye(3, dtype=float)[np.asarray(y_test, dtype=int)]
+                ).sum(axis=1).mean() / 2.0),
+            }
+            if time_values is not None:
+                fold_result.update({
+                    "train_start_time": time_values[train_idx[0]].item() if hasattr(time_values[train_idx[0]], "item") else time_values[train_idx[0]],
+                    "train_end_time": time_values[train_idx[-1]].item() if hasattr(time_values[train_idx[-1]], "item") else time_values[train_idx[-1]],
+                    "test_start_time": time_values[test_idx[0]].item() if hasattr(time_values[test_idx[0]], "item") else time_values[test_idx[0]],
+                    "test_end_time": time_values[test_idx[-1]].item() if hasattr(time_values[test_idx[-1]], "item") else time_values[test_idx[-1]],
+                })
+            fold_metrics.append(fold_result)
+            logger.debug("Fold %d: acc=%.4f, f1=%.4f", fold, fold_result["accuracy"], fold_result["f1_macro"])
+
+        if not fold_metrics:
+            return {"valid": False, "reason": "no_valid_folds"}
+
+        # Aggregate metrics
+        avg_metrics = {
+            "mean_accuracy": np.mean([m["accuracy"] for m in fold_metrics]),
+            "std_accuracy": np.std([m["accuracy"] for m in fold_metrics]),
+            "mean_f1": np.mean([m["f1_macro"] for m in fold_metrics]),
+            "std_f1": np.std([m["f1_macro"] for m in fold_metrics]),
+            "mean_precision": np.mean([m["precision_macro"] for m in fold_metrics]),
+            "mean_recall": np.mean([m["recall_macro"] for m in fold_metrics]),
+        }
+
+        # Use the metric of interest
+        primary_metric = f"mean_{metric}" if metric != "accuracy" else "mean_accuracy"
+        primary_value = avg_metrics.get(primary_metric, avg_metrics["mean_accuracy"])
+
+        result = {
+            "valid": True,
+            "folds": fold_metrics,
+            "aggregated": avg_metrics,
+            "out_of_fold": sorted(out_of_fold, key=lambda item: item["index"]),
+            "primary_metric": metric,
+            "primary_value": primary_value,
+            "passes_threshold": primary_value >= self._get_threshold(metric),
+            "min_samples_per_fold": self.min_train_size,
+        }
+
+        logger.info("Walk-forward validation: %s=%.4f (threshold=%s), passes=%s",
+                    metric, primary_value, self._get_threshold(metric), result["passes_threshold"])
+        return result
+
+    def _get_threshold(self, metric: str) -> float:
+        """Get minimum threshold for validation metric from config."""
+        thresholds = {
+            "accuracy": MIN_VALIDATION_ACCURACY,
+            "f1": MIN_VALIDATION_F1,
+            "precision": MIN_VALIDATION_F1,
+            "recall": MIN_VALIDATION_F1,
+        }
+        return thresholds.get(metric, MIN_VALIDATION_ACCURACY)
+
+    def validate_ensemble(self, X: np.ndarray, y: np.ndarray,
+                          rf_params: dict | None = None, xgb_params: dict | None = None,
+                          timestamps: Any = None, purge_gap_ms: int = 0) -> dict[str, Any]:
+        """Validate both RF and XGBoost, return combined results."""
+        rf_params = rf_params or {"n_estimators": 100, "max_depth": 10, "random_state": 42, "n_jobs": -1}
+        xgb_params = xgb_params or {"n_estimators": 100, "max_depth": 6, "learning_rate": 0.05,
+                                    "random_state": 42, "n_jobs": 1, "eval_metric": "mlogloss"}
+
+        def rf_factory():
+            return RandomForestClassifier(**rf_params)
+
+        def xgb_factory():
+            return xgb.XGBClassifier(**xgb_params)
+
+        rf_result = self.validate(X, y, rf_factory, "f1", timestamps=timestamps, purge_gap_ms=purge_gap_ms)
+        xgb_result = self.validate(X, y, xgb_factory, "f1", timestamps=timestamps, purge_gap_ms=purge_gap_ms)
+
+        return {
+            "rf": rf_result,
+            "xgb": xgb_result,
+            "ensemble_passes": rf_result.get("passes_threshold", False) and xgb_result.get("passes_threshold", False),
+            "recommended_model": "rf" if rf_result.get("primary_value", 0) > xgb_result.get("primary_value", 0) else "xgb",
+        }

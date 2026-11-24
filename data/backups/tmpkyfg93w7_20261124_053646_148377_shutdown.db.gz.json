@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T05:36:46.283480+00:00",
+  "description": "shutdown",
+  "database_name": "tmpkyfg93w7",
+  "compressed": true,
+  "backup_file": "tmpkyfg93w7_20261124_053646_148377_shutdown.db.gz",
+  "backup_size_bytes": 6185,
+  "sha256": "380c783b98ee34ef5f1ce7fcaae501a7c172dbca1def8da48b3bd84fd332a62b",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

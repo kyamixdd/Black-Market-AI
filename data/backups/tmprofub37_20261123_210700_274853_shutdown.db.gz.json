@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-23T21:07:00.331032+00:00",
+  "description": "shutdown",
+  "database_name": "tmprofub37",
+  "compressed": true,
+  "backup_file": "tmprofub37_20261123_210700_274853_shutdown.db.gz",
+  "backup_size_bytes": 6182,
+  "sha256": "3a3dfaa86c9ba629f3c214ae6e9cedf08bdaf1ebd9b3814e2df6536840789f20",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

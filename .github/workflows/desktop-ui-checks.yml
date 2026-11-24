@@ -1,0 +1,323 @@
+name: BlackMarket AI CI
+
+on:
+  pull_request:
+    branches:
+      - black-market-ai-beta
+      - main
+  push:
+    branches:
+      - black-market-ai-beta
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: blackmarket-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-backend:
+    name: Python backend regression tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            src_tauri/backend/requirements.txt
+
+      - name: Install backend and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r src_tauri/backend/requirements.txt
+          python -m pip install pytest pytest-asyncio
+
+      - name: Build and verify installable Python wheel
+        run: |
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/wheels" .
+          python -m pip install --no-deps --target "$RUNNER_TEMP/blackmarket-wheel" "$RUNNER_TEMP"/wheels/*.whl
+          cd "$RUNNER_TEMP"
+          PYTHONPATH="$RUNNER_TEMP/blackmarket-wheel" python -c "import config, main, monitoring, risk; import src_tauri.backend.main"
+
+      - name: Compile backend and core packages
+        run: python -m compileall -q core exchange market intelligence strategies learning paper_trading database src_tauri/backend
+
+      - name: Run Python regression suite (network-dependent exchange smoke tests excluded)
+        run: python -m pytest -q -m "not live"
+
+  desktop:
+    name: Desktop TypeScript, lint, and market-data tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: blackmarket-desktop/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+        working-directory: blackmarket-desktop
+
+      - name: Verify product version consistency
+        run: python ../scripts/verify_release_version.py
+        working-directory: blackmarket-desktop
+
+      - name: TypeScript and production build
+        run: npm run build
+        working-directory: blackmarket-desktop
+
+      - name: Lint
+        run: npm run lint
+        working-directory: blackmarket-desktop
+
+      - name: API and market-data integration tests
+        run: npm test
+        working-directory: blackmarket-desktop
+
+  website:
+    name: Shared website frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: |
+            blackmarket-desktop/package-lock.json
+            blackmarket-web/package-lock.json
+
+      - name: Install canonical desktop frontend dependencies
+        run: npm ci
+        working-directory: blackmarket-desktop
+
+      - name: Install website dependencies
+        run: npm ci
+        working-directory: blackmarket-web
+
+      - name: Hosted authentication and rate-limit security tests
+        run: npm run test:security
+        working-directory: blackmarket-web
+
+      - name: TypeScript check
+        run: npm run lint
+        working-directory: blackmarket-web
+
+      - name: Production website build
+        run: npm run build
+        working-directory: blackmarket-web
+
+  responsive-browser:
+    name: Responsive browser smoke tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: |
+            blackmarket-desktop/package-lock.json
+            blackmarket-web/package-lock.json
+      - name: Install locked frontend dependencies
+        run: npm ci
+        working-directory: blackmarket-desktop
+      - name: Build production frontend
+        run: npm run build
+        working-directory: blackmarket-desktop
+      - name: Install Playwright browser test runner
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+        working-directory: blackmarket-desktop
+      - name: Check responsive layouts at mobile, tablet, and desktop widths
+        run: node ../scripts/responsive_smoke.mjs
+        working-directory: blackmarket-desktop
+
+  rust-tauri:
+    name: Rust and Tauri compile checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Install Tauri Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file libxdo-dev libssl-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Install stable Rust toolchain and rustfmt
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+      - name: Prepare Tauri resource directory for compile-only check
+        run: |
+          mkdir -p resources/backend ../dist
+          printf 'Compile-only placeholder; packaged builds use the Windows backend bundle.\n' > resources/backend/.ci-placeholder
+        working-directory: blackmarket-desktop/src-tauri
+      - name: Compile Tauri application
+        run: cargo check --locked
+        working-directory: blackmarket-desktop/src-tauri
+
+  dependency-audit:
+    name: Dependency vulnerability audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Audit pinned Python runtime dependencies
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r src_tauri/backend/requirements.txt
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: |
+            blackmarket-desktop/package-lock.json
+            blackmarket-web/package-lock.json
+      - name: Audit locked frontend dependencies
+        run: |
+          npm ci
+          npm audit --audit-level=high
+        working-directory: blackmarket-desktop
+      - name: Audit locked website dependencies
+        run: |
+          npm ci
+          npm audit --audit-level=high
+        working-directory: blackmarket-web
+
+  windows-installer-smoke:
+    name: Windows bundled backend and NSIS install smoke test
+    runs-on: windows-latest
+    timeout-minutes: 70
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python build toolchain
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: blackmarket-desktop/package-lock.json
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - name: Verify product version consistency
+        run: python scripts/verify_release_version.py
+      - name: Build self-contained backend and NSIS installer
+        shell: pwsh
+        run: ./scripts/build_windows_installer.ps1
+      - name: Install silently and verify startup without Python on PATH
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "blackmarket-desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced." }
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
+          $appRoot = Join-Path $env:LOCALAPPDATA "BlackMarket AI"
+          $appExe = Get-ChildItem $appRoot -Filter "*.exe" -File -Recurse | Where-Object { $_.Name -notmatch "uninstall|setup" } | Select-Object -First 1
+          if (-not $appExe) { throw "Installed desktop executable was not found." }
+          $originalPath = $env:PATH
+          try {
+            $env:PATH = "$env:WINDIR\System32;$env:WINDIR"
+            $app = Start-Process -FilePath $appExe.FullName -PassThru
+            $deadline = (Get-Date).AddMinutes(3)
+            $ready = $false
+            while ((Get-Date) -lt $deadline) {
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 3
+                if ($health.backend_ready -and $health.database_connected -and $health.websocket_connected) { $ready = $true; break }
+              } catch {}
+              if ($app.HasExited) { throw "Desktop app exited before backend became ready (exit $($app.ExitCode))." }
+              Start-Sleep -Seconds 2
+            }
+            if (-not $ready) {
+              Write-Host "Last health response: $($health | ConvertTo-Json -Compress -Depth 5)"
+              $backendLog = Join-Path $appRoot "logs\backend.log"
+              if (Test-Path $backendLog) {
+                Write-Host "---- Bundled backend log (last 100 lines) ----"
+                Get-Content $backendLog -Tail 100 | Write-Host
+              } else {
+                Write-Host "Backend log not found at $backendLog"
+              }
+              Write-Host "---- Backend processes ----"
+              Get-CimInstance Win32_Process | Where-Object { $_.Name -match "BlackMarketBackend|app.exe" } | Select-Object Name,ProcessId,ExecutablePath,CommandLine | Format-List | Out-String | Write-Host
+              throw "Backend did not become healthy on 127.0.0.1:8765."
+            }
+            $null = $app.CloseMainWindow()
+            if (-not $app.WaitForExit(45000)) { Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue; $app.WaitForExit() }
+            $deadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $deadline -and (Get-Process BlackMarketBackend -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }
+            if (Get-Process BlackMarketBackend -ErrorAction SilentlyContinue) { throw "Backend remained running after desktop shutdown." }
+          } finally { $env:PATH = $originalPath }
+          # Tauri stores user data outside the installation directory. Reinstalling
+          # must not erase the user's configuration/database directory.
+          $userDataDir = Join-Path $env:APPDATA "com.blackmarket.ai"
+          New-Item -ItemType Directory -Path $userDataDir -Force | Out-Null
+          $preservationMarker = Join-Path $userDataDir "ci-reinstall-preservation-marker.txt"
+          "keep-user-data" | Set-Content -LiteralPath $preservationMarker -Encoding ascii
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
+          if (-not (Test-Path -LiteralPath $preservationMarker)) {
+            throw "Reinstall removed user data from $userDataDir."
+          }
+          $uninstaller = Get-ChildItem $appRoot -Filter "uninstall.exe" -File -Recurse | Select-Object -First 1
+          if ($uninstaller) { Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait }
+          if (Get-Process BlackMarketBackend -ErrorAction SilentlyContinue) { throw "Backend remained running after uninstall." }
+      - name: Verify installer version and write provenance manifest
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "blackmarket-desktop/src-tauri/target/release/bundle/nsis" -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not produced." }
+          ./scripts/write_release_manifest.ps1 -InstallerPath $installer.FullName -OutputDirectory "release-output"
+      - name: Upload Windows installer and release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: blackmarket-ai-windows-nsis
+          path: |
+            blackmarket-desktop/src-tauri/target/release/bundle/nsis/*.exe
+            release-output/release-manifest.json
+            release-output/installer.sha256
+          if-no-files-found: error
+          retention-days: 7

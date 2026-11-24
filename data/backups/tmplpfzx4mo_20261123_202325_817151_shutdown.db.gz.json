@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-23T20:23:26.165871+00:00",
+  "description": "shutdown",
+  "database_name": "tmplpfzx4mo",
+  "compressed": true,
+  "backup_file": "tmplpfzx4mo_20261123_202325_817151_shutdown.db.gz",
+  "backup_size_bytes": 6182,
+  "sha256": "7508aa5c11b363ff9edc0e6c25cea26ba0fa1d46c732171e8dcdff9b21c3875a",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

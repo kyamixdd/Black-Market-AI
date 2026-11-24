@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T06:40:54.153039+00:00",
+  "description": "shutdown",
+  "database_name": "tmpqsqvnzb6",
+  "compressed": true,
+  "backup_file": "tmpqsqvnzb6_20261124_064054_064590_shutdown.db.gz",
+  "backup_size_bytes": 6344,
+  "sha256": "6f1ba2c9f9139fcf071511e4a71b89ce83c666396d20e2d2456bf3707fd5fa68",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

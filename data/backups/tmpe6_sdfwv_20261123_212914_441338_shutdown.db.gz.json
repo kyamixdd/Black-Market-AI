@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-23T21:29:15.061981+00:00",
+  "description": "shutdown",
+  "database_name": "tmpe6_sdfwv",
+  "compressed": true,
+  "backup_file": "tmpe6_sdfwv_20261123_212914_441338_shutdown.db.gz",
+  "backup_size_bytes": 6176,
+  "sha256": "ee54c9f6bccd98c8775809ea91c271582a6c8b305385d9e5e4d56c0102f01a2f",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

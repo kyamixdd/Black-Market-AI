@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T06:37:15.629276+00:00",
+  "description": "shutdown",
+  "database_name": "tmpfdjipfup",
+  "compressed": true,
+  "backup_file": "tmpfdjipfup_20261124_063715_505662_shutdown.db.gz",
+  "backup_size_bytes": 6192,
+  "sha256": "43925267606147bbb4346f4cf6c1e9e81e81079140658fa0b6664e75b6542918",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-23T21:06:54.893724+00:00",
+  "description": "shutdown",
+  "database_name": "tmp0s5eq9hm",
+  "compressed": true,
+  "backup_file": "tmp0s5eq9hm_20261123_210654_843279_shutdown.db.gz",
+  "backup_size_bytes": 6183,
+  "sha256": "b6ad73995b3fb999156f4c3346b85f169e2ec447aca1425dfe9fd8a50c8be433",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

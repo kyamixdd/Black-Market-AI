@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blackmarket-ai"
+version = "1.0.0"
+description = "Local autonomous market research and paper trading simulation platform"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp",
+    "websockets",
+    "python-dotenv",
+    "pydantic",
+    "sqlalchemy",
+    "aiosqlite",
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "xgboost",
+    "river",
+    "joblib",
+    "ta",
+    "rich",
+    "textual",
+    "fastapi>=0.165,<1",
+    "starlette>=1.10,<2",
+    "uvicorn[standard]>=0.30,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = [
+    "live: tests that call public exchange endpoints",
+]
+
+[tool.setuptools]
+py-modules = ["config", "main"]
+packages = [
+    "benchmarks", "benchmarks.assistant_outcomes", "core", "exchange", "market", "intelligence", "strategies",
+    "learning", "paper_trading", "notifications", "database", "terminal",
+    "risk", "monitoring", "src_tauri", "src_tauri.backend",
+    "src_tauri.backend.api", "src_tauri.backend.api.routes",
+    "src_tauri.backend.api.websocket", "src_tauri.backend.bridge",
+]

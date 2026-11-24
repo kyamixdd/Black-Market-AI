@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T07:10:51.068556+00:00",
+  "description": "shutdown",
+  "database_name": "tmpu6_6_x95",
+  "compressed": true,
+  "backup_file": "tmpu6_6_x95_20261124_071050_838603_shutdown.db.gz",
+  "backup_size_bytes": 6192,
+  "sha256": "cc09edd1e078a7cbadb24045aff552239acecb6dd3882492b0668a13908441d8",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

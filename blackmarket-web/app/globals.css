@@ -1,0 +1,61 @@
+/* Web entry/login styling uses the same shared terminal tokens as Tauri. */
+:root {
+  color-scheme: dark;
+  --bg: var(--bg-outer, #09090B);
+  --panel: var(--bg-panel, #111114);
+  --line: var(--border-panel, #303038);
+  --muted: var(--text-muted, #71717A);
+  --text: var(--text-primary, #F4F4F5);
+  --accent: var(--accent-neutral, #D4D4D8);
+}
+.login-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: var(--bg-outer, #09090B);
+  color: var(--text-primary, #F4F4F5);
+}
+.login-card {
+  width: min(390px, 100%);
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border-panel, #303038);
+  border-radius: var(--terminal-radius, 4px);
+  background: var(--bg-panel, #111114);
+  box-shadow: var(--shadow-panel);
+}
+.login-card h1 { margin: 8px 0; font-size: 16px; font-weight: 500; }
+.login-card p, .login-card small { color: var(--text-muted, #71717A); line-height: 1.6; }
+.login-card label { display: block; margin: 16px 0 7px; font-size: 11px; color: var(--text-secondary, #A1A1AA); }
+.login-card input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-panel, #303038);
+  border-radius: var(--radius-control, 3px);
+  background: var(--bg-terminal, #0D0D10);
+  color: var(--text-primary, #F4F4F5);
+}
+.login-card button, .primary {
+  min-width: 0;
+  min-height: 36px;
+  margin-top: 14px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong, #41414A);
+  border-radius: var(--radius-control, 3px);
+  background: var(--bg-elevated, #19191E);
+  color: var(--text-primary, #F4F4F5);
+  font-size: 11px;
+}
+.login-card button:hover, .primary:hover { background: var(--bg-hover, #202026); }
+.login-card button:focus-visible, .primary:focus-visible {
+  outline: var(--focus-ring, 1px solid #777780);
+  outline-offset: 2px;
+}
+@media (max-width: 420px) {
+  .login-card { padding: 16px; }
+}
