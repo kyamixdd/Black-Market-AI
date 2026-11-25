@@ -17,7 +17,6 @@ const MAX_BATCH = 80
 let entries: DiagnosticEntry[] = []
 let loaded = false
 let installed = false
-let flushTimer: number | undefined
 let activeScreen = 'Overview'
 
 function redact(text: string): string {
@@ -108,7 +107,7 @@ export function installDiagnosticCapture(): void {
     if (!form) return
     recordDiagnostic('INFO', 'ui.form.submit', { feature: activeScreen, function: 'submit', detail: form.getAttribute('aria-label') ?? form.className.toString().slice(0, 100) })
   }, true)
-  flushTimer = window.setInterval(() => { void flushDiagnosticLogs() }, 5000)
+  window.setInterval(() => { void flushDiagnosticLogs() }, 5000)
 }
 
 export async function flushDiagnosticLogs(): Promise<void> {

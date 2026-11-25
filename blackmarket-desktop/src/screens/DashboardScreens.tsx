@@ -1155,15 +1155,7 @@ function DiagnosticsScreen({ data, activityLoadState, diagnostics }: {
     ['Risk manager', data.risk?.risk_manager_status?.toUpperCase() ?? 'UNKNOWN', 'Backend risk status from latest API response'],
     ['Persisted activity', activityLoadState === 'ready' ? 'READY' : activityLoadState === 'error' ? 'UNAVAILABLE' : 'CHECKING', 'Recent application events'],
   ]
-  const logMessage = diagnostics.logState === 'loading'
-    ? 'Loading backend process logs…'
-    : diagnostics.logState === 'error'
-      ? 'Backend process logs could not be read.'
-      : diagnostics.logState === 'unavailable'
-        ? 'Process logs are available in the installed desktop application.'
-        : diagnostics.logs.length === 0
-          ? 'No backend process output has been recorded yet.'
-          : ''
+
 
   return (
     <>
