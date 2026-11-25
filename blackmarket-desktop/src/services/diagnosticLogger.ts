@@ -4,6 +4,7 @@ export type DiagnosticEntry = {
   timestamp: string
   level: DiagnosticLevel
   event: string
+  error_type?: string
   feature?: string
   function?: string
   detail?: string
@@ -106,6 +107,7 @@ export function recordDiagnostic(
     timestamp: new Date().toISOString(),
     level,
     event: redact(event),
+    ...(fields.error_type ? { error_type: redact(fields.error_type) } : {}),
     ...(fields.feature ? { feature: redact(fields.feature) } : {}),
     ...(fields.function ? { function: redact(fields.function) } : {}),
     ...(fields.detail ? { detail: redact(fields.detail) } : {}),
