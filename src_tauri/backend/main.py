@@ -255,10 +255,12 @@ async def request_observability(request: Request, call_next):
 async def require_local_api_auth(request: Request, call_next):
     client_host = request.client.host if request.client else "unknown"
     if request.url.path.startswith("/api/") and _rate_limit_exceeded(f"api:{client_host}", _API_RATE_LIMIT):
+        log_event(logger, logging.WARNING, "api_request_rejected", request_id=getattr(request.state, "request_id", ""), method=request.method, path=request.url.path, status_code=429, reason="rate_limit")
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"}, headers={"Retry-After": str(_RATE_LIMIT_WINDOW_SECONDS)})
 
     client_host = request.client.host if request.client else None
     if not _is_loopback(client_host) and not _REMOTE_API_ENABLED:
+        log_event(logger, logging.WARNING, "api_request_rejected", request_id=getattr(request.state, "request_id", ""), method=request.method, path=request.url.path, status_code=403, reason="remote_disabled")
         return JSONResponse(status_code=403, content={"detail": "Remote API access is disabled"})
 
     public_read = (
@@ -275,7 +277,8 @@ async def require_local_api_auth(request: Request, call_next):
     if request.url.path == "/api" or request.url.path.startswith("/api/"):
         if request.method != "OPTIONS":
             if not _api_token:
-                return JSONResponse(
+                log_event(logger, logging.WARNING, "api_request_rejected", request_id=getattr(request.state, "request_id", ""), method=request.method, path=request.url.path, status_code=503, reason="token_missing")
+        return JSONResponse(
                     status_code=503,
                     content={"detail": "Local API authentication is not configured"},
                 )
@@ -283,7 +286,8 @@ async def require_local_api_auth(request: Request, call_next):
                 request.headers.get("authorization"),
                 _api_token,
             ):
-                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+                log_event(logger, logging.WARNING, "api_request_rejected", request_id=getattr(request.state, "request_id", ""), method=request.method, path=request.url.path, status_code=401, reason="unauthorized")
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
 
