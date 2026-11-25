@@ -178,7 +178,7 @@ def _is_application_frame(frame) -> bool:
         path = Path(frame.f_code.co_filename).resolve()
         if not path.is_relative_to(_TRACE_ROOT):
             return False
-        if path.name in _TRACE_SKIP or "tests" in path.parts or "__pycache__" in path.parts:
+        if path.name in _TRACE_SKIP or any(part in {"tests", "__pycache__", ".venv", "venv", "site-packages", "dist-packages", "node_modules", "build", "dist", "target"} for part in path.parts):
             return False
         if frame.f_code.co_name.startswith("__") and frame.f_code.co_name.endswith("__"):
             return False

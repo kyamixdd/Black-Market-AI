@@ -163,6 +163,7 @@ class Repository:
             return session.get(SignalModel, signal_id)
 
     # --- Prediction Repo ---
+    @traced_operation("database.write", component="database")
     def save_candles(self, symbol: str, market: str, timeframe: str,
                      candles: list[dict[str, Any]]) -> int:
         """Upsert validated OHLC candles used by charting and outcome evaluation."""
