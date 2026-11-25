@@ -1,4 +1,4 @@
-import { recordDiagnostic } from './diagnosticLogger.ts'
+import { recordDiagnostic, recommendDiagnosticFix } from './diagnosticLogger.ts'
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 export type BackendClientOptions = {
@@ -68,7 +68,7 @@ export function createBackendClient(options: BackendClientOptions) {
       return result
     } catch (error) {
       const status = error instanceof BackendRequestError ? error.status : undefined
-      recordDiagnostic('ERROR', 'http.request.failure', { feature: 'api-client', function: 'requestJson', trace_id: traceId, duration_ms: Date.now() - startedAt, detail: `${method} ${safePath} failed${status ? ` · HTTP ${status}` : ''} · ${error instanceof Error ? error.name : 'Error'}: ${error instanceof Error ? error.message : 'unknown error'}` })
+      recordDiagnostic('ERROR', 'http.request.failure', { feature: 'api-client', function: 'requestJson', trace_id: traceId, duration_ms: Date.now() - startedAt, detail: `${method} ${safePath} failed${status ? ` · HTTP ${status}` : ''} · ${error instanceof Error ? error.name : 'Error'}: ${error instanceof Error ? error.message : 'unknown error'}`, error_type: error instanceof Error ? error.name : 'Error', ...recommendDiagnosticFix(error) })
       throw error
     } finally {
       requestSamples.push({ completedAt: Date.now(), durationMs: Date.now() - startedAt, succeeded })
