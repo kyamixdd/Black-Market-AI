@@ -277,8 +277,13 @@ async def require_local_api_auth(request: Request, call_next):
     if request.url.path == "/api" or request.url.path.startswith("/api/"):
         if request.method != "OPTIONS":
             if not _api_token:
-                log_event(logger, logging.WARNING, "api_request_rejected", request_id=getattr(request.state, "request_id", ""), method=request.method, path=request.url.path, status_code=503, reason="token_missing")
-        return JSONResponse(
+                log_event(
+                    logger, logging.WARNING, "api_request_rejected",
+                    request_id=getattr(request.state, "request_id", ""),
+                    method=request.method, path=request.url.path,
+                    status_code=503, reason="token_missing",
+                )
+                return JSONResponse(
                     status_code=503,
                     content={"detail": "Local API authentication is not configured"},
                 )
@@ -286,8 +291,13 @@ async def require_local_api_auth(request: Request, call_next):
                 request.headers.get("authorization"),
                 _api_token,
             ):
-                log_event(logger, logging.WARNING, "api_request_rejected", request_id=getattr(request.state, "request_id", ""), method=request.method, path=request.url.path, status_code=401, reason="unauthorized")
-        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+                log_event(
+                    logger, logging.WARNING, "api_request_rejected",
+                    request_id=getattr(request.state, "request_id", ""),
+                    method=request.method, path=request.url.path,
+                    status_code=401, reason="unauthorized",
+                )
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
 
