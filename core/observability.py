@@ -83,7 +83,13 @@ def configure_structured_logging(level: str = "INFO") -> None:
 
 
 def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> None:
-    """Write a structured event; fields should be bounded and non-sensitive."""
+    """Write a structured event; add a heuristic repair hint to error events."""
+    if level >= logging.ERROR:
+        diagnostic_text = fields.get("detail") or fields.get("error_type") or event
+        root_cause, suggested_fix = recommend_diagnostic_fix(str(diagnostic_text))
+        fields.setdefault("root_cause", root_cause)
+        fields.setdefault("suggested_fix", suggested_fix)
+        fields.setdefault("trace_id", _OPERATION_TRACE_ID.get() or "")
     safe_fields = {
         key: sanitize_log_value(value, key)
         for key, value in fields.items()
