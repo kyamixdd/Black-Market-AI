@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the product version across desktop, backend, and hosted package metadata."""
+"""Validate the product version across desktop and backend package metadata."""
 from __future__ import annotations
 
 import json
@@ -22,7 +22,6 @@ if not isinstance(product_version, str) or not re.fullmatch(r"\d+\.\d+\.\d+(?:[-
 checks: dict[str, str] = {
     "desktop npm package": read_json("blackmarket-desktop/package.json").get("version", ""),
     "desktop npm lock root": read_json("blackmarket-desktop/package-lock.json").get("packages", {}).get("", {}).get("version", ""),
-    "hosted web package": read_json("blackmarket-web/package.json").get("version", ""),
 }
 cargo = (ROOT / "blackmarket-desktop/src-tauri/Cargo.toml").read_text(encoding="utf-8")
 cargo_match = re.search(r"(?m)^version\s*=\s*\"([^\"]+)\"", cargo)
