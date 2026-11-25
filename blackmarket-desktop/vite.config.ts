@@ -13,7 +13,7 @@ function diagnosticFunctionTracing() {
     name: 'blackmarket-opt-in-function-tracing',
     enforce: 'pre' as const,
     transform(code: string, id: string) {
-      const file = id.split('?')[0].replace(/\\\\/g, '/')
+      const file = id.split('?')[0].replaceAll(String.fromCharCode(92), '/')
       if (
         !file.includes('/src/')
         || file.endsWith('/services/diagnosticLogger.ts')
