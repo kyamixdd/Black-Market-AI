@@ -31,7 +31,7 @@ import { LiveMarketChart } from './components/charts/LiveMarketChart'
 import { DashboardScreen } from './screens/DashboardScreens'
 import { getApiAuthorization, setApiToken } from './services/localAuth'
 import { backendBaseUrl, getBackendRequestMetrics, mutateJson, requestJson } from './services/backendClient'
-import { getDiagnosticLogSnapshot, getFrontendFunctionTraceEnabled, installDiagnosticCapture, recordDiagnostic, setDiagnosticScreen, setFrontendFunctionTraceEnabled } from './services/diagnosticLogger'
+import { getDiagnosticLogSnapshot, installDiagnosticCapture, recordDiagnostic, setDiagnosticScreen } from './services/diagnosticLogger'
 import {
   assessMarketData,
   marketChartKey,
@@ -329,7 +329,7 @@ function App() {
   const [backendLogState, setBackendLogState] = useState<'loading' | 'ready' | 'error' | 'unavailable'>('loading')
   const [requestMetrics, setRequestMetrics] = useState(getBackendRequestMetrics)
   const [frontendDiagnosticLogs, setFrontendDiagnosticLogs] = useState<string[]>([])
-  const [functionTraceEnabled, setFunctionTraceEnabled] = useState(getFrontendFunctionTraceEnabled)
+  const [functionTraceEnabled, setFunctionTraceEnabled] = useState(false)
   const [intelligenceLoadState, setIntelligenceLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [websocketConnected, setWebsocketConnected] = useState(false)
   const [websocketInitialized, setWebsocketInitialized] = useState(false)
@@ -1574,14 +1574,8 @@ function App() {
             frontendLogs: frontendDiagnosticLogs,
             functionTraceEnabled,
             onFunctionTraceToggle: async (enabled) => {
-              setFrontendFunctionTraceEnabled(enabled)
-              try {
-                const result = await mutateJson<{ enabled: boolean }>('/diagnostics/function-trace', 'POST', { enabled })
-                setFunctionTraceEnabled(result.enabled || getFrontendFunctionTraceEnabled())
-              } catch (error) {
-                setFunctionTraceEnabled(getFrontendFunctionTraceEnabled())
-                throw error
-              }
+              const result = await mutateJson<{ enabled: boolean }>('/diagnostics/function-trace', 'POST', { enabled })
+              setFunctionTraceEnabled(result.enabled)
             },
           }}
           intelligenceLoadState={intelligenceLoadState}

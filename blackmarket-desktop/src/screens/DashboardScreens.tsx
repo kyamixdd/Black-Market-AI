@@ -1191,11 +1191,11 @@ function DiagnosticsScreen({ data, activityLoadState, diagnostics }: {
           try { await diagnostics.onFunctionTraceToggle(enabled) }
           catch (error) { setTraceError(error instanceof Error ? error.message : 'Unable to change function tracing') }
           finally { setTraceBusy(false) }
-        }} /> Verbose function-by-function trace (frontend + Python)</label>
+        }} /> Verbose Python function call/return trace</label>
         <span className="workspace-note">{diagnostics.functionTraceEnabled ? 'Tracing enabled · high log volume and performance overhead' : 'Tracing disabled · enable temporarily to investigate a specific defect'}</span>
       </div>
       {traceError && <p role="alert" className="workspace-note">{traceError}</p>}
-      <div className="workspace-note">Captured: frontend and Python function entry/completion/failure, UI rendering and data/state changes, API requests, backend exceptions, scanner/model/paper-trade lifecycle and database writes. Trace mode is high-volume; sensitive values are redacted and buffers are bounded.</div>
+      <div className="workspace-note">Captured: frontend API requests, UI rendering and data/state changes, backend API requests/exceptions, scanner/model/paper-trade lifecycle and database writes. Optional Python tracing records app-source function calls, returns and exceptions. Trace mode is high-volume; sensitive values are redacted and buffers are bounded.</div>
       <pre className="diagnostics-log diagnostics-log-expanded" role="log" aria-live="polite">{filteredLogs.length ? filteredLogs.map(({ source, line }) => `[${source}] ${line}`).join('\n') : 'No matching diagnostic events. Try another filter or wait for new activity.'}</pre>
       <h2 className="workspace-section-title">Recent application activity</h2>
       {activityLoadState === 'error' && <p role="alert" className="workspace-note">Persisted activity could not be loaded. The displayed events may be stale.</p>}
