@@ -15,7 +15,7 @@ Telegram integration is optional. The backend uses the official Telegram Bot API
    TELEGRAM_CHAT_ID=<authorized numeric chat ID>
    ```
 
-5. Restart the desktop app or hosted backend so it reloads private environment settings. Open **Autonomous** and confirm Telegram shows configured. Use **Send Telegram test** only when you want the backend to deliver an actual test message.
+5. Restart the desktop app so it reloads private environment settings. Open **Autonomous** and confirm Telegram shows configured. Use **Send Telegram test** only when you want the backend to deliver an actual test message.
 6. In **Settings**, enable Telegram and choose the notification categories. The Telegram bot can respond to `/status`, `/pause`, `/resume`, `/positions`, `/balance`, `/performance`, `/learning`, and `/help` from the authorized chat. `/pause` stops new entries while the engine keeps monitoring open paper positions.
 
 Autonomous orders remain simulation-only. Telegram commands cannot enable real-money execution. If either credential is missing, Telegram stays unavailable and the application continues without it.

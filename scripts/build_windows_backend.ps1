@@ -3,7 +3,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $DesktopRoot = Join-Path $RepoRoot "blackmarket-desktop"
 $TauriRoot = Join-Path $DesktopRoot "src-tauri"
 $OutputRoot = Join-Path $TauriRoot "resources\backend"
-$BuildRoot = Join-Path $env:TEMP "blackmarket-backend-pyinstaller"
+$BuildRoot = Join-Path $env:TEMP ("blackmarket-backend-pyinstaller-" + [guid]::NewGuid().ToString("N"))
 
 Write-Host "Building self-contained BlackMarket AI Windows backend..." -ForegroundColor Cyan
 
@@ -17,7 +17,6 @@ if (-not $Python -and (Get-Command python -ErrorAction SilentlyContinue)) {
 }
 if (-not $Python) { throw "Python 3.12 is required on the BUILD machine. The installed app will not require Python." }
 
-if (Test-Path $BuildRoot) { Remove-Item $BuildRoot -Recurse -Force }
 New-Item -ItemType Directory -Path $BuildRoot -Force | Out-Null
 $Venv = Join-Path $BuildRoot "venv"
 if ($Python -eq "py -3.12") { & py -3.12 -m venv $Venv } else { & python -m venv $Venv }
@@ -42,6 +41,9 @@ $PyInstallerArgs = @(
     "--hidden-import", "uvicorn.protocols.http.auto",
     "--hidden-import", "uvicorn.protocols.websockets.auto",
     "--hidden-import", "uvicorn.lifespan.on",
+    "--collect-submodules", "scipy._external.array_api_compat",
+    "--collect-binaries", "xgboost",
+    "--collect-data", "xgboost",
     (Join-Path $RepoRoot "src_tauri\backend\main.py")
 )
 & $VenvPython @PyInstallerArgs
@@ -50,8 +52,11 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed to freeze the backend." }
 $BuiltBackend = Join-Path $BuildRoot "dist\BlackMarketBackend"
 $Executable = Join-Path $BuiltBackend "BlackMarketBackend.exe"
 if (-not (Test-Path $Executable)) { throw "PyInstaller output executable was not created." }
+& $Executable --check-imports
+if ($LASTEXITCODE -ne 0) { throw "Packaged backend import smoke test failed." }
 if (Test-Path $OutputRoot) { Remove-Item $OutputRoot -Recurse -Force }
 New-Item -ItemType Directory -Path (Split-Path -Parent $OutputRoot) -Force | Out-Null
 Copy-Item $BuiltBackend $OutputRoot -Recurse -Force
 $PackagedSizeMB = [math]::Round((Get-ChildItem $OutputRoot -File -Recurse | Measure-Object Length -Sum).Sum / 1MB, 1)
 Write-Host "Packaged backend ready: $Executable ($PackagedSizeMB MB)" -ForegroundColor Green
+Remove-Item $BuildRoot -Recurse -Force

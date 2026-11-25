@@ -1,6 +1,7 @@
 """Offline tests for Stage 6 event-driven monitoring."""
 import asyncio
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -95,6 +96,7 @@ async def test_scanner_publishes_validated_live_ticker_event():
     scanner.cache = Cache()
     scanner.event_bus = CapturingBus()
     now_ms = int(__import__("time").time() * 1000)
+    scanner.spot_client = SimpleNamespace(now_ms=lambda: now_ms)
     await scanner._handle_stream_message("SPOT", {
         "data": {"s": "BTCUSDT", "c": "123.4", "q": "5000",
                  "P": "1.2", "E": now_ms}

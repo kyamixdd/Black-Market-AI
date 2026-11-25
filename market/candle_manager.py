@@ -26,6 +26,10 @@ class CandleManager:
         self._candles: dict[tuple, list[dict]] = defaultdict(list)
         self._max_per_series = 500
         self._collection_status: dict[tuple[str, str, str], dict] = {}
+        self._exchange_clock_offset_ms = 0
+
+    def current_time_ms(self) -> int:
+        return int(time.time() * 1000) + self._exchange_clock_offset_ms
 
     @staticmethod
     def _find_candle_index(series: list[dict], open_time: int) -> int:
@@ -42,12 +46,16 @@ class CandleManager:
 
     def add_candle(self, market: str, symbol: str, timeframe: str,
                    open_time: int, open_: float, high: float, low: float,
-                   close: float, volume: float, close_time: int | None = None) -> bool:
+                   close: float, volume: float, close_time: int | None = None,
+                   now_ms: int | None = None) -> bool:
         """Add a candle, deduplicate by open_time. Returns True if added, False if duplicate."""
         if market not in {"SPOT", "FUTURES"} or not valid_symbol(symbol) or timeframe not in TIMEFRAME_SECONDS:
             return False
         effective_close_time = close_time if close_time is not None else open_time + TIMEFRAME_SECONDS[timeframe] * 1000 - 1
-        if not validate_candle(open_time, open_, high, low, close, volume, effective_close_time):
+        if not validate_candle(
+            open_time, open_, high, low, close, volume, effective_close_time,
+            now_ms=now_ms,
+        ):
             return False
 
         key = (market, symbol, timeframe)
@@ -69,12 +77,16 @@ class CandleManager:
 
     def update_current_candle(self, market: str, symbol: str, timeframe: str,
                               open_time: int, open_: float, high: float, low: float,
-                              close: float, volume: float, close_time: int | None = None) -> bool:
+                              close: float, volume: float, close_time: int | None = None,
+                              now_ms: int | None = None) -> bool:
         """Replace the current unclosed candle when a REST refresh has newer values."""
         if market not in {"SPOT", "FUTURES"} or not valid_symbol(symbol) or timeframe not in TIMEFRAME_SECONDS:
             return False
         effective_close_time = close_time if close_time is not None else open_time + TIMEFRAME_SECONDS[timeframe] * 1000 - 1
-        if not validate_candle(open_time, open_, high, low, close, volume, effective_close_time):
+        if not validate_candle(
+            open_time, open_, high, low, close, volume, effective_close_time,
+            now_ms=now_ms,
+        ):
             return False
         key = (market, symbol, timeframe)
         series = self._candles.get(key, [])
@@ -171,6 +183,9 @@ class CandleManager:
         try:
             klines = await client.get_klines(symbol, timeframe, limit=limit)
             added = 0
+            exchange_now = getattr(client, "now_ms", None)
+            now_ms = exchange_now() if callable(exchange_now) else int(time.time() * 1000)
+            self._exchange_clock_offset_ms = now_ms - int(time.time() * 1000)
             for k in klines:
                 open_time = int(k[0])
                 o = float(k[1])
@@ -179,21 +194,48 @@ class CandleManager:
                 c = float(k[4])
                 v = float(k[5])
                 close_time = int(k[6])
-                if self.add_candle(market, symbol, timeframe, open_time, o, h, l, c, v, close_time):
+                if self.add_candle(
+                    market, symbol, timeframe, open_time, o, h, l, c, v,
+                    close_time, now_ms=now_ms,
+                ):
                     added += 1
-                elif self.update_current_candle(market, symbol, timeframe, open_time, o, h, l, c, v, close_time):
+                elif self.update_current_candle(
+                    market, symbol, timeframe, open_time, o, h, l, c, v,
+                    close_time, now_ms=now_ms,
+                ):
                     added += 1
+            series = self.get_series(market, symbol, timeframe, limit=1)
+            latest_age = (
+                None if not series
+                else max(0.0, (now_ms - int(series[-1]["close_time"])) / 1000)
+            )
+            max_age = TIMEFRAME_SECONDS[timeframe] + 120
+            error = None
+            if not klines:
+                error = "empty_response"
+            elif latest_age is None:
+                error = "no_valid_closed_candles"
+            elif latest_age > max_age:
+                error = f"stale_latest_candle:{latest_age:.1f}s"
+            state = "FAILED" if error else "SUCCESS"
             self._collection_status[key] = {
-                "state": "SUCCESS", "updated_at": time.time(), "duration_seconds": time.time() - started,
-                "returned_candles": len(klines), "changed_candles": added, "error": None,
+                "state": state, "updated_at": time.time(), "duration_seconds": time.time() - started,
+                "returned_candles": len(klines), "changed_candles": added,
+                "latest_candle_age_seconds": latest_age, "error": error,
             }
+            if error:
+                logger.warning(
+                    "Historical candle refresh %s for %s %s %s: %s",
+                    state.lower(), market, symbol, timeframe, error,
+                )
             return added
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self._collection_status[key] = {
                 "state": "FAILED", "updated_at": time.time(), "duration_seconds": time.time() - started,
-                "returned_candles": 0, "changed_candles": 0, "error": type(exc).__name__,
+                "returned_candles": 0, "changed_candles": 0,
+                "latest_candle_age_seconds": None, "error": type(exc).__name__,
             }
             logger.warning("Historical collection failed for %s %s %s: %s", market, symbol, timeframe, exc)
             return 0

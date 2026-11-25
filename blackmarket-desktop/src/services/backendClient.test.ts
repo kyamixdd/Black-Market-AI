@@ -15,7 +15,7 @@ test('desktop API requests attach bearer authentication and disable caching', as
   })
   assert.deepEqual(await client.get('/portfolio/balance'), { ok: true })
   assert.equal(captured?.url, 'http://127.0.0.1:8765/api/portfolio/balance')
-  assert.equal((captured?.init?.headers as Record<string, string>).Authorization, 'Bearer local-test-token')
+  assert.equal((captured?.init?.headers as Record<string, string> | undefined)?.Authorization, 'Bearer local-test-token')
   assert.equal(captured?.init?.cache, 'no-store')
 })
 
@@ -112,4 +112,27 @@ test('request timeout is reported as an actionable timeout error', async () => {
     }),
   })
   await assert.rejects(client.get('/health'), /timed out after 1000 ms/)
+})
+
+test('request metrics report recent successes and failures without request details', async () => {
+  let requests = 0
+  const client = createBackendClient({
+    baseUrl: '/api/backend',
+    retries: 0,
+    fetcher: async () => {
+      requests += 1
+      return requests === 1 ? response(200, { ok: true }) : response(503, { detail: 'Unavailable' })
+    },
+  })
+
+  await client.get('/health?private=value')
+  await assert.rejects(client.get('/system/status?token=private'), /Unavailable/)
+
+  const metrics = client.getMetrics()
+  assert.equal(metrics.windowSeconds, 60)
+  assert.equal(metrics.requestCount, 2)
+  assert.equal(metrics.failureCount, 1)
+  assert.ok(metrics.averageDurationMs >= 0)
+  assert.ok(metrics.p95DurationMs >= 0)
+  assert.equal('url' in metrics, false)
 })

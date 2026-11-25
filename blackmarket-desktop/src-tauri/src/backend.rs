@@ -4,7 +4,7 @@ use std::{
     env,
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -19,6 +19,9 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
+const LOG_TAIL_BYTES: u64 = 64 * 1024;
+const LOG_TAIL_LINES: usize = 200;
+const MAX_LOG_LINE_CHARS: usize = 2000;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +117,10 @@ impl BackendSupervisor {
 
     pub fn status(&self) -> StartupStatus {
         self.lock_runtime().status.clone()
+    }
+
+    pub fn log_tail(&self) -> Result<Vec<String>, String> {
+        read_recent_log_lines(&self.backend_log_path())
     }
 
     pub fn api_token(&self) -> Result<String, String> {
@@ -649,6 +656,12 @@ fn parse_health_response(response: &str) -> Probe {
         return Probe::Occupied("The health response was incomplete.".to_owned());
     };
     let status = headers.lines().next().unwrap_or_default();
+    if status.contains(" 500 ") {
+        return Probe::Occupied(
+            "The backend on port 8765 returned HTTP 500. It may be an older BlackMarket AI instance still running in the system tray. Quit that instance completely, then retry. Check the backend log for the original error."
+                .to_owned(),
+        );
+    }
     if !status.contains(" 200 ") {
         return Probe::Occupied(format!("Unexpected health response: {status}"));
     }
@@ -812,18 +825,71 @@ fn find_project_root(resource_dir: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn read_log_tail(path: &Path) -> String {
-    match fs::read_to_string(path) {
-        Ok(contents) => {
-            let tail: String = contents.chars().rev().take(4000).collect();
-            let tail: String = tail.chars().rev().collect();
-            if tail.trim().is_empty() {
-                "Backend log is empty.".to_owned()
-            } else {
-                format!("Recent backend log:\n{tail}")
-            }
-        }
+    match read_recent_log_lines(path) {
+        Ok(lines) if lines.is_empty() => "Backend log is empty.".to_owned(),
+        Ok(lines) => format!("Recent backend log:\n{}", lines.join("\n")),
         Err(error) => format!("Backend log could not be read: {error}"),
     }
+}
+
+fn read_recent_log_lines(path: &Path) -> Result<Vec<String>, String> {
+    let mut file = File::open(path).map_err(|error| error.to_string())?;
+    let file_length = file.seek(SeekFrom::End(0)).map_err(|error| error.to_string())?;
+    let start = file_length.saturating_sub(LOG_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start))
+        .map_err(|error| error.to_string())?;
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    let contents = String::from_utf8_lossy(&bytes);
+    let contents = if start > 0 {
+        match contents.find('\n') {
+            Some(newline) => &contents[newline + 1..],
+            None => "",
+        }
+    } else {
+        contents.as_ref()
+    };
+
+    Ok(bounded_log_lines(contents))
+}
+
+fn bounded_log_lines(contents: &str) -> Vec<String> {
+    let mut lines: Vec<String> = contents
+        .lines()
+        .rev()
+        .take(LOG_TAIL_LINES)
+        .map(redact_log_line)
+        .collect();
+    lines.reverse();
+    lines
+}
+
+fn redact_log_line(line: &str) -> String {
+    let normalized = line.to_ascii_lowercase();
+    let sensitive_markers = [
+        "authorization",
+        "api_key",
+        "api-key",
+        "api_token",
+        "api-token",
+        "api token",
+        "token",
+        "token=",
+        "secret",
+        "password",
+        "credential",
+        "bearer ",
+        "bot_token",
+        "chat_id",
+    ];
+    if sensitive_markers
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
+        return "[redacted: sensitive log entry]".to_owned();
+    }
+    line.chars().take(MAX_LOG_LINE_CHARS).collect()
 }
 
 fn hide_console(command: &mut Command) {
@@ -837,7 +903,7 @@ fn hide_console(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_health_response, Probe};
+    use super::{LOG_TAIL_LINES, Probe, bounded_log_lines, parse_health_response, redact_log_line};
 
     #[test]
     fn health_check_requires_backend_database_and_websocket_readiness() {
@@ -858,5 +924,42 @@ mod tests {
             parse_health_response("HTTP/1.1 200 OK\r\n\r\nnot-json"),
             Probe::Occupied(_)
         ));
+    }
+
+    #[test]
+    fn health_check_explains_stale_backend_500_responses() {
+        let Probe::Occupied(message) =
+            parse_health_response("HTTP/1.1 500 Internal Server Error\r\n\r\n{}")
+        else {
+            panic!("HTTP 500 must be reported as an occupied unhealthy backend");
+        };
+        assert!(message.contains("older BlackMarket AI instance"));
+        assert!(message.contains("system tray"));
+        assert!(message.contains("backend log"));
+    }
+
+    #[test]
+    fn log_tail_redacts_sensitive_entries_and_limits_line_length() {
+        assert_eq!(
+            redact_log_line("Authorization: Bearer private-token"),
+            "[redacted: sensitive log entry]"
+        );
+        assert_eq!(
+            redact_log_line("{\"api_token\": \"private-token\"}"),
+            "[redacted: sensitive log entry]"
+        );
+        assert_eq!(redact_log_line(&"x".repeat(3000)).len(), 2000);
+    }
+
+    #[test]
+    fn log_tail_limit_stays_bounded() {
+        let contents = (0..LOG_TAIL_LINES + 20)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tail = bounded_log_lines(&contents);
+        assert_eq!(tail.len(), LOG_TAIL_LINES);
+        assert_eq!(tail.first().map(String::as_str), Some("line 20"));
+        assert_eq!(tail.last().map(String::as_str), Some("line 219"));
     }
 }

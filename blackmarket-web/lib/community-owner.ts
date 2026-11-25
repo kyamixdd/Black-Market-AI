@@ -5,7 +5,7 @@ const MAX_AGE = 365 * 24 * 60 * 60;
 
 function key() {
   const value = process.env.BLACKMARKET_SESSION_SECRET;
-  if (!value || Buffer.byteLength(value) < 32) throw new Error("BLACKMARKET_SESSION_SECRET must contain at least 32 bytes");
+  if (!value || Buffer.byteLength(value) < 32) throw new Error("BLACKMARKET_SESSION_SECRET must contain at least 32 bytes to sign browser community identities");
   return value;
 }
 function sign(id: string) {

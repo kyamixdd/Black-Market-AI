@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from typing import Any
 
 import aiohttp
@@ -14,13 +15,60 @@ logger = logging.getLogger(__name__)
 
 
 class BasePublicClient:
-    def __init__(self, rate_limiter: RateLimiter, base_url: str, name: str):
+    def __init__(
+        self,
+        rate_limiter: RateLimiter,
+        base_url: str,
+        name: str,
+        server_time_path: str | None = None,
+    ):
         self.rate_limiter = rate_limiter
         self.base_url = base_url.rstrip("/")
         self.name = name
+        self.server_time_path = server_time_path
+        self._clock_offset_ms = 0
+        self._clock_synced_at: float | None = None
+        self._clock_sync_lock = asyncio.Lock()
         self._session: aiohttp.ClientSession | None = None
         self._request_slots = asyncio.Semaphore(8)
         self._max_retries = 3
+
+    def now_ms(self) -> int:
+        """Return the local epoch estimate corrected by the exchange clock offset."""
+        return int(time.time() * 1000) + self._clock_offset_ms
+
+    async def sync_clock_if_due(self, interval_seconds: float = 300.0) -> bool:
+        """Refresh local-to-exchange clock offset, retaining the last good offset on failure."""
+        if not self.server_time_path:
+            return False
+        async with self._clock_sync_lock:
+            if (
+                self._clock_synced_at is not None
+                and time.monotonic() - self._clock_synced_at < interval_seconds
+            ):
+                return False
+            before_ms = int(time.time() * 1000)
+            try:
+                response = await self._get(self.server_time_path, timeout=10.0)
+                server_ms = int(response["serverTime"])
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError, KeyError, TypeError, ValueError) as exc:
+                logger.warning("%s exchange clock sync failed; retaining previous offset: %s", self.name, exc)
+                self._clock_synced_at = time.monotonic()
+                return False
+            after_ms = int(time.time() * 1000)
+            self._clock_offset_ms = server_ms - ((before_ms + after_ms) // 2)
+            self._clock_synced_at = time.monotonic()
+            if abs(self._clock_offset_ms) > 5_000:
+                logger.warning(
+                    "%s local clock differs from exchange by %.1fs; using exchange time for market-data checks",
+                    self.name,
+                    self._clock_offset_ms / 1000,
+                )
+            else:
+                logger.info("%s exchange clock synchronized (offset %.3fs)", self.name, self._clock_offset_ms / 1000)
+            return True
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:

@@ -2,7 +2,7 @@
 
 ## Audit scope and evidence
 
-> Historical Stage 12 technical findings are preserved. The local Git repository has no commits; source identifiers and CI claims in the historical report cannot be verified against this workspace. The current review and test evidence are in `docs/PROJECT_STATUS.md` and `AUDIT_REPORT.txt`.
+> Historical Stage 12 technical findings are preserved as a snapshot. The current checkout has baseline commit `466dbc7`; source identifiers and CI claims in this older report are not current release evidence. The current review and test evidence are in `docs/PROJECT_STATUS.md` and `docs/LOCAL_AUDIT_REPORT.md`.
 
 - **Target branch:** `black-market-ai-beta`
 - **Audited base commit:** `45d1becc5406b888cddbb09a81ec9fe78bba5b94`

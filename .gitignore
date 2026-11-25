@@ -7,3 +7,7 @@ __pycache__/
 dist/
 build/
 .env*
+data/backups/
+data/*.db
+data/*.db-*
+models/*.pkl

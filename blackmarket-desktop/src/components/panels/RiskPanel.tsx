@@ -62,10 +62,11 @@ export const RiskPanel: React.FC = () => {
 
   useEffect(() => {
     mounted.current = true;
-    void fetchData();
+    const initialFetch = window.setTimeout(() => { void fetchData(); }, 0);
     const interval = window.setInterval(() => void fetchData(), 10_000);
     return () => {
       mounted.current = false;
+      window.clearTimeout(initialFetch);
       window.clearInterval(interval);
     };
   }, [fetchData]);
@@ -93,7 +94,6 @@ export const RiskPanel: React.FC = () => {
     );
   }
 
-  const exposure = boundedPercent(data.current_exposure_pct);
   const usedCapacity = boundedPercent(data.used_risk_capacity_pct);
   const status = data.risk_manager_status.toUpperCase();
   const statusTone = status === 'NORMAL' ? 'positive' : status === 'CRITICAL' ? 'negative' : '';

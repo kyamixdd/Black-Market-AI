@@ -4,14 +4,14 @@ Local-first cryptocurrency market analysis, strategy research and paper-trading 
 
 BlackMarket AI combines public Binance market data, technical analysis, strategy evaluation, simulated execution, risk controls and local learning tools. The supported desktop product runs a Tauri shell with a supervised Python backend. Trading is simulated; the application does not submit real exchange orders.
 
-## Current audit state — 23 November 2026
+## Current audit state — 25 November 2026
 
 - Product version: `1.0.0`.
-- Product classification: Windows desktop beta candidate; hosted website private preview.
-- The current local Git repository has no commits; application files are uncommitted. A branch, commit identity, remote CI result, or release artifact cannot be verified from this workspace.
-- The local source test/build checks are recorded in [Project Status](docs/PROJECT_STATUS.md). They do not verify a hosted deployment, production Binance stream, installer acceptance, financial performance, or security certification.
+- Product classification: Windows desktop beta candidate; desktop is the only supported production target.
+- The current branch is `Black-Market-AI-Beta-1.0.1` at local commit `466dbc7`; the working tree contains uncommitted changes. The current-source Windows NSIS installer was built locally, but no remote CI result or clean-machine installer acceptance was verified.
+- The local source test/build and installer hash/signature evidence are recorded in [Project Status](docs/PROJECT_STATUS.md). They do not verify production Binance streams, clean-machine installer behavior, financial performance, or security certification.
 - A non-placeholder Telegram token was present in `.env.example` during this audit and has been removed. Treat it as compromised and rotate/revoke it before release. See [SECURITY.md](SECURITY.md).
-- Public release remains blocked by the open items in [Release Readiness](RELEASE_READINESS.md), including accurate risk-assessment metrics, clean source provenance, and release-artifact verification.
+- Public release remains blocked by the open items in [Release Readiness](docs/RELEASE_READINESS.md), including accurate risk-assessment metrics, clean source provenance, and release-artifact verification.
 
 ## Capabilities
 
@@ -27,6 +27,7 @@ BlackMarket AI combines public Binance market data, technical analysis, strategy
 - Trade review, saved workspaces, shareable analysis and community strategy library.
 - SQLite persistence, integrity checks, backup/restore and model artifacts.
 - Optional Telegram notifications and a deterministic market-intelligence assistant.
+- Live desktop diagnostics for service state, persisted activity, bounded backend logs and rolling API latency/failure metrics.
 - Textual terminal interface and Tauri desktop interface.
 
 Feature availability depends on configured runtime mode and the data available for the selected asset/timeframe. The application reports unavailable or insufficient data rather than treating it as a valid measurement.
@@ -34,12 +35,14 @@ Feature availability depends on configured runtime mode and the data available f
 ## Application structure
 
 - `blackmarket-desktop/` — shared React/TypeScript dashboard and Tauri desktop shell.
-- `blackmarket-web/` — Next.js private-preview website, login/session handling and same-origin backend proxy.
+- `blackmarket-web/` — legacy Next.js source retained for reference; no production build, CI, or deployment is supported.
 - `src_tauri/backend/` — FastAPI backend, orchestration bridge, market engine and API routes.
 - `core/`, `market/`, `exchange/`, `strategies/`, `paper_trading/`, `risk/`, `learning/` — Python engine components.
 - `tests/` — backend, frontend-service and subsystem regression tests.
-- `.github/workflows/` — CI, hosted smoke test and desktop release workflows.
+- `.github/workflows/` — backend and desktop CI plus the Windows desktop release workflow.
 - `docs/` — product-specific technical and operating documentation.
+- `docs/FEATURE_AUDIT.md` — supported desktop/backend feature map and verification boundaries.
+- `docs/SYMBOL_CATALOG.md` — generated first-party function-candidate catalog; not a runtime correctness claim.
 
 ## Desktop development
 
@@ -75,7 +78,7 @@ npm test
 npm run tauri:dev
 ```
 
-The browser-only Vite preview serves the frontend and does not supervise the Python backend. `npm run tauri:dev` uses a development-only CSP override for Vite HMR; packaged builds use the restrictive production CSP. Use Tauri to verify desktop-managed startup and shutdown.
+The browser-only Vite preview serves the frontend but does not supervise the Python backend. For local browser development, start Tauri with `START_BLACKMARKET_DEV.bat` first, then open `http://localhost:3000`; Vite proxies API requests server-side using the local token without exposing it to browser JavaScript. `npm run tauri:dev` uses a development-only CSP override for Vite HMR; packaged builds use the restrictive production CSP. Use Tauri to verify desktop-managed startup and shutdown.
 
 Build the Windows installer from the repository root:
 
@@ -84,19 +87,6 @@ Build the Windows installer from the repository root:
 ```
 
 The installer output is under `blackmarket-desktop/src-tauri/target/release/bundle/nsis/`.
-
-## Website private preview
-
-The Next.js website imports the shared dashboard. It uses a server-side single-password session and a same-origin proxy to a separately hosted FastAPI backend.
-
-Required server-only configuration:
-
-- `BLACKMARKET_BACKEND_URL`
-- `BLACKMARKET_API_TOKEN`
-- `BLACKMARKET_SESSION_SECRET`
-- `BLACKMARKET_WEB_PASSWORD_HASH`
-
-The website is not a multi-user account system and is not approved as a public hosted service. A live backend, durable storage, authentication, streaming and paper-trading workflow must be verified before enabling public access. See [website setup](blackmarket-web/README.md) and [release readiness](RELEASE_READINESS.md).
 
 ## Security and data
 
@@ -120,9 +110,11 @@ Public release also requires the acceptance items in [Release Readiness](docs/RE
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Release and hosting procedures](docs/RELEASING_AND_HOSTING.md)
 - [Project status and audit](docs/PROJECT_STATUS.md)
+- [Feature and implementation audit](docs/FEATURE_AUDIT.md)
+- [Generated symbol catalog](docs/SYMBOL_CATALOG.md)
 - [Market-intelligence assistant](docs/assistant-intelligence.md)
 - [Community strategy library](docs/COMMUNITY_STRATEGY_LIBRARY.md)
-- [Complete product, architecture, feature and operating guide](blackmarketai.md)
+- [Complete product, architecture, feature and operating guide](docs/blackmarketai.md)
 
 ## Disclaimer
 

@@ -12,7 +12,10 @@ logger = logging.getLogger(__name__)
 
 class FuturesClient(BasePublicClient):
     def __init__(self, rate_limiter: RateLimiter):
-        super().__init__(rate_limiter, "https://fapi.binance.com", "futures")
+        super().__init__(
+            rate_limiter, "https://fapi.binance.com", "futures",
+            server_time_path="/fapi/v1/time",
+        )
 
     async def get_klines(self, symbol: str, interval: str, start_ms: int | None = None,
                          end_ms: int | None = None, limit: int = 500) -> list[list]:

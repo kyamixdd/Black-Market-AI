@@ -16,6 +16,11 @@ fn backend_api_token(supervisor: State<'_, BackendSupervisor>) -> Result<String,
 }
 
 #[tauri::command]
+fn backend_log_tail(supervisor: State<'_, BackendSupervisor>) -> Result<Vec<String>, String> {
+  supervisor.log_tail()
+}
+
+#[tauri::command]
 fn retry_backend_startup(supervisor: State<'_, BackendSupervisor>) {
   supervisor.retry();
 }
@@ -36,6 +41,7 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       backend_startup_status,
       backend_api_token,
+      backend_log_tail,
       retry_backend_startup
     ])
     .setup(|app| {

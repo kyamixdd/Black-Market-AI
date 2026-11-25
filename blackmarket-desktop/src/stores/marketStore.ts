@@ -1,6 +1,5 @@
 // Market data store using Zustand.
 import { create } from 'zustand';
-import { MarketSnapshot, MarketHeatmap, MarketBreadth, VolumeStats, LongShortStats } from '../services/api';
 
 interface MarketState {
   // Market data
@@ -40,7 +39,7 @@ interface MarketState {
   setError: (error: string | null) => void;
 }
 
-export const useMarketStore = create<MarketState>((set, get) => ({
+export const useMarketStore = create<MarketState>((set) => ({
   // Initial state
   markets: {},
   symbols: [],

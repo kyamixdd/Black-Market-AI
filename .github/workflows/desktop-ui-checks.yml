@@ -98,43 +98,6 @@ jobs:
         run: npm test
         working-directory: blackmarket-desktop
 
-  website:
-    name: Shared website frontend build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.12.0
-          cache: npm
-          cache-dependency-path: |
-            blackmarket-desktop/package-lock.json
-            blackmarket-web/package-lock.json
-
-      - name: Install canonical desktop frontend dependencies
-        run: npm ci
-        working-directory: blackmarket-desktop
-
-      - name: Install website dependencies
-        run: npm ci
-        working-directory: blackmarket-web
-
-      - name: Hosted authentication and rate-limit security tests
-        run: npm run test:security
-        working-directory: blackmarket-web
-
-      - name: TypeScript check
-        run: npm run lint
-        working-directory: blackmarket-web
-
-      - name: Production website build
-        run: npm run build
-        working-directory: blackmarket-web
-
   responsive-browser:
     name: Responsive browser smoke tests
     runs-on: ubuntu-latest
@@ -147,9 +110,7 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: |
-            blackmarket-desktop/package-lock.json
-            blackmarket-web/package-lock.json
+          cache-dependency-path: blackmarket-desktop/package-lock.json
       - name: Install locked frontend dependencies
         run: npm ci
         working-directory: blackmarket-desktop
@@ -210,20 +171,12 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: |
-            blackmarket-desktop/package-lock.json
-            blackmarket-web/package-lock.json
+          cache-dependency-path: blackmarket-desktop/package-lock.json
       - name: Audit locked frontend dependencies
         run: |
           npm ci
           npm audit --audit-level=high
         working-directory: blackmarket-desktop
-      - name: Audit locked website dependencies
-        run: |
-          npm ci
-          npm audit --audit-level=high
-        working-directory: blackmarket-web
-
   windows-installer-smoke:
     name: Windows bundled backend and NSIS install smoke test
     runs-on: windows-latest

@@ -19,8 +19,8 @@ test("client key uses nearest forwarded hop and caps key length", () => {
 });
 
 test("same-origin mutation check rejects missing, malformed, and cross-origin Origin", () => {
-  assert.equal(isSameOriginMutation("https://app.example", "https://app.example/api/login"), true);
-  assert.equal(isSameOriginMutation("https://evil.example", "https://app.example/api/login"), false);
-  assert.equal(isSameOriginMutation(null, "https://app.example/api/login"), false);
-  assert.equal(isSameOriginMutation("not a url", "https://app.example/api/login"), false);
+  assert.equal(isSameOriginMutation("https://app.example", "https://app.example/api/backend/strategies"), true);
+  assert.equal(isSameOriginMutation("https://evil.example", "https://app.example/api/backend/strategies"), false);
+  assert.equal(isSameOriginMutation(null, "https://app.example/api/backend/strategies"), false);
+  assert.equal(isSameOriginMutation("not a url", "https://app.example/api/backend/strategies"), false);
 });

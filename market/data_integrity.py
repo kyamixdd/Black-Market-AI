@@ -28,7 +28,7 @@ class DataIntegrityGuardian:
             return False
 
         latest = series[-1]
-        now_ms = int(time.time() * 1000)
+        now_ms = self.candles.current_time_ms()
         # For 1m candles, we expect data within last ~2 mins
         # For larger timeframes, we still expect the 'latest' completed candle to be recent
         delay_sec = (now_ms - latest["close_time"]) / 1000

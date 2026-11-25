@@ -6,7 +6,6 @@
 |---|---|
 | Tauri desktop | Desktop supervisor starts and manages the local backend |
 | Vite browser preview | Frontend only; does not supervise the Python backend |
-| Next.js website | Private-preview session and remote-backend configuration required |
 | Python/terminal | Local development and legacy CLI path |
 
 Frontend availability does not indicate backend readiness or current market-data availability.
@@ -36,12 +35,9 @@ Do not include bearer tokens in logs, screenshots or issue reports. Remote mode 
 - Analytics requiring historical candles may remain unavailable until sufficient data is collected.
 - Exchange rate limits and service interruptions can delay updates.
 - Stale or incomplete data must not be treated as a current signal.
-
-## Website private-preview connection
-
-Verify server-side configuration for backend URL, session secret, preview password and backend API token. Confirm remote API mode is enabled only when required, TLS is active, tokens match, and ingress permits the website service.
-
-Backend credentials must not be exposed in client-side code or public build variables. The current website authentication model is a single-password private-preview gate.
+- `stale_latest_candle` or `empty_response` means the refresh was not accepted; the scanner backs off rather than repeatedly requesting the same failing timeframe. Spot and Futures periodically synchronize freshness checks with their own `/time` endpoint. A logged clock offset corrects the comparison but does not bypass the stale-data guard.
+- Compare the latest kline close time with the matching exchange `/time` response, not only the HTTP `Date` header. A close time later than now can be the current, still-open candle; it is excluded until complete. If exchange time and klines are themselves delayed, wait for the public feed to recover rather than overriding the freshness check.
+- `Connecting WS` is only an attempt. Look for `WebSocket connected for SPOT` and/or `WebSocket connected for FUTURES`; reconnect warnings indicate that market's feed is not currently healthy.
 
 ## Paper order rejection
 
@@ -85,4 +81,4 @@ Promotion may be rejected because of insufficient samples, invalid timestamps, i
 
 Include application version/commit, OS version, runtime mode, redacted logs, reproduction steps, expected behavior and actual behavior.
 
-Exclude bearer tokens, website secrets, Telegram tokens, private database contents and personal filesystem paths.
+Exclude bearer tokens, Telegram tokens, private database contents and personal filesystem paths.

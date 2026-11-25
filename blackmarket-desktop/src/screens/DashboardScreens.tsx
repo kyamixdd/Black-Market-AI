@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { mutateJson, requestJson } from '../services/backendClient'
 import { DataTable as Table, DetailCard, EmptyState, ScreenHeader, SummaryCard, TableHead } from '../components/ui/TerminalPrimitives'
@@ -18,6 +18,7 @@ export type ScreenName =
   | 'Community Library'
   | 'Risk Management'
   | 'Activity'
+  | 'Diagnostics'
   | 'Settings'
 
 export type WorkspaceMarket = {
@@ -383,6 +384,23 @@ type Props = {
   marketType: 'SPOT' | 'FUTURES'
   data: WorkspaceData
   activityLoadState: 'loading' | 'ready' | 'error'
+  diagnostics: {
+    isDesktop: boolean
+    backendState: string
+    apiReady: boolean
+    websocketConnected: boolean
+    marketDataStatus: string
+    health: Record<string, unknown> | null
+    logs: string[]
+    logState: 'loading' | 'ready' | 'error' | 'unavailable'
+      requestMetrics: {
+        windowSeconds: number
+        requestCount: number
+        failureCount: number
+        averageDurationMs: number
+        p95DurationMs: number
+      }
+  }
   intelligenceLoadState: 'loading' | 'ready' | 'error'
   preferences: DashboardPreferences
   onPreferencesChange: (preferences: DashboardPreferences) => void
@@ -1092,6 +1110,70 @@ function ActivityScreen({ events, loadState }: { events: WorkspaceEvent[]; loadS
 }
 
 
+function DiagnosticsScreen({ data, activityLoadState, diagnostics }: {
+  data: WorkspaceData
+  activityLoadState: Props['activityLoadState']
+  diagnostics: Props['diagnostics']
+}) {
+  const healthValue = (key: string) => {
+    const value = diagnostics.health?.[key]
+    return value === true ? 'READY' : value === false ? 'FAILED' : 'UNKNOWN'
+  }
+  const runtimeChecks = [
+    ['Backend supervisor', diagnostics.backendState.toUpperCase(), 'Tauri-managed Python process'],
+    ['Authenticated API', diagnostics.apiReady ? 'READY' : 'UNAVAILABLE', 'Bearer-authenticated REST status probe'],
+    ['Database', healthValue('database_connected'), 'SQLite connection reported by backend'],
+    ['Realtime event channel', diagnostics.websocketConnected ? 'CONNECTED' : 'DISCONNECTED', 'Authenticated WebSocket connection'],
+    ['Market data', diagnostics.marketDataStatus.toUpperCase(), 'Current quote and candle freshness'],
+    ['Market scanner', diagnostics.health?.market_data_active === true ? 'ACTIVE' : diagnostics.health?.market_data_active === false ? 'INACTIVE' : 'UNKNOWN', 'Scanner lifecycle state'],
+    ['Learning model', diagnostics.health?.learning_active === true ? 'ACTIVE' : diagnostics.health?.learning_active === false ? 'INACTIVE' : 'UNKNOWN', 'A trained model is currently available'],
+    ['Paper trading', diagnostics.health?.paper_trading_active === true ? 'ACTIVE' : diagnostics.health?.paper_trading_active === false ? 'INACTIVE' : 'UNKNOWN', 'Simulated execution only'],
+    ['Risk manager', data.risk?.risk_manager_status?.toUpperCase() ?? 'UNKNOWN', 'Backend risk status from latest API response'],
+    ['Persisted activity', activityLoadState === 'ready' ? 'READY' : activityLoadState === 'error' ? 'UNAVAILABLE' : 'CHECKING', 'Recent application events'],
+  ]
+  const logMessage = diagnostics.logState === 'loading'
+    ? 'Loading backend process logs…'
+    : diagnostics.logState === 'error'
+      ? 'Backend process logs could not be read.'
+      : diagnostics.logState === 'unavailable'
+        ? 'Process logs are available in the installed desktop application.'
+        : diagnostics.logs.length === 0
+          ? 'No backend process output has been recorded yet.'
+          : ''
+
+  return (
+    <>
+      <ScreenHeader title="System Diagnostics" description="Live service readiness, persisted application events, and local backend process output" />
+      <div className="workspace-summary">
+        <SummaryCard label="BACKEND SUPERVISOR" value={diagnostics.backendState.toUpperCase()} />
+        <SummaryCard label="AUTHENTICATED API" value={diagnostics.apiReady ? 'READY' : 'UNAVAILABLE'} />
+        <SummaryCard label="DATABASE" value={healthValue('database_connected')} />
+        <SummaryCard label="LIVE EVENT STREAM" value={diagnostics.websocketConnected ? 'CONNECTED' : 'DISCONNECTED'} />
+        <SummaryCard label="MARKET DATA" value={diagnostics.marketDataStatus.toUpperCase()} />
+        <SummaryCard label="SCANNER" value={healthValue('market_data_active')} />
+        <SummaryCard label="API REQUESTS / 60S" value={String(diagnostics.requestMetrics.requestCount)} detail="Frontend HTTP requests" />
+        <SummaryCard label="API FAILURES / 60S" value={String(diagnostics.requestMetrics.failureCount)} />
+        <SummaryCard label="API AVG / P95" value={`${diagnostics.requestMetrics.averageDurationMs} / ${diagnostics.requestMetrics.p95DurationMs} ms`} />
+      </div>
+      <h2 className="workspace-section-title">Feature runtime checks</h2>
+      <Table minWidth={700}><TableHead labels={['SERVICE', 'STATE', 'CHECK']} />{runtimeChecks.map(([name, state, detail]) => (
+        <tr key={name}><td>{name}</td><td className={/FAILED|UNAVAILABLE|DISCONNECTED|INACTIVE|DEGRADED/i.test(state) ? 'negative' : ''}>{state}</td><td>{detail}</td></tr>
+      ))}</Table>
+      <h2 className="workspace-section-title">Backend process logs</h2>
+      {logMessage ? <p role={diagnostics.logState === 'error' ? 'alert' : 'status'} className="workspace-note">{logMessage}</p> : (
+        <pre className="diagnostics-log" role="log" aria-live="polite">{diagnostics.logs.join('\n')}</pre>
+      )}
+      <h2 className="workspace-section-title">Recent application activity</h2>
+      {activityLoadState === 'error' && <p role="alert" className="workspace-note">Persisted activity could not be loaded. The displayed events may be stale.</p>}
+      {activityLoadState === 'loading' && <p role="status" className="workspace-note">Loading persisted system events…</p>}
+      {data.events.length ? <Table minWidth={850}><TableHead labels={['TIMESTAMP', 'EVENT', 'SOURCE', 'ASSET', 'MARKET', 'DETAIL']} />{data.events.slice(0, 50).map((event, index) => <tr key={event.event_id ?? index}>
+        <td>{timestamp(event.timestamp)}</td><td className={/ERROR|FAIL|REJECT|RISK_ALERT/i.test(event.event_type ?? '') ? 'negative' : ''}>{event.event_type ?? '—'}</td><td>{event.source ?? '—'}</td><td>{event.symbol ?? '—'}</td><td>{event.market ?? '—'}</td><td>{String(event.payload?.message ?? event.payload?.reason ?? event.payload?.status ?? '—')}</td>
+      </tr>)}</Table> : activityLoadState === 'ready' ? <EmptyState text="No system events are available in local history." /> : null}
+      {!diagnostics.isDesktop && <p className="workspace-note">Backend process logs are only exposed by the supervised desktop application.</p>}
+    </>
+  )
+}
+
 function IntelligenceModePanel() {
   type Mode = 'balanced' | 'fast' | 'research' | 'conservative'
   type Profile = { mode: Mode; max_tool_calls: number; memory_enabled: boolean; feedback_enabled: boolean; provider_enabled: boolean; response_detail: 'brief' | 'normal' | 'detailed' }
@@ -1152,7 +1234,10 @@ function SettingsScreen({
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
-  const value = (key: keyof WorkspaceSettings) => draft[key] ?? (Array.isArray(settings?.[key]) ? (settings?.[key] as string[]).join(', ') : String(settings?.[key] ?? ''))
+  const value = (key: keyof WorkspaceSettings) => {
+    const setting = settings?.[key]
+    return draft[key] ?? (Array.isArray(setting) ? setting.join(', ') : String(setting ?? ''))
+  }
   const updatePreference = (key: keyof DashboardPreferences) => onPreferencesChange({ ...preferences, [key]: !preferences[key] })
   return (
     <>
@@ -1294,7 +1379,7 @@ function CommunityLibraryScreen() {
   const [report, setReport] = useState('{"total_trades":0,"sample_period":""}')
   const [sourceReportId, setSourceReportId] = useState('')
 
-  const load = async () => {
+  const load = useCallback(async () => {
     const requestId = ++listRequestId.current
     const normalizedAsset = assetFilter.trim().toUpperCase()
     const normalizedTimeframe = timeframeFilter.trim()
@@ -1331,14 +1416,14 @@ function CommunityLibraryScreen() {
     } finally {
       if (requestId === listRequestId.current) setListLoading(false)
     }
-  }
+  }, [assetFilter, timeframeFilter, sort, query, strategyKey, showFavorites])
   useEffect(() => {
     const timer = window.setTimeout(() => { void load() }, 250)
     return () => {
       window.clearTimeout(timer)
       listRequestId.current += 1
     }
-  }, [query, strategyKey, assetFilter, timeframeFilter, sort, showFavorites])
+  }, [load])
 
   const publish = async (event: FormEvent) => {
     event.preventDefault()
@@ -1562,6 +1647,7 @@ export function DashboardScreen(props: Props) {
       {screen === 'Strategy Lab' && <StrategyLabScreen onRun={props.onStrategyLabRun} onCompare={props.onStrategyLabCompare} data={data} preferences={props.preferences} screen={screen} symbol={props.symbol} marketType={props.marketType} onWorkspaceLoad={props.onWorkspaceLoad} />}
       {screen === 'Risk Management' && <RiskScreen risk={data.risk} portfolio={data.portfolio} alerts={data.riskAlerts} />}
       {screen === 'Activity' && <ActivityScreen events={data.events} loadState={props.activityLoadState} />}
+      {screen === 'Diagnostics' && <DiagnosticsScreen data={data} activityLoadState={props.activityLoadState} diagnostics={props.diagnostics} />}
       {screen === 'Settings' && <SettingsScreen settings={data.settings} preferences={props.preferences} onPreferencesChange={props.onPreferencesChange} onSettingsSave={props.onSettingsSave} />}
     </section>
   )
@@ -1639,14 +1725,12 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     const day = String(date.getDate()).padStart(2, '0')
     return date.getFullYear() + '-' + month + '-' + day
   }
-  const defaultEndDate = localDateValue(new Date())
-  const defaultStartDate = localDateValue(new Date(Date.now() - 60 * 86400000))
+  const [start, setStart] = useState(() => localDateValue(new Date(Date.now() - 60 * 86400000)))
+  const [end, setEnd] = useState(() => localDateValue(new Date()))
   const [strategy, setStrategy] = useState('momentum')
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [market, setMarket] = useState<'SPOT' | 'FUTURES'>('SPOT')
   const [timeframe, setTimeframe] = useState('1h')
-  const [start, setStart] = useState(defaultStartDate)
-  const [end, setEnd] = useState(defaultEndDate)
   const [capital, setCapital] = useState('1000')
   const [risk, setRisk] = useState('1')
   const [mode, setMode] = useState('risk_pct')
@@ -1672,7 +1756,7 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
   const [loadedReport, setLoadedReport] = useState<any>(null)
   const [loadedWorkspace, setLoadedWorkspace] = useState<any>(null)
   const [persistenceMessage, setPersistenceMessage] = useState('')
-  const reloadSaved = async () => {
+  const reloadSaved = useCallback(async () => {
     try {
       const [strategies, reports, workspaces] = await Promise.all([
         requestJson<{ strategies?: any[] }>('/research/strategies'),
@@ -1691,8 +1775,11 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
       setPersistenceMessage(reason instanceof Error ? reason.message : 'Saved research could not be loaded.')
       return false
     }
-  }
-  useEffect(() => { void reloadSaved() }, [])
+  }, [])
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => { void reloadSaved() }, 0)
+    return () => window.clearTimeout(initialLoad)
+  }, [reloadSaved])
   useEffect(() => {
     let active = true
     requestJson<any>('/learning/strategy-dna').then(value => { if (active) setDna(value) }).catch(error => { if (active) setDnaError(error instanceof Error ? error.message : 'Strategy DNA unavailable') })

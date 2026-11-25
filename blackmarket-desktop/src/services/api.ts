@@ -1,8 +1,9 @@
 // API service for communicating with the BlackMarket AI backend.
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { backendBaseUrl, isDesktopRuntime } from './backendClient.js';
 import { getApiAuthorization } from './localAuth';
 
-const API_BASE_URL = 'http://127.0.0.1:8765';
+const API_BASE_URL = backendBaseUrl();
 
 export type IntelligenceMode = 'balanced' | 'fast' | 'research' | 'conservative';
 export type IntelligenceResponseDetail = 'brief' | 'normal' | 'detailed';
@@ -23,7 +24,7 @@ class ApiService {
 
   constructor() {
     this.client = axios.create({
-      baseURL: `${API_BASE_URL}/api`,
+      baseURL: API_BASE_URL,
       timeout: 10000,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -84,7 +85,8 @@ class ApiService {
   }
 
   async getHealth() {
-    const response = await axios.get(`${API_BASE_URL}/health`, { timeout: 10000 });
+    const healthUrl = isDesktopRuntime() ? 'http://127.0.0.1:8765/health' : '/api/health';
+    const response = await axios.get(healthUrl, { timeout: 10000 });
     return response.data;
   }
   async getSystemStatus() { return this.client.get('/system/status'); }

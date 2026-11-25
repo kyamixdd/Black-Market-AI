@@ -4,17 +4,17 @@
 
 BlackMarket AI is a local-first cryptocurrency market research, strategy-development and paper-trading application. It combines public exchange data, market analysis, signal generation, strategy testing, simulated execution, risk controls and a controlled learning pipeline in one workspace.
 
-The primary product is the Tauri desktop application with a supervised Python backend. A Next.js website exists as a private-preview interface and uses a server-side session and backend proxy. The desktop and website share the React/TypeScript dashboard source.
+The production product is the Tauri desktop application with a supervised Python backend. The legacy Next.js source is not a supported production interface; the React/TypeScript dashboard is packaged through the desktop Vite/Tauri build.
 
 **Trading boundary:** BlackMarket AI is paper-trading and simulation software. It does not place real-money exchange orders and does not require private Binance trading credentials for public market-data access.
 
 ## 2. Repository baseline and audit method
 
-- Review date: 24 November 2026
+- Review date: 25 November 2026
 - Product version declared by project: `1.0.0`
-- Local Git state: repository initialized with no commits; application files are uncommitted. No branch head or source commit was verified.
+- Local Git state: branch `Black-Market-AI-Beta-1.0.1` at baseline commit `466dbc7`; the working tree contains uncommitted changes.
 - Audit type: source inventory, subsystem tracing, security/persistence/risk/market/ML/API/frontend review, documentation reconciliation, and local test/build checks.
-- Runtime limitations: this audit did not verify live production Binance streams, hosted backend operation, a fresh backtest/model run, installer acceptance, or visual interaction across supported devices.
+- Runtime limitations: this audit did not verify live production Binance streams, a fresh backtest/model run, installer acceptance, or visual interaction across supported devices.
 
 The inventory contains 226 authored application and test files outside generated build output. Findings below distinguish source implementation, local automated verification, and live deployment/runtime behavior that still requires acceptance testing. Presence of a module or screen is not proof of profitability, prediction quality, or public-hosting readiness.
 
@@ -50,20 +50,9 @@ The desktop target consists of:
 
 The desktop API defaults to loopback, normally `127.0.0.1:8765`, and requires bearer authentication. Remote API mode is disabled by default.
 
-### 4.2 Website private preview
+### 4.2 Browser-only Vite development
 
-The website is built with Next.js and imports the shared dashboard from `blackmarket-desktop/src`. Its application boundary includes:
-
-- Server-side single-password login.
-- Signed, HttpOnly session cookie.
-- Same-origin request checks for state-changing operations.
-- Same-origin backend proxy.
-- Server-only backend URL and bearer token.
-- Authenticated server-side event-stream proxy.
-
-The website is **private preview**, not a public multi-user SaaS. It does not currently provide individual user identity, roles, MFA, account recovery, or per-user hosted trading-account isolation. Login and rate-limit state have documented process-local limitations in multi-instance/serverless environments.
-
-A successful Vercel/Next.js frontend build does not prove that the remote Python backend, database persistence, SSE, market data or paper-trading workflow is operating.
+The Vite browser preview is a local development aid only. It does not start or supervise the Python engine; start Tauri first and keep the Vite server bound to loopback. The server-side proxy reads the local API token from desktop app data and injects it only for allowed local origins. Packaged production builds are the Tauri desktop application, not a browser-hosted site.
 
 ### 4.3 Python engine
 
@@ -326,16 +315,19 @@ Read paper account balances/equity, open positions, closed trades and PnL. These
 ### Risk panel
 Displays configured limits and current risk/exposure state. A UI value is only authoritative when returned by the backend.
 
+### Activity and system diagnostics
+Activity displays persisted application events. Diagnostics is a separate live desktop view that reports supervisor/API/database/WebSocket/scanner/learning/paper-trading status, recent persisted events, a bounded backend process-log tail, and rolling frontend HTTP request/failure/latency metrics. Process logs are redacted and bounded; unknown component state remains unknown. Diagnostics reports observed state, not a guarantee that every function or live exchange feed is correct.
+
 ### Learning panel
 Displays recorded predictions, outcomes, model status and evaluation results. It should not imply a model has been trained or promoted unless the registry/status confirms it.
 
 ### Research and saved workspaces
-Research snapshots and workspaces allow analysis/configuration to be retained for later review. Saved data is local to the configured database unless the hosted service uses a common durable database.
+Research snapshots and workspaces allow analysis/configuration to be retained for later review. Saved data is local to the configured database.
 
 ### Community strategy library
 The community module supports strategy listing/search/filtering, publishing/updating strategy metadata and rules, immutable version snapshots, favorites, reports and unpublishing. Published report metrics are labeled by provenance such as user-submitted or local-backtest. A digest detects summary changes; it does not independently prove a result.
 
-Community ownership is pseudonymous per browser/device in the documented preview design. Local desktop library records do not automatically sync to a hosted community database. No profitability ranking or independent backtest verification is currently awarded.
+Community ownership uses a local pseudonymous identifier. Records are not synchronized to a hosted service. No profitability ranking or independent backtest verification is currently awarded.
 
 ### Share challenges
 The repository contains a share-challenge API and frontend feature area. Shared challenge data must remain limited to the intended public challenge payload; private account/trade records are not automatically included.
@@ -423,7 +415,7 @@ Mode selection changes assistant behavior only. It does not add tools or enable 
 Extend the strategy interface and register a strategy in the Strategy Lab’s strategy map. Add tests for signal behavior, invalid/missing data, sizing assumptions, and backtest execution. Preserve the completed-bar/next-open fill convention unless a documented, tested execution model replaces it.
 
 ### Frontend customization
-The canonical shared dashboard is in `blackmarket-desktop/src`. Update the shared components/screens and design tokens there so desktop and website remain consistent. The website imports this source tree; it should not fork dashboard behavior.
+The canonical desktop dashboard is in `blackmarket-desktop/src`. Update its components/screens and design tokens there; do not add a hosted web target.
 
 ### Assistant customization
 Add a new assistant capability by:
@@ -444,13 +436,10 @@ Use a compatible endpoint only through backend environment configuration. Provid
 BlackMarket AI can be monetized as software or a research product, but the current repository does not itself provide a revenue guarantee or completed billing infrastructure. Possible business models include:
 
 - **Desktop license:** one-time purchase or paid major-version upgrade for the packaged application.
-- **Subscription research tier:** hosted analysis, synchronized workspaces, strategy research or premium reporting after hosted identity, access control and durable infrastructure are implemented.
 - **Pro features:** advanced backtesting, model diagnostics, strategy comparison and enhanced local workflows, with clear feature boundaries.
 - **Educational products:** strategy-development tutorials, research templates and training material built around the simulator.
 - **Private deployment/licensing:** licensed deployment for research teams, subject to support and data-handling requirements.
 - **Community marketplace:** future paid strategy distribution only after authorship, provenance, moderation, licensing and consumer-protection rules are defined.
-
-Before charging for hosted access, implement and verify individual accounts, billing/entitlement checks, secure user isolation, abuse controls, privacy/data retention, durable database storage, backups, support and release operations. The current shared-password website preview is not an appropriate multi-customer subscription architecture.
 
 Do not market the product as a money-making trading bot or promise returns. The defensible commercial value is research workflow, simulation, transparency and strategy evaluation.
 
@@ -458,41 +447,39 @@ Do not market the product as a money-making trading bot or promise returns. The 
 
 - Desktop API is loopback-bound by default and bearer-authenticated.
 - Remote API mode requires explicit enablement and a high-entropy token.
-- Website credentials and backend tokens are server-only.
-- Website auth and rate-limit controls are private-preview controls and have process-local limitations.
 - SQLite, model artifacts and backup archives are not application-encrypted.
 - Market data is public but may be delayed, incomplete or unavailable.
 - Telegram/provider credentials must be protected.
-- Community records are pseudonymous; current hosted authentication is not individual identity.
+- Community records use a local pseudonymous identifier.
 - No live trading or exchange private-order execution is supported.
 - Backtests and ML outputs are not guarantees of future performance.
 
 ## 16. Audit findings and current release state
 
-- `.env.example` contained a non-placeholder Telegram token. It was removed from the template and Telegram is disabled there. Revoke the exposed token and review any published Git history or artifacts; the local repository has no commits to inspect.
+- `.env.example` contained a non-placeholder Telegram token. It was removed from the template and Telegram is disabled there. Revoke it and review any published Git history or artifacts; a targeted local history scan found a token-shaped value at commit `0415b531e14efa7e03c932a6c1e7ee8492105179`, but external publication history is unknown.
 - `risk/adaptive_risk.py` calculates drawdown from persisted high-water-mark evidence and correlation from aligned, validated return observations. Missing or insufficient evidence is reported as unavailable. The main simulator does not currently supply all evidence to the adaptive assessment, so these factors may remain unavailable.
 - `REAL_TRADING_ENABLED=true` is rejected at startup. Unused Binance API key/secret configuration was removed; exchange access uses public market-data endpoints and paper execution only.
-- Thirty compressed database backups were found under `data/backups/`. `.gitignore` already excludes `data/backups/*.db.gz`. Their contents were not opened and Git tracking cannot be determined without commits.
+- Eighty-six backup files and three database-related files are tracked in Git, as are 124 generated Next build files. Ignore rules now prevent newly generated local data from being added, but existing tracked files were left untouched.
 - SQLite databases, model files and backup archives are not application-encrypted.
-- The website uses a shared-password gate and shared backend state; it is not a multi-user, per-account isolated service.
-- The source contains a Binance stream manager, but production scanning currently uses public REST polling and does not configure exchange stream subscriptions. The watchdog stall handler logs a stall but does not restart components.
-- The project is a desktop beta candidate and website private preview. Public release remains blocked by the open items in `RELEASE_READINESS.md`.
+- The legacy Next.js source is not supported for production; its shared backend had no account-level authorization or tenant isolation.
+- The scanner configures bounded Binance ticker-stream subscriptions after REST ticker discovery; live production stream availability and recovery have not been verified. The watchdog stall handler logs a stall but does not restart components.
+- The project is a desktop beta candidate; public release remains blocked by the open items in `RELEASE_READINESS.md`.
 
 ## 17. Local verification evidence
 
-- Python regression tests: 669 passed and 3 live exchange tests deselected on Python 3.13; Python 3.12 was not run locally.
+- Python regression tests: 670 passed and 3 live exchange tests deselected on Python 3.13; Python 3.12 was not run locally.
 - Python dependency audit reported no known vulnerabilities; `pip check` found no broken requirements. The Python wheel built successfully and included its required backend packages.
 - Desktop frontend: 16 service tests and production build passed; lint completed with warnings and the build reported a large main chunk.
 - Responsive browser smoke passed at eight viewport widths, checking overflow, primary navigation, chart-settings interaction, and page errors. Full Tauri interaction and keyboard acceptance remain unverified.
-- Website: `npm ci`, 8 security tests, TypeScript check, production build, and dependency audit passed; npm audit reported zero vulnerabilities.
-- No current-head CI, Tauri installer, production exchange stream, hosted deployment, backup restore, or financial-performance test was verified in this workspace. The current Starlette TestClient integration emits an httpx deprecation warning.
+- The legacy Next.js source is retained but excluded from CI and desktop packaging; it has no supported production build, start command, or deployment workflow.
+- No current-head CI, Tauri installer, production exchange stream, backup restore, or financial-performance test was verified in this workspace. The current Starlette TestClient integration emits an httpx deprecation warning.
 
-The detailed findings, severity, evidence, and fixes are in `AUDIT_REPORT.txt`.
+The detailed findings, severity, evidence, and recommendations are in `LOCAL_AUDIT_REPORT.md`.
 
 ## 18. Primary documentation
 
 - `README.md` — project overview and development setup.
-- `RELEASE_READINESS.md` — release gates and current deployment classification.
+- `RELEASE_READINESS.md` — desktop release gates and current classification.
 - `SECURITY.md` — threat model and security controls.
 - `BACKUP_GUIDE.md` — backup/restore operations.
 - `TROUBLESHOOTING.md` — operational diagnostics.
@@ -501,12 +488,13 @@ The detailed findings, severity, evidence, and fixes are in `AUDIT_REPORT.txt`.
 - `docs/COMMUNITY_STRATEGY_LIBRARY.md` — community publication and provenance.
 - `docs/STAGE9_INTELLIGENCE_CONFIGURATION.md` — intelligence modes.
 - `docs/STAGE12_INTELLIGENCE_AUDIT.md` — intelligence audit findings.
-- `docs/RELEASING_AND_HOSTING.md` — release and hosting procedure.
+- `docs/RELEASING_AND_HOSTING.md` — desktop release procedures.
 
 ## 19. Maintainer summary
+For the current screen-to-service map and explicit implemented/partial/unverified boundaries, see `docs/FEATURE_AUDIT.md`. For the generated first-party function-candidate index, see `docs/SYMBOL_CATALOG.md`; symbol presence is not runtime verification.
 
-BlackMarket AI is a substantial local-first market research and paper-trading application with a shared desktop/web dashboard, Python market engine, Binance public-data integration, strategy research, simulated execution, risk controls, persistence, model lifecycle and a bounded evidence-based assistant.
+BlackMarket AI is a substantial local-first market research and paper-trading application with a Tauri desktop UI, Python market engine, Binance public-data integration, strategy research, simulated execution, risk controls, persistence, model lifecycle and a bounded evidence-based assistant.
 
-The desktop is the primary product path. The website remains private preview. The assistant is deterministic by default with an optional compatible provider; the ML pipeline is a separate training and evaluation system. Paper trading is the only execution mode.
+The desktop application is the only supported production target. The assistant is deterministic by default with an optional compatible provider; the ML pipeline is a separate training and evaluation system. Paper trading is the only execution mode.
 
-The main current repository concerns are hosted-service readiness, release acceptance, risk metric placeholders, and source provenance. Database backups are ignored by `.gitignore`; their tracked status cannot be checked in this commitless workspace. No profitability, live hosted operation, or current-head CI result is claimed by this document.
+The main current repository concerns are release acceptance, risk metric evidence, locally tracked runtime data/build output, and source provenance. Existing tracked data was not removed because the working tree already contains user changes. No profitability, live stream operation, or current-head CI result is claimed by this document.

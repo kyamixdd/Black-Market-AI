@@ -1,9 +1,7 @@
 {
-  "/api/logout/route": "/api/logout",
-  "/api/login/route": "/api/login",
   "/_not-found/page": "/_not-found",
-  "/api/backend/[...path]/route": "/api/backend/[...path]",
   "/api/health/route": "/api/health",
-  "/login/page": "/login",
+  "/api/identity/route": "/api/identity",
+  "/api/backend/[...path]/route": "/api/backend/[...path]",
   "/page": "/"
 }

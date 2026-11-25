@@ -45,6 +45,7 @@ class WebSocketManager:
         self._last_message_ms: int | None = None
         self._last_message_by_market: dict[str, int | None] = {"SPOT": None, "FUTURES": None}
         self._reconnect_attempts = 0
+        self._lifecycle_lock = asyncio.Lock()
 
     def add_handler(self, handler: Callable[[dict], Awaitable[None]]) -> None:
         self._handlers.append(handler)
@@ -63,6 +64,7 @@ class WebSocketManager:
                     self._connected_connections += 1
                     self._connected_by_market[market] += 1
                     backoff = 1.0
+                    logger.info("WebSocket connected for %s (%d streams)", market, len(streams))
                     try:
                         while self._running:
                             msg = await ws.recv()
@@ -86,6 +88,11 @@ class WebSocketManager:
                         self._connected_by_market[market] = max(
                             0, self._connected_by_market[market] - 1
                         )
+                        if self._running:
+                            logger.warning(
+                                "WebSocket disconnected for %s; reconnecting",
+                                market,
+                            )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -153,29 +160,26 @@ class WebSocketManager:
         }
 
     async def start(self, spot_streams: list[str], futures_streams: list[str]) -> None:
-        if self._running:
-            if spot_streams == self._spot_streams and futures_streams == self._futures_streams:
-                return
-            await self.stop()
-        self._spot_streams = list(spot_streams)
-        self._futures_streams = list(futures_streams)
-        self._connected_connections = 0
-        self._connected_by_market = {"SPOT": 0, "FUTURES": 0}
-        self._last_message_ms = None
-        self._last_message_by_market = {"SPOT": None, "FUTURES": None}
-        self._running = True
-        # Chunk spot streams
-        for i in range(0, len(self._spot_streams), self.max_streams_per_conn):
-            chunk = self._spot_streams[i : i + self.max_streams_per_conn]
-            if chunk:
-                t = asyncio.create_task(self._run_stream(SPOT_WS_URL, chunk))
-                self._tasks.append(t)
-        # Chunk futures streams
-        for i in range(0, len(self._futures_streams), self.max_streams_per_conn):
-            chunk = self._futures_streams[i : i + self.max_streams_per_conn]
-            if chunk:
-                t = asyncio.create_task(self._run_stream(FUTURES_WS_URL, chunk))
-                self._tasks.append(t)
+        async with self._lifecycle_lock:
+            if self._running:
+                if spot_streams == self._spot_streams and futures_streams == self._futures_streams:
+                    return
+                await self._stop_unlocked()
+            self._spot_streams = list(spot_streams)
+            self._futures_streams = list(futures_streams)
+            self._connected_connections = 0
+            self._connected_by_market = {"SPOT": 0, "FUTURES": 0}
+            self._last_message_ms = None
+            self._last_message_by_market = {"SPOT": None, "FUTURES": None}
+            self._running = True
+            for base_url, streams in (
+                (SPOT_WS_URL, self._spot_streams),
+                (FUTURES_WS_URL, self._futures_streams),
+            ):
+                for i in range(0, len(streams), self.max_streams_per_conn):
+                    chunk = streams[i : i + self.max_streams_per_conn]
+                    if chunk:
+                        self._tasks.append(asyncio.create_task(self._run_stream(base_url, chunk)))
 
     async def restart(self) -> None:
         """Restart active streams without leaving duplicate stream tasks behind."""
@@ -185,6 +189,10 @@ class WebSocketManager:
         await self.start(spot_streams, futures_streams)
 
     async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            await self._stop_unlocked()
+
+    async def _stop_unlocked(self) -> None:
         self._running = False
         self._connected_connections = 0
         self._connected_by_market = {"SPOT": 0, "FUTURES": 0}

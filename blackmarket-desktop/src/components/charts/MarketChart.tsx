@@ -1,12 +1,10 @@
 // Main market chart component using Lightweight Charts.
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createChart,
   IChartApi,
   ISeriesApi,
-  CandlestickData,
   UTCTimestamp,
-  WhitespaceData,
   Time,
 } from 'lightweight-charts';
 import { useMarketStore } from '../../stores/marketStore';
@@ -29,11 +27,39 @@ export const MarketChart: React.FC<MarketChartProps> = ({
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const [loading, setLoading] = useState(true);
-  const { selectedSymbol, selectedMarket, selectedTimeframe, candles, setCandles, setCurrentPrice } = useMarketStore();
+  const { selectedSymbol } = useMarketStore();
 
   const currentSymbol = symbol || selectedSymbol || 'BTCUSDT';
   const currentMarket = market || 'SPOT';
   const currentTimeframe = timeframe || '1h';
+
+  const loadCandles = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/markets/${currentSymbol}/candles?market=${currentMarket}&timeframe=${currentTimeframe}&limit=500`);
+      const data = await response.json();
+      if (data.candles) {
+        const formattedCandles = data.candles.map((c: any) => ({
+          time: c.open_time / 1000,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        }));
+        seriesRef.current?.setData(formattedCandles);
+
+        const volumeData = data.candles.map((c: any) => ({
+          time: c.open_time / 1000,
+          value: c.volume,
+          color: c.close >= c.open ? '#d9dbdc' : '#777c81',
+        }));
+        volumeSeriesRef.current?.setData(volumeData);
+      }
+      setLoading(false);
+    } catch (e) {
+      console.error('Failed to load candles:', e);
+      setLoading(false);
+    }
+  }, [currentMarket, currentSymbol, currentTimeframe]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -113,9 +139,6 @@ export const MarketChart: React.FC<MarketChartProps> = ({
     seriesRef.current = candleSeries;
     volumeSeriesRef.current = volumeSeries;
 
-    // Load initial data
-    loadCandles();
-
     // Handle cleanup
     return () => {
       resizeObserver.disconnect();
@@ -123,49 +146,10 @@ export const MarketChart: React.FC<MarketChartProps> = ({
     };
   }, [height]);
 
-  const loadCandles = async () => {
-    try {
-      const response = await fetch(`/api/markets/${symbol}/candles?market=${market}&timeframe=${timeframe}&limit=500`);
-      const data = await response.json();
-      if (data.candles) {
-        const formattedCandles = data.candles.map((c: any) => ({
-          time: c.open_time / 1000,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-        }));
-        seriesRef.current?.setData(formattedCandles);
-
-        // Update volume
-        const volumeData = data.candles.map((c: any) => ({
-          time: c.open_time / 1000,
-          value: c.volume,
-          color: c.close >= c.open ? '#d9dbdc' : '#777c81',
-        }));
-        volumeSeriesRef.current?.setData(volumeData);
-
-        // Update current price
-        if (formattedCandles.length > 0) {
-          const lastClose = formattedCandles[formattedCandles.length - 1].close;
-          if (seriesRef.current) {
-            seriesRef.current.setData(formattedCandles);
-          }
-        }
-      }
-      setLoading(false);
-    } catch (e) {
-      console.error('Failed to load candles:', e);
-      setLoading(false);
-    }
-  };
-
-  const handleCrosshairMove = (param: any) => {
-    if (param.time) {
-      const date = new Date((param.time as number) * 1000);
-      // Could emit crosshair data for tooltip
-    }
-  };
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => { void loadCandles(); }, 0);
+    return () => window.clearTimeout(initialLoad);
+  }, [loadCandles]);
 
   return (
     <div

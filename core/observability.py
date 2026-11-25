@@ -32,7 +32,7 @@ class JsonLogFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact_sensitive_text(record.getMessage()),
         }
-        for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation", "symbol", "market", "order_type", "reason", "scanner_state", "symbols_selected", "refresh_successes", "refresh_failures"):
+        for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation", "symbol", "market", "order_type", "reason", "scanner_state", "symbols_selected", "refresh_successes", "refresh_failures", "refresh_skipped"):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value

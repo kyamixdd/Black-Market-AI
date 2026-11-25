@@ -30,7 +30,7 @@ import {
 import { LiveMarketChart } from './components/charts/LiveMarketChart'
 import { DashboardScreen } from './screens/DashboardScreens'
 import { getApiAuthorization, setApiToken } from './services/localAuth'
-import { backendBaseUrl, mutateJson, requestJson } from './services/backendClient'
+import { backendBaseUrl, getBackendRequestMetrics, mutateJson, requestJson } from './services/backendClient'
 import {
   assessMarketData,
   marketChartKey,
@@ -50,6 +50,8 @@ import type {
   WorkspaceRisk,
   WorkspaceSignal,
 } from './screens/DashboardScreens'
+
+declare const __BLACKMARKET_LOCAL_BROWSER_DEV__: boolean
 
 type MarketSnapshot = MarketSnapshotData
 
@@ -167,6 +169,7 @@ const NAV_ITEMS: { label: ScreenName; shortLabel: string; icon: ReactNode }[] = 
   { label: 'Community Library', shortLabel: 'Community', icon: <Network size={12} /> },
   { label: 'Risk Management', shortLabel: 'Risk', icon: <ShieldAlert size={12} /> },
   { label: 'Activity', shortLabel: 'Activity', icon: <Activity size={12} /> },
+  { label: 'Diagnostics', shortLabel: 'Diagnostics', icon: <Activity size={12} /> },
   { label: 'Settings', shortLabel: 'Settings', icon: <Settings2 size={12} /> },
 ]
 const QUICK_PROMPTS = [
@@ -294,6 +297,11 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
 
 function App() {
   const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+  const isLocalBrowserDev = !isTauri
+    && typeof window !== 'undefined'
+    && typeof __BLACKMARKET_LOCAL_BROWSER_DEV__ !== 'undefined'
+    && __BLACKMARKET_LOCAL_BROWSER_DEV__
+  const apiContext = isTauri || isLocalBrowserDev ? 'local' : 'hosted'
   const hasBootstrappedRef = useRef(false)
   const [symbol, setSymbol] = useState('BTCUSDT')
   const [searchValue, setSearchValue] = useState('BTCUSDT')
@@ -306,6 +314,9 @@ function App() {
   })
   const [apiReady, setApiReady] = useState(false)
   const [activityLoadState, setActivityLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [backendLogs, setBackendLogs] = useState<string[]>([])
+  const [backendLogState, setBackendLogState] = useState<'loading' | 'ready' | 'error' | 'unavailable'>('loading')
+  const [requestMetrics, setRequestMetrics] = useState(getBackendRequestMetrics)
   const [intelligenceLoadState, setIntelligenceLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [websocketConnected, setWebsocketConnected] = useState(false)
   const [websocketInitialized, setWebsocketInitialized] = useState(false)
@@ -341,6 +352,7 @@ function App() {
     { id: 1, role: 'assistant', text: 'Local assistant ready. Answers use only market, signal, portfolio, risk, learning, and activity data from this BlackMarket AI session.' },
   ])
   const [messageInput, setMessageInput] = useState('')
+  const messageSequenceRef = useRef(1)
   const refreshMarketRef = useRef<() => void>(() => {})
   const refreshAnalyticsRef = useRef<() => void>(() => {})
   const refreshScreenDataRef = useRef<() => void>(() => {})
@@ -375,7 +387,7 @@ function App() {
 
       let ready = false
       let authenticationFailed = false
-      let healthError = isTauri ? 'The local API is not responding yet.' : 'The hosted API is not responding yet.'
+      let healthError = `The ${apiContext} API is not responding yet.`
       const controller = new AbortController()
       const requestTimeout = window.setTimeout(() => controller.abort(), 5000)
       try {
@@ -384,7 +396,7 @@ function App() {
           cache: 'no-store',
         })
         if (!response.ok) {
-          healthError = `The ${isTauri ? 'local' : 'hosted'} API returned HTTP ${response.status}.`
+          healthError = `The ${apiContext} API returned HTTP ${response.status}.`
         } else {
           const healthPayload: unknown = await response.json()
           const health = !isTauri && typeof healthPayload === 'object' && healthPayload !== null && 'backend' in healthPayload
@@ -409,7 +421,7 @@ function App() {
             if (authenticatedResponse.ok) ready = true
             else {
               authenticationFailed = authenticatedResponse.status === 401
-              healthError = `The authenticated API check returned HTTP ${authenticatedResponse.status}.`
+              healthError = `The authenticated ${apiContext} API check returned HTTP ${authenticatedResponse.status}.`
               setApiToken(null)
             }
           } else {
@@ -420,7 +432,7 @@ function App() {
         if (error instanceof Error && error.message.includes('API token')) setApiToken(null)
         healthError = error instanceof Error && error.message.includes('API token')
           ? error.message
-          : `The ${isTauri ? 'local' : 'hosted'} API is unreachable or its authenticated startup check failed.`
+          : `The ${apiContext} API is unreachable or its authenticated startup check failed.`
         authenticationFailed = error instanceof Error && error.message.includes('API token')
       } finally {
         window.clearTimeout(requestTimeout)
@@ -433,13 +445,13 @@ function App() {
           setApiReady(true)
           setStartupStatus({
             state: 'ready',
-            message: isTauri ? 'The local backend API and database are ready.' : 'The hosted backend API and database are ready.',
+            message: `The ${apiContext} backend API and database are ready.`,
           })
         } else {
           startupProbeFailuresRef.current += 1
           const retainReadyState = apiReadyRef.current && !authenticationFailed && startupProbeFailuresRef.current < 3
           if (retainReadyState) {
-            setStartupStatus({ state: 'ready', message: isTauri ? 'The local backend API and database are ready.' : 'The hosted backend API and database are ready.' })
+            setStartupStatus({ state: 'ready', message: `The ${apiContext} backend API and database are ready.` })
             checking = false
             return
           }
@@ -473,8 +485,10 @@ function App() {
           } else if (!isTauri && Date.now() - startedAt >= 30000) {
             setStartupStatus({
               state: 'failed',
-              message: 'The hosted backend is unavailable.',
-              details: 'The website cannot launch the Python engine. Check the hosted backend service and its health endpoint.'
+              message: isLocalBrowserDev ? 'The local backend is unavailable.' : 'The hosted backend is unavailable.',
+              details: isLocalBrowserDev
+                ? 'Keep START_BLACKMARKET_DEV.bat running and wait for its Tauri-managed backend, then retry.'
+                : 'The website cannot launch the Python engine. Check the hosted backend service and its health endpoint.'
             })
           } else {
             setStartupStatus({
@@ -493,7 +507,7 @@ function App() {
       active = false
       window.clearInterval(timer)
     }
-  }, [isTauri, retryToken])
+  }, [apiContext, isLocalBrowserDev, isTauri, retryToken])
 
   useEffect(() => {
     if (!apiReady) {
@@ -689,6 +703,58 @@ function App() {
       window.clearInterval(analyticsTimer)
     }
   }, [apiReady, marketType, symbol, timeframe])
+  useEffect(() => {
+    if (activeScreen !== 'Diagnostics') return
+    let active = true
+    let loadingData = false
+    let loadingLogs = false
+    const refreshDiagnosticsData = async () => {
+      if (loadingData) return
+      loadingData = true
+      try {
+        const healthRequest: Promise<Record<string, unknown> | null> = isTauri
+          ? requestJson<Record<string, unknown>>('/health', false)
+          : fetch('/api/health', { cache: 'no-store' }).then(async (response) => response.ok
+            ? await response.json() as Record<string, unknown>
+            : null).catch(() => null)
+        const health = await healthRequest
+        if (!active) return
+        setRequestMetrics(getBackendRequestMetrics())
+        setData((current) => ({ ...current, health }))
+      } finally {
+        loadingData = false
+      }
+    }
+    const refreshBackendLogs = async () => {
+      if (!isTauri) {
+        setBackendLogState('unavailable')
+        return
+      }
+      if (loadingLogs) return
+      loadingLogs = true
+      try {
+        const lines = await invoke<string[]>('backend_log_tail')
+        if (active) {
+          setBackendLogs((current) => current.length === lines.length && current.every((line, index) => line === lines[index]) ? current : lines)
+          setBackendLogState('ready')
+        }
+      } catch {
+        if (active) setBackendLogState('error')
+      } finally {
+        loadingLogs = false
+      }
+    }
+
+    void refreshDiagnosticsData()
+    void refreshBackendLogs()
+    const dataTimer = window.setInterval(() => void refreshDiagnosticsData(), 10_000)
+    const logsTimer = window.setInterval(() => void refreshBackendLogs(), 2_000)
+    return () => {
+      active = false
+      window.clearInterval(dataTimer)
+      window.clearInterval(logsTimer)
+    }
+  }, [activeScreen, isTauri])
 
   useEffect(() => {
     let active = true
@@ -951,8 +1017,8 @@ function App() {
   const sendMessage = async (text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
-    const userId = Date.now()
-    const assistantId = userId + 1
+    const userId = ++messageSequenceRef.current
+    const assistantId = ++messageSequenceRef.current
     setMessages((current) => [
       ...current,
       { id: userId, role: 'user', text: trimmed },
@@ -1106,6 +1172,7 @@ function App() {
           <span className="startup-toast-copy">
             <strong>{startupStatus.state === 'failed' ? 'Backend unavailable' : !apiReady ? 'Connecting to backend' : !websocketInitialized ? 'Connecting live updates' : 'Loading market data'}</strong>
             <small>{startupStatus.state === 'failed' ? startupStatus.message : socketError || (!apiReady ? startupStatus.message : currentMarketDataStatus === 'error' ? 'Market data is unavailable. Dashboard remains accessible.' : 'Dashboard is available while services initialize.')}</small>
+            {startupStatus.state === 'failed' && startupStatus.details && <small>{startupStatus.details}</small>}
           </span>
           {startupStatus.state === 'failed' && (
             <button type="button" className="startup-toast-action" onClick={() => void retryStartup()}>Retry</button>
@@ -1459,6 +1526,17 @@ function App() {
           marketType={marketType}
           data={data}
           activityLoadState={activityLoadState}
+          diagnostics={{
+            isDesktop: isTauri,
+            backendState: startupStatus.state,
+            apiReady,
+            websocketConnected,
+            marketDataStatus: currentMarketDataStatus,
+            health: data.health,
+            logs: backendLogs,
+            logState: backendLogState,
+            requestMetrics,
+          }}
           intelligenceLoadState={intelligenceLoadState}
           preferences={preferences}
           onPreferencesChange={changePreferences}
@@ -1478,7 +1556,7 @@ function App() {
               setSearchValue(payload.symbol.toUpperCase())
             }
             if (payload.marketType === 'SPOT' || payload.marketType === 'FUTURES') setMarketType(payload.marketType)
-            if (typeof payload.screen === 'string' && ['Overview','Markets','AI Signals','Market Analysis','Portfolio','Positions','Trade History','Intelligence','Learning','Autonomous','Strategy Lab','Community Library','Risk Management','Activity','Settings'].includes(payload.screen)) {
+            if (typeof payload.screen === 'string' && ['Overview','Markets','AI Signals','Market Analysis','Portfolio','Positions','Trade History','Intelligence','Learning','Autonomous','Strategy Lab','Community Library','Risk Management','Activity','Diagnostics','Settings'].includes(payload.screen)) {
               setActiveScreen(payload.screen as ScreenName)
             }
           }}

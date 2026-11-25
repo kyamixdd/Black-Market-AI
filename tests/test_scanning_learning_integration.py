@@ -1,5 +1,6 @@
 """Regression tests for scanner universe rotation and learning model validation."""
 import asyncio
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -28,9 +29,16 @@ class FakeRegistry:
 class FakeCandleManager:
     def __init__(self):
         self.calls = []
+        self.series = {}
+
+    def current_time_ms(self):
+        return int(time.time() * 1000)
 
     async def collect_historical(self, *args, **kwargs):
         self.calls.append((args[3], args[4]))
+
+    def get_series(self, market, symbol, timeframe, limit=200):
+        return self.series.get((market, symbol, timeframe), [])[-limit:]
 
 
 class FakeIntelligence:
@@ -58,6 +66,27 @@ async def test_scanner_rotates_through_full_eligible_universe(monkeypatch):
     scanned = [symbol for _, symbol in scanner.intelligence.scanned]
     assert scanned == ["COIN0USDT", "COIN1USDT", "COIN2USDT", "COIN3USDT", "COIN4USDT", "COIN5USDT"]
     assert len(scanner.candle_manager.calls) == 12
+
+
+@pytest.mark.asyncio
+async def test_scanner_skips_refresh_for_fresh_timeframes(monkeypatch):
+    monkeypatch.setattr("config.SCAN_ALL_ELIGIBLE_SYMBOLS", False)
+    monkeypatch.setattr("config.SCANNER_ANALYSIS_BATCH_SIZE", 1)
+    monkeypatch.setattr("config.SCANNER_STREAM_SYMBOL_LIMIT", 1)
+    monkeypatch.setattr("config.MAX_CONCURRENT_SCANS", 1)
+    candles = FakeCandleManager()
+    candles.series[("SPOT", "COIN0USDT", "1h")] = [{
+        "close_time": int(time.time() * 1000),
+    }]
+    scanner = Scanner(
+        event_bus=SimpleNamespace(), registry=FakeRegistry(), cache=FakeCache(),
+        spot_client=object(), futures_client=object(),
+        candle_manager=candles, intelligence=FakeIntelligence(),
+    )
+    scanner.analysis_timeframes = ("1h",)
+    await scanner._analyze_market("SPOT")
+    assert candles.calls == []
+    assert scanner._scan_status["SPOT"]["refresh_skipped"] == 1
 
 
 @pytest.mark.asyncio

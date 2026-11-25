@@ -492,6 +492,10 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 if __name__ == "__main__":
+    if "--check-imports" in sys.argv[1:]:
+        print("Backend imports loaded successfully.")
+        raise SystemExit(0)
+
     import uvicorn
 
     configure_structured_logging(LOG_LEVEL)

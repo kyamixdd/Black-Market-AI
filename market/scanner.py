@@ -13,6 +13,7 @@ from core.event_models import EventType, make_event
 from exchange.futures_client import FuturesClient
 from exchange.spot_client import SpotClient
 from exchange.symbol_registry import SymbolRegistry
+from market.candle_manager import TIMEFRAME_SECONDS
 from market.market_cache import MarketCache
 from market.data_reliability import valid_price, valid_volume
 from core.observability import log_event
@@ -58,7 +59,8 @@ class Scanner:
         self.analysis_timeframes = tuple(TIMEFRAMES)
         self._running = False
         self._tasks: list[asyncio.Task] = []
-        self._scan_status: dict[str, dict] = {market: {"state": "IDLE", "started_at": None, "completed_at": None, "symbols_selected": 0, "timeframes_configured": list(self.analysis_timeframes), "refresh_successes": 0, "refresh_failures": 0, "last_error": None} for market in ("SPOT", "FUTURES")}
+        self._refresh_retry_state: dict[tuple[str, str, str], tuple[int, float]] = {}
+        self._scan_status: dict[str, dict] = {market: {"state": "IDLE", "started_at": None, "completed_at": None, "symbols_selected": 0, "timeframes_configured": list(self.analysis_timeframes), "refresh_successes": 0, "refresh_failures": 0, "refresh_skipped": 0, "last_error": None} for market in ("SPOT", "FUTURES")}
 
     def status_snapshot(self) -> dict:
         return {
@@ -70,6 +72,12 @@ class Scanner:
             "stream_symbol_limit": self.stream_symbol_limit,
             "max_concurrent_scans": self.max_concurrent_scans,
         }
+
+    def _record_refresh_failure(self, market: str, symbol: str, timeframe: str) -> None:
+        key = (market, symbol, timeframe)
+        attempts = self._refresh_retry_state.get(key, (0, 0.0))[0] + 1
+        delay = min(300.0, 60.0 * (2 ** min(attempts - 1, 3)))
+        self._refresh_retry_state[key] = (attempts, time.monotonic() + delay)
 
     async def _analyze_market(self, market: str) -> None:
         """Refresh candles for the most liquid symbols, then run strategy analysis."""
@@ -105,9 +113,19 @@ class Scanner:
         scan_started = time.perf_counter()
         status.update({"state": "SCANNING", "started_at": datetime.now(timezone.utc).isoformat(),
                        "symbols_selected": len(prioritized), "refresh_successes": 0,
-                       "refresh_failures": 0, "last_error": None})
+                       "refresh_failures": 0, "refresh_skipped": 0, "last_error": None})
         log_event(logger, logging.INFO, "scanner_batch_started", component="scanner", market=market, symbols_selected=len(prioritized))
         semaphore = Semaphore(self.max_concurrent_scans)
+
+        def needs_refresh(symbol: str, timeframe: str) -> bool:
+            latest = self.candle_manager.get_series(market, symbol, timeframe, limit=1)
+            if latest:
+                age_seconds = (self.candle_manager.current_time_ms() - latest[-1]["close_time"]) / 1000
+                if 0 <= age_seconds < TIMEFRAME_SECONDS[timeframe] + 120:
+                    self._refresh_retry_state.pop((market, symbol, timeframe), None)
+                    return False
+            retry_state = self._refresh_retry_state.get((market, symbol, timeframe))
+            return retry_state is None or retry_state[1] <= time.monotonic()
 
         async def refresh(symbol: str, timeframe: str) -> bool:
             async with semaphore:
@@ -119,21 +137,33 @@ class Scanner:
                     if collection and collection.get("state") == "FAILED":
                         status["refresh_failures"] += 1
                         status["last_error"] = f"{symbol} {timeframe}: {collection.get('error')}"
+                        self._record_refresh_failure(market, symbol, timeframe)
                         return False
-                    return bool(collection and collection.get("state") == "SUCCESS")
+                    succeeded = bool(collection and collection.get("state") == "SUCCESS")
+                    if succeeded:
+                        self._refresh_retry_state.pop((market, symbol, timeframe), None)
+                    else:
+                        status["refresh_failures"] += 1
+                        status["last_error"] = f"{symbol} {timeframe}: refresh_not_confirmed"
+                        self._record_refresh_failure(market, symbol, timeframe)
+                    return succeeded
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     status["refresh_failures"] += 1
                     status["last_error"] = f"{symbol} {timeframe}: {type(exc).__name__}"
+                    self._record_refresh_failure(market, symbol, timeframe)
                     logger.warning("Candle refresh failed for %s %s %s: %s", market, symbol, timeframe, exc)
                     return False
 
-        results = await asyncio.gather(*(
+        refresh_jobs = [
             refresh(symbol, timeframe)
             for _market, symbol in prioritized
             for timeframe in self.analysis_timeframes
-        ), return_exceptions=True)
+            if needs_refresh(symbol, timeframe)
+        ]
+        status["refresh_skipped"] = len(prioritized) * len(self.analysis_timeframes) - len(refresh_jobs)
+        results = await asyncio.gather(*refresh_jobs, return_exceptions=True)
         status["refresh_successes"] = sum(result is True for result in results)
         status["refresh_failures"] += sum(isinstance(result, BaseException) for result in results)
         try:
@@ -149,6 +179,7 @@ class Scanner:
                   "scanner_batch_completed", component="scanner", market=market,
                   scanner_state=status["state"], symbols_selected=len(prioritized),
                   refresh_successes=status["refresh_successes"], refresh_failures=status["refresh_failures"],
+                  refresh_skipped=status["refresh_skipped"],
                   duration_ms=round((time.perf_counter() - scan_started) * 1000, 2))
 
     async def _handle_stream_message(self, market: str, message: dict) -> None:
@@ -169,7 +200,9 @@ class Scanner:
             event_time_ms = int(payload.get("E", 0))
         except (TypeError, ValueError, OverflowError):
             return
-        now_ms = int(time.time() * 1000)
+        client = self.spot_client if market == "SPOT" else self.futures_client
+        exchange_now = getattr(client, "now_ms", None)
+        now_ms = exchange_now() if callable(exchange_now) else int(time.time() * 1000)
         if event_time_ms and (event_time_ms > now_ms + 5_000 or event_time_ms < now_ms - 120_000):
             return
         if valid_price(price) and valid_volume(volume) and math.isfinite(change):
@@ -212,6 +245,7 @@ class Scanner:
                 if market not in self.enabled_markets:
                     await asyncio.sleep(1)
                     continue
+                await client.sync_clock_if_due()
                 tickers = await client.get_all_tickers()
                 for ticker in tickers:
                     symbol = ticker.get("symbol")

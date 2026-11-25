@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthenticated } from "@/lib/session";
 import { verifyCommunityOwnerToken, communityOwnerCookie } from "@/lib/community-owner";
 import { sameOriginMutation, rateLimited, requestClientKey, readLimitedBody } from "@/lib/request-security";
 export const runtime = "nodejs";
@@ -42,7 +41,6 @@ async function proxy(request: NextRequest, context: Context) {
   if (rateLimited("proxy:" + client, 180)) {
     return NextResponse.json({ error: "Too many requests" }, { status: 429, headers: { "Retry-After": "60" } });
   }
-  if (!(await isAuthenticated())) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const configuredBase = process.env.BLACKMARKET_BACKEND_URL;
   const token = process.env.BLACKMARKET_API_TOKEN;

@@ -8,6 +8,14 @@ export type BackendClientOptions = {
   retries?: number
 }
 
+export type BackendRequestMetrics = {
+  windowSeconds: number
+  requestCount: number
+  failureCount: number
+  averageDurationMs: number
+  p95DurationMs: number
+}
+
 export class BackendRequestError extends Error {
   readonly status?: number
   readonly code: 'timeout' | 'network' | 'http'
@@ -28,8 +36,37 @@ export function createBackendClient(options: BackendClientOptions) {
   const timeoutMs = Math.max(1000, options.timeoutMs ?? 10000)
   const retries = Math.max(0, Math.min(2, options.retries ?? 2))
   const headers = () => options.authorization?.() ?? {}
+  const requestSamples: { completedAt: number; durationMs: number; succeeded: boolean }[] = []
+
+  function getMetrics(): BackendRequestMetrics {
+    const now = Date.now()
+    const windowStart = now - 60_000
+    while (requestSamples.length && requestSamples[0].completedAt < windowStart) requestSamples.shift()
+    const durations = requestSamples.map((sample) => sample.durationMs).sort((left, right) => left - right)
+    const p95Index = durations.length ? Math.ceil(durations.length * 0.95) - 1 : 0
+    return {
+      windowSeconds: 60,
+      requestCount: requestSamples.length,
+      failureCount: requestSamples.filter((sample) => !sample.succeeded).length,
+      averageDurationMs: durations.length ? Math.round(durations.reduce((total, duration) => total + duration, 0) / durations.length) : 0,
+      p95DurationMs: durations[p95Index] ?? 0,
+    }
+  }
 
   async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const startedAt = Date.now()
+    let succeeded = false
+    try {
+      const result = await performRequest<T>(path, init)
+      succeeded = true
+      return result
+    } finally {
+      requestSamples.push({ completedAt: Date.now(), durationMs: Date.now() - startedAt, succeeded })
+      if (requestSamples.length > 600) requestSamples.splice(0, requestSamples.length - 600)
+    }
+  }
+
+  async function performRequest<T>(path: string, init: RequestInit): Promise<T> {
     const url = path.startsWith('http://') || path.startsWith('https://') ? path : `${options.baseUrl}${path}`
     const method = (init.method ?? 'GET').toUpperCase()
     const safeToRetry = method === 'GET' || method === 'HEAD'
@@ -97,6 +134,7 @@ export function createBackendClient(options: BackendClientOptions) {
     get: <T>(path: string) => requestJson<T>(path),
     post: <T>(path: string, body: unknown) => requestJson<T>(path, { method: 'POST', body: JSON.stringify(body) }),
     requestJson,
+    getMetrics,
     healthCheck: () => requestJson<Record<string, unknown>>('/health'),
   }
 }
@@ -144,6 +182,7 @@ const client = createBackendClient({
 })
 
 export const validateBackendConnection = () => client.healthCheck()
+export const getBackendRequestMetrics = () => client.getMetrics()
 
 export const requestJson = <T>(path: string, api = true): Promise<T | null> =>
   api ? client.get<T>(path).catch((error: unknown) => {

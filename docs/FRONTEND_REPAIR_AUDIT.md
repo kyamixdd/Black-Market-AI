@@ -6,7 +6,7 @@
 **Source commit:** `e213c5adccd09a7545b69ce90ec83cef127adac9`  
 **Reference:** `kyamixdd/Black-Market-Ui-Demo` (visual reference only)
 
-**Historical status:** This audit preserves the prior source findings. The current local Git repository has no commits, so the recorded source commit and original branch identity cannot be verified. Current UI status is limited to the source checks recorded in `docs/PROJECT_STATUS.md`; no visual or browser interaction acceptance was run in the current audit.
+**Historical status:** This audit preserves the prior source findings and its original verification scope. The current checkout has baseline commit `466dbc7`; the original source identity is not current release evidence. See `docs/PROJECT_STATUS.md` and `docs/LOCAL_AUDIT_REPORT.md` for current verification status.
 
 ## Scope and method
 

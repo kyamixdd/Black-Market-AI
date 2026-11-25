@@ -415,6 +415,48 @@ def test_system_status_returns_the_health_monitor_snapshot(monkeypatch):
         }
 
 
+def test_health_endpoint_reports_readiness_without_legacy_paper_trading_attribute(monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src_tauri.backend import main
+    from src_tauri.backend.api.routes.schemas import HealthResponse
+
+    class FakeHealthMonitor:
+        @staticmethod
+        def get_status():
+            return {"status": "healthy", "metrics": {"uptime_seconds": 12.5}}
+
+    orchestrator = SimpleNamespace(
+        health_monitor=FakeHealthMonitor(),
+        scanner=SimpleNamespace(_running=True),
+        intelligence=SimpleNamespace(predictor=SimpleNamespace(is_trained=False)),
+    )
+    assert not hasattr(orchestrator, "paper_trading")
+    monkeypatch.setattr(main, "orchestrator", orchestrator)
+    monkeypatch.setattr(main, "ws_manager", SimpleNamespace(get_stats=lambda: {"running": True}))
+    monkeypatch.setattr(main, "db", object())
+
+    app = FastAPI()
+    app.add_api_route("/health", main.health_check, response_model=HealthResponse)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "healthy",
+        "backend_ready": True,
+        "websocket_connected": True,
+        "database_connected": True,
+        "market_data_active": True,
+        "learning_active": False,
+        "paper_trading_active": True,
+        "uptime_seconds": 12.5,
+        "version": "1.0.0",
+    }
+
+
 def test_internal_shutdown_requires_the_supervisor_token(monkeypatch):
     pytest.importorskip("fastapi")
     from fastapi import FastAPI

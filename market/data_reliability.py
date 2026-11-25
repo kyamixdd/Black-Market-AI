@@ -50,7 +50,12 @@ def validate_candle(open_time: Any, open_: Any, high: Any, low: Any, close: Any,
     except (TypeError, ValueError, OverflowError):
         return False
     now = int(time.time() * 1000) if now_ms is None else now_ms
-    if ot <= 0 or ct < ot or ot > now + max_future_skew_ms:
+    if (
+        ot <= 0
+        or ct < ot
+        or ot > now + max_future_skew_ms
+        or ct > now
+    ):
         return False
     if not all(math.isfinite(x) for x in (o, h, l, c, v)):
         return False

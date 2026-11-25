@@ -4,10 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
     "lint": "tsc --noEmit",
-    "test:security": "node --test lib/session-core.test.mjs lib/rate-limit-core.test.mjs"
+    "test:security": "node --test lib/rate-limit-core.test.mjs"
   },
   "dependencies": {
     "next": "15.5.29",

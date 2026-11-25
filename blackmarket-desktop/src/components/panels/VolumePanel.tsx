@@ -54,10 +54,11 @@ export const VolumePanel: React.FC = () => {
 
   useEffect(() => {
     mounted.current = true;
-    void fetchData();
+    const initialFetch = window.setTimeout(() => { void fetchData(); }, 0);
     const interval = setInterval(() => void fetchData(), 30000);
     return () => {
       mounted.current = false;
+      clearTimeout(initialFetch);
       clearInterval(interval);
     };
   }, []);

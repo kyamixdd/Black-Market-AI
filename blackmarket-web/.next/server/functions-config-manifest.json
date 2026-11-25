@@ -3,6 +3,6 @@
   "functions": {
     "/api/backend/[...path]": {},
     "/api/health": {},
-    "/api/login": {}
+    "/api/identity": {}
   }
 }

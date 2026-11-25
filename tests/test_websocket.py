@@ -1,6 +1,7 @@
 """Test WebSocket connection management and message parsing deterministically."""
 import asyncio
 import json
+import logging
 
 import pytest
 
@@ -9,7 +10,8 @@ from exchange.websocket_manager import WebSocketManager
 
 
 @pytest.mark.asyncio
-async def test_websocket_manager(monkeypatch):
+async def test_websocket_manager(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
     limiter = RateLimiter()
     manager = WebSocketManager(limiter)
     received_data = []
@@ -50,3 +52,5 @@ async def test_websocket_manager(monkeypatch):
 
     assert len(received_data) == 2
     assert {item["_market"] for item in received_data} == {"SPOT", "FUTURES"}
+    assert "WebSocket connected for SPOT" in caplog.text
+    assert "WebSocket connected for FUTURES" in caplog.text

@@ -23,6 +23,7 @@ def test_candle_validation_rejects_bad_values_and_future_time():
     assert not validate_candle(now - 60_000, 10, 8, 9, 11, 100, now - 1, now_ms=now)
     assert not validate_candle(now - 60_000, 10, 12, 9, 11, -1, now - 1, now_ms=now)
     assert not validate_candle(now + 60_000, 10, 12, 9, 11, 100, now + 60_001, now_ms=now)
+    assert not validate_candle(now - 60_000, 10, 12, 9, 11, 100, now + 60_000, now_ms=now)
 
 
 def test_candle_manager_deduplicates_rejects_invalid_and_detects_missing():
@@ -45,6 +46,117 @@ def test_candle_cache_is_bounded_and_sorted_on_out_of_order_insert():
     manager._max_per_series = 2
     manager.add_candle("SPOT", "ETHUSDT", "1m", base + 180_000, 10, 12, 9, 11, 1)
     assert len(manager.get_series("SPOT", "ETHUSDT", "1m")) == 2
+
+
+@pytest.mark.asyncio
+async def test_historical_collection_rejects_empty_and_stale_exchange_responses():
+    manager = CandleManager()
+
+    class Client:
+        def __init__(self, rows):
+            self.rows = rows
+
+        async def get_klines(self, *_args, **_kwargs):
+            return self.rows
+
+    assert await manager.collect_historical(
+        Client([]), Client([]), "SPOT", "BTCUSDT", "1h",
+    ) == 0
+    empty_status = manager.get_collection_status("SPOT", "BTCUSDT", "1h")
+    assert empty_status["state"] == "FAILED"
+    assert empty_status["error"] == "empty_response"
+
+    stale_open = int(time.time() * 1000) - 15 * 60 * 60 * 1000
+    stale_row = [
+        stale_open, "100", "102", "99", "101", "10",
+        stale_open + 60 * 60 * 1000 - 1,
+    ]
+    assert await manager.collect_historical(
+        Client([stale_row]), Client([]), "SPOT", "BTCUSDT", "1h",
+    ) == 1
+    stale_status = manager.get_collection_status("SPOT", "BTCUSDT", "1h")
+    assert stale_status["state"] == "FAILED"
+    assert stale_status["error"].startswith("stale_latest_candle:")
+    assert stale_status["latest_candle_age_seconds"] > 14 * 60 * 60
+
+
+@pytest.mark.asyncio
+async def test_historical_collection_discards_unclosed_candles():
+    manager = CandleManager()
+
+    class Client:
+        async def get_klines(self, *_args, **_kwargs):
+            now = int(time.time() * 1000)
+            open_time = now - now % 3_600_000
+            return [[
+                open_time, "100", "102", "99", "101", "10",
+                open_time + 3_600_000 - 1,
+            ]]
+
+    client = Client()
+    assert await manager.collect_historical(client, client, "SPOT", "BTCUSDT", "1h") == 0
+    status = manager.get_collection_status("SPOT", "BTCUSDT", "1h")
+    assert status["state"] == "FAILED"
+    assert status["error"] == "no_valid_closed_candles"
+
+
+@pytest.mark.asyncio
+async def test_historical_collection_uses_exchange_clock_when_local_clock_is_behind():
+    manager = CandleManager()
+    offset_ms = 13 * 60 * 60 * 1000
+
+    class Client:
+        def now_ms(self):
+            return int(time.time() * 1000) + offset_ms
+
+        async def get_klines(self, *_args, **_kwargs):
+            now_ms = self.now_ms()
+            close_time = now_ms - 60_000
+            open_time = close_time - 3_600_000 + 1
+            return [[open_time, "100", "102", "99", "101", "10", close_time]]
+
+    client = Client()
+    assert await manager.collect_historical(
+        client, client, "SPOT", "BTCUSDT", "1h",
+    ) == 1
+    status = manager.get_collection_status("SPOT", "BTCUSDT", "1h")
+    assert status["state"] == "SUCCESS"
+    assert manager.current_time_ms() >= client.now_ms() - 1_000
+
+
+@pytest.mark.asyncio
+async def test_exchange_clock_sync_initial_offset_and_failure_fallback(monkeypatch):
+    from exchange.base_client import BasePublicClient
+    from exchange.rate_limiter import RateLimiter
+    import exchange.base_client as base_client_module
+
+    local_now_ms = int(time.time() * 1000)
+    offset_ms = 13 * 60 * 60 * 1000
+    client = BasePublicClient(
+        RateLimiter(), "https://example.invalid", "test",
+        server_time_path="/time",
+    )
+    requests = 0
+
+    async def successful_time_request(*_args, **_kwargs):
+        nonlocal requests
+        requests += 1
+        return {"serverTime": local_now_ms + offset_ms}
+
+    monkeypatch.setattr(client, "_get", successful_time_request)
+    monkeypatch.setattr(base_client_module.time, "monotonic", lambda: 10.0)
+    assert await client.sync_clock_if_due(interval_seconds=300)
+    assert client.now_ms() == pytest.approx(local_now_ms + offset_ms, abs=1_000)
+    assert not await client.sync_clock_if_due(interval_seconds=300)
+    assert requests == 1
+
+    async def failed_time_request(*_args, **_kwargs):
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(client, "_get", failed_time_request)
+    monkeypatch.setattr(base_client_module.time, "monotonic", lambda: 400.0)
+    assert not await client.sync_clock_if_due(interval_seconds=300)
+    assert client.now_ms() == pytest.approx(local_now_ms + offset_ms, abs=1_000)
 
 
 def test_health_status_distinguishes_live_delayed_stale_and_reconnecting():

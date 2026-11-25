@@ -11,7 +11,10 @@ logger = logging.getLogger(__name__)
 
 class SpotClient(BasePublicClient):
     def __init__(self, rate_limiter: RateLimiter):
-        super().__init__(rate_limiter, "https://api.binance.com", "spot")
+        super().__init__(
+            rate_limiter, "https://api.binance.com", "spot",
+            server_time_path="/api/v3/time",
+        )
 
     async def get_klines(self, symbol: str, interval: str, start_ms: int | None = None,
                          end_ms: int | None = None, limit: int = 500) -> list[list]:
