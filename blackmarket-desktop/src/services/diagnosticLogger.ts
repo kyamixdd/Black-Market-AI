@@ -200,6 +200,11 @@ export async function flushDiagnosticLogs(): Promise<void> {
       detail: entry.detail,
       duration_ms: entry.duration_ms,
       trace_id: entry.trace_id,
+      root_cause: entry.root_cause,
+      suggested_fix: entry.suggested_fix,
+      operation_id: entry.operation_id,
+      result_summary: entry.result_summary,
+      error_type: entry.error_type,
     }))
     const response = await fetch('http://127.0.0.1:8765/api/diagnostics/frontend-events', {
       method: 'POST',

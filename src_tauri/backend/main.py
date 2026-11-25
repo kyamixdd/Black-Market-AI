@@ -561,6 +561,7 @@ async def ingest_frontend_diagnostics(request: Request):
             suggested_fix=str(item.get("suggested_fix", ""))[:700],
             operation_id=str(item.get("operation_id", ""))[:80],
             result_summary=str(item.get("result_summary", ""))[:500],
+            error_type=str(item.get("error_type", ""))[:120],
         )
         accepted += 1
     return {"accepted": accepted, "dropped": max(0, len(events) - accepted)}
