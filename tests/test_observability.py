@@ -39,3 +39,16 @@ def test_log_event_does_not_emit_sensitive_fields(caplog):
     assert "paper_order" in caplog.text
     assert "BTCUSDT" in caplog.text
     assert "do-not-log" not in caplog.text
+
+
+
+def test_function_trace_can_be_enabled_and_disabled_without_crashing(caplog):
+    from core.observability import function_trace_enabled, set_function_trace_enabled
+
+    assert function_trace_enabled() is False
+    with caplog.at_level(logging.INFO):
+        assert set_function_trace_enabled(True) is True
+        assert function_trace_enabled() is True
+        assert set_function_trace_enabled(False) is False
+    assert "python_function_trace_changed" in caplog.text
+    assert function_trace_enabled() is False

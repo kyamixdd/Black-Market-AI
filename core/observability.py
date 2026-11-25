@@ -98,7 +98,7 @@ def _is_application_frame(frame) -> bool:
 def _function_profile(frame, event, arg):
     if getattr(_TRACE_LOCAL, "busy", False) or not _TRACE_ENABLED:
         return
-    if event not in ("call", "return"):
+    if event not in ("call", "return", "exception"):
         return
     if not _is_application_frame(frame):
         return
@@ -117,6 +117,14 @@ def _function_profile(frame, event, arg):
                 component="python", function=frame.f_code.co_name,
                 detail=f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno}",
                 phase="call",
+            )
+        elif event == "exception":
+            exception_type, exception_value, _ = arg
+            log_event(
+                _TRACE_LOGGER, logging.ERROR, "python_function_exception",
+                component="python", function=frame.f_code.co_name,
+                detail=f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno} · {exception_type.__name__}: {exception_value}",
+                phase="exception", error_type=exception_type.__name__,
             )
         else:
             started = starts.pop(frame_key, now)
