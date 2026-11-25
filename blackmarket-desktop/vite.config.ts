@@ -40,8 +40,8 @@ function diagnosticFunctionTracing() {
         const supported = ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node) || ts.isConstructorDeclaration(node)
         if (supported && node.body) {
           const name = functionName(node)
-          const prefix = `const __bmTrace = __bmTraceStart(${JSON.stringify(relativeFile)}, ${JSON.stringify(name)});\\nlet __bmTraceSuccess = true;\\ntry {\\n`
-          const suffix = `\\n} catch (__bmTraceError) {\\n  __bmTraceSuccess = false;\\n  __bmTraceFailure(__bmTrace, __bmTraceError);\\n  throw __bmTraceError;\\n} finally {\\n  __bmTraceEnd(__bmTrace, __bmTraceSuccess);\\n}\\n`
+          const prefix = `const __bmTrace = __bmTraceStart(${JSON.stringify(relativeFile)}, ${JSON.stringify(name)});\nlet __bmTraceSuccess = true;\ntry {\n`
+          const suffix = `\n} catch (__bmTraceError) {\n  __bmTraceSuccess = false;\n  __bmTraceFailure(__bmTrace, __bmTraceError);\n  throw __bmTraceError;\n} finally {\n  __bmTraceEnd(__bmTrace, __bmTraceSuccess);\n}\n`
           if (ts.isBlock(node.body)) {
             edits.push({ start: node.body.getStart(source) + 1, end: node.body.getStart(source) + 1, text: prefix })
             edits.push({ start: node.body.end - 1, end: node.body.end - 1, text: suffix })
@@ -57,7 +57,7 @@ function diagnosticFunctionTracing() {
       edits.sort((a, b) => b.start - a.start || b.end - a.end)
       let transformed = code
       for (const edit of edits) transformed = transformed.slice(0, edit.start) + edit.text + transformed.slice(edit.end)
-      transformed = `import { traceFunctionStart as __bmTraceStart, traceFunctionFailure as __bmTraceFailure, traceFunctionEnd as __bmTraceEnd } from '/src/services/diagnosticLogger.ts';\\n` + transformed
+      transformed = `import { traceFunctionStart as __bmTraceStart, traceFunctionFailure as __bmTraceFailure, traceFunctionEnd as __bmTraceEnd } from '/src/services/diagnosticLogger.ts';\n` + transformed
       return { code: transformed, map: null }
     },
   }
