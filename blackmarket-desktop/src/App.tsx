@@ -768,11 +768,15 @@ function App() {
     void refreshDiagnosticsData()
     void refreshBackendLogs()
     const dataTimer = window.setInterval(() => void refreshDiagnosticsData(), 10_000)
-    const logsTimer = window.setInterval(() => void refreshBackendLogs(), 2_000)
+    const logsTimer = window.setInterval(() => void refreshBackendLogs(), 1_000)
+    const frontendLogsTimer = window.setInterval(() => {
+      setFrontendDiagnosticLogs(getDiagnosticLogSnapshot().slice(-1000).map((entry) => JSON.stringify(entry)))
+    }, 500)
     return () => {
       active = false
       window.clearInterval(dataTimer)
       window.clearInterval(logsTimer)
+      window.clearInterval(frontendLogsTimer)
     }
   }, [activeScreen, isTauri])
 
