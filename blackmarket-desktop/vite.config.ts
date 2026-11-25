@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react'
-import ts from 'typescript'
+import { createRequire } from 'node:module'
+const ts: any = createRequire(import.meta.url)('typescript')
 import { defineConfig, loadEnv } from 'vite'
 import type { ProxyOptions } from 'vite'
 import { readFileSync } from 'node:fs'
@@ -27,7 +28,7 @@ function diagnosticFunctionTracing() {
       const edits: Array<{ start: number; end: number; text: string }> = []
       const relativeFile = file.slice(file.lastIndexOf('/src/') + 5)
 
-      const functionName = (node: ts.Node): string => {
+      const functionName = (node: any): string => {
         if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node)) && node.name) return node.name.getText(source)
         const parent = node.parent
         if (ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) return parent.name.text
@@ -35,7 +36,7 @@ function diagnosticFunctionTracing() {
         if (ts.isPropertyDeclaration(parent) && parent.name) return parent.name.getText(source)
         return 'anonymous'
       }
-      const visit = (node: ts.Node) => {
+      const visit = (node: any) => {
         const supported = ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isMethodDeclaration(node) || ts.isGetAccessor(node) || ts.isSetAccessor(node) || ts.isConstructorDeclaration(node)
         if (supported && node.body) {
           const name = functionName(node)
