@@ -121,7 +121,11 @@ export async function flushDiagnosticLogs(): Promise<void> {
     const response = await fetch('http://127.0.0.1:8765/api/diagnostics/frontend-events', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ events: batch.map(({ level, event, timestamp, feature, function: fn, detail, duration_ms, trace_id }) => ({ level, event, timestamp, feature, function: fn, detail, duration_ms, trace_id })) },
+      body: JSON.stringify({
+        events: batch.map(({ level, event, timestamp, feature, function: fn, detail, duration_ms, trace_id }) => ({
+          level, event, timestamp, feature, function: fn, detail, duration_ms, trace_id,
+        })),
+      }),
     })
     if (!response.ok) return
     const sent = new Set(batch.map((entry) => entry.id))
