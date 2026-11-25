@@ -32,7 +32,7 @@ load_dotenv(config_path if config_path.is_file() else PROJECT_ROOT / ".env")
 from config import DATABASE_URL, LOG_LEVEL
 from core.config_validator import validate_config_or_exit
 from core.event_models import EventType, make_event
-from core.observability import configure_structured_logging, log_event
+from core.observability import configure_structured_logging, function_trace_enabled, log_event, set_function_trace_enabled
 from core.orchestrator import Orchestrator
 from database.connection import Database
 
@@ -472,6 +472,58 @@ async def shutdown_backend(authorization: str | None = Header(default=None)):
 
     _request_server_shutdown()
     return {"status": "shutting_down"}
+
+
+@app.get("/api/diagnostics/function-trace")
+async def get_function_trace_status():
+    """Return the current verbose Python application function tracing state."""
+    return {"enabled": function_trace_enabled()}
+
+
+@app.post("/api/diagnostics/function-trace")
+async def update_function_trace(request: Request):
+    """Enable or disable app-source Python function call/return tracing."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Expected a JSON object with an enabled boolean.")
+    if not isinstance(payload, dict) or not isinstance(payload.get("enabled"), bool):
+        raise HTTPException(status_code=400, detail="Expected a JSON object with an enabled boolean.")
+    enabled = set_function_trace_enabled(payload["enabled"])
+    return {"enabled": enabled}
+
+
+@app.post("/api/diagnostics/frontend-events")
+async def ingest_frontend_diagnostics(request: Request):
+    """Accept a bounded batch of sanitized frontend diagnostic events."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Expected a JSON object containing events.")
+    events = payload.get("events") if isinstance(payload, dict) else None
+    if not isinstance(events, list):
+        raise HTTPException(status_code=400, detail="events must be an array.")
+    accepted = 0
+    allowed_levels = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "WARNING": logging.WARNING, "ERROR": logging.ERROR}
+    for item in events[:80]:
+        if not isinstance(item, dict):
+            continue
+        event_name = item.get("event")
+        if not isinstance(event_name, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", event_name):
+            continue
+        level_name = item.get("level") if isinstance(item.get("level"), str) else "INFO"
+        level = allowed_levels.get(level_name.upper(), logging.INFO)
+        log_event(
+            logging.getLogger("blackmarket.frontend"), level, "frontend_diagnostic",
+            component="frontend", source="desktop-ui",
+            feature=str(item.get("feature", ""))[:120],
+            function=str(item.get("function", ""))[:120],
+            phase=event_name,
+            trace_id=str(item.get("trace_id", ""))[:80],
+            detail=str(item.get("detail", ""))[:1200],
+        )
+        accepted += 1
+    return {"accepted": accepted, "dropped": max(0, len(events) - accepted)}
 
 
 @app.get("/api/system/status", response_model=SystemHealthResponse)

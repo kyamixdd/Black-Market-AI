@@ -31,6 +31,7 @@ import { LiveMarketChart } from './components/charts/LiveMarketChart'
 import { DashboardScreen } from './screens/DashboardScreens'
 import { getApiAuthorization, setApiToken } from './services/localAuth'
 import { backendBaseUrl, getBackendRequestMetrics, mutateJson, requestJson } from './services/backendClient'
+import { getDiagnosticLogSnapshot, installDiagnosticCapture, setDiagnosticScreen } from './services/diagnosticLogger'
 import {
   assessMarketData,
   marketChartKey,
@@ -317,6 +318,8 @@ function App() {
   const [backendLogs, setBackendLogs] = useState<string[]>([])
   const [backendLogState, setBackendLogState] = useState<'loading' | 'ready' | 'error' | 'unavailable'>('loading')
   const [requestMetrics, setRequestMetrics] = useState(getBackendRequestMetrics)
+  const [frontendDiagnosticLogs, setFrontendDiagnosticLogs] = useState<string[]>([])
+  const [functionTraceEnabled, setFunctionTraceEnabled] = useState(false)
   const [intelligenceLoadState, setIntelligenceLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [websocketConnected, setWebsocketConnected] = useState(false)
   const [websocketInitialized, setWebsocketInitialized] = useState(false)
@@ -704,6 +707,13 @@ function App() {
     }
   }, [apiReady, marketType, symbol, timeframe])
   useEffect(() => {
+    installDiagnosticCapture()
+  }, [])
+  useEffect(() => {
+    setDiagnosticScreen(activeScreen)
+  }, [activeScreen])
+
+  useEffect(() => {
     if (activeScreen !== 'Diagnostics') return
     let active = true
     let loadingData = false
@@ -720,6 +730,9 @@ function App() {
         const health = await healthRequest
         if (!active) return
         setRequestMetrics(getBackendRequestMetrics())
+        setFrontendDiagnosticLogs(getDiagnosticLogSnapshot().slice(-1000).map((entry) => JSON.stringify(entry)))
+        const traceStatus = await requestJson<{ enabled?: boolean }>('/diagnostics/function-trace')
+        if (active) setFunctionTraceEnabled(traceStatus?.enabled === true)
         setData((current) => ({ ...current, health }))
       } finally {
         loadingData = false
@@ -1536,6 +1549,12 @@ function App() {
             logs: backendLogs,
             logState: backendLogState,
             requestMetrics,
+            frontendLogs: frontendDiagnosticLogs,
+            functionTraceEnabled,
+            onFunctionTraceToggle: async (enabled) => {
+              const result = await mutateJson<{ enabled: boolean }>('/diagnostics/function-trace', 'POST', { enabled })
+              setFunctionTraceEnabled(result.enabled)
+            },
           }}
           intelligenceLoadState={intelligenceLoadState}
           preferences={preferences}

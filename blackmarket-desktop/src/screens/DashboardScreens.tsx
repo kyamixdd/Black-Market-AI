@@ -394,12 +394,15 @@ type Props = {
     logs: string[]
     logState: 'loading' | 'ready' | 'error' | 'unavailable'
       requestMetrics: {
-        windowSeconds: number
-        requestCount: number
-        failureCount: number
-        averageDurationMs: number
-        p95DurationMs: number
-      }
+      windowSeconds: number
+      requestCount: number
+      failureCount: number
+      averageDurationMs: number
+      p95DurationMs: number
+    }
+    frontendLogs: string[]
+    functionTraceEnabled: boolean
+    onFunctionTraceToggle: (enabled: boolean) => Promise<void>
   }
   intelligenceLoadState: 'loading' | 'ready' | 'error'
   preferences: DashboardPreferences
@@ -1115,6 +1118,27 @@ function DiagnosticsScreen({ data, activityLoadState, diagnostics }: {
   activityLoadState: Props['activityLoadState']
   diagnostics: Props['diagnostics']
 }) {
+  const [filter, setFilter] = useState('')
+  const [level, setLevel] = useState('ALL')
+  const [traceBusy, setTraceBusy] = useState(false)
+  const [traceError, setTraceError] = useState('')
+  const [showFrontend, setShowFrontend] = useState(true)
+  const combinedLogs = [...diagnostics.logs.map((line) => ({ source: 'BACKEND', line })), ...diagnostics.frontendLogs.map((line) => ({ source: 'FRONTEND', line }))]
+  const filteredLogs = combinedLogs.filter(({ line, source }) => {
+    const matchesText = !filter || `${source} ${line}`.toLowerCase().includes(filter.toLowerCase())
+    const matchesLevel = level === 'ALL' || line.toUpperCase().includes(`\"level\":\"${level}\"`) || line.toUpperCase().includes(` ${level} `) || line.toUpperCase().includes(`\"${level}\"`)
+    const matchesSource = showFrontend || source === 'BACKEND'
+    return matchesText && matchesLevel && matchesSource
+  }).slice(-1500)
+  const downloadLogs = () => {
+    const content = filteredLogs.map((item) => item.line).join('\n')
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `blackmarket-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.log`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
   const healthValue = (key: string) => {
     const value = diagnostics.health?.[key]
     return value === true ? 'READY' : value === false ? 'FAILED' : 'UNKNOWN'
@@ -1159,10 +1183,28 @@ function DiagnosticsScreen({ data, activityLoadState, diagnostics }: {
       <Table minWidth={700}><TableHead labels={['SERVICE', 'STATE', 'CHECK']} />{runtimeChecks.map(([name, state, detail]) => (
         <tr key={name}><td>{name}</td><td className={/FAILED|UNAVAILABLE|DISCONNECTED|INACTIVE|DEGRADED/i.test(state) ? 'negative' : ''}>{state}</td><td>{detail}</td></tr>
       ))}</Table>
-      <h2 className="workspace-section-title">Backend process logs</h2>
-      {logMessage ? <p role={diagnostics.logState === 'error' ? 'alert' : 'status'} className="workspace-note">{logMessage}</p> : (
-        <pre className="diagnostics-log" role="log" aria-live="polite">{diagnostics.logs.join('\n')}</pre>
-      )}
+      <h2 className="workspace-section-title">Live diagnostic event stream · {filteredLogs.length} / {combinedLogs.length}</h2>
+      <div className="diagnostics-controls">
+        <input className="workspace-search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter function, feature, error, request…" aria-label="Filter diagnostic logs" />
+        <select className="workspace-select" value={level} onChange={(event) => setLevel(event.target.value)} aria-label="Filter diagnostic level">
+          <option value="ALL">All levels</option><option value="DEBUG">Debug</option><option value="INFO">Info</option><option value="WARNING">Warning</option><option value="ERROR">Error</option>
+        </select>
+        <label className="diagnostics-toggle"><input type="checkbox" checked={showFrontend} onChange={(event) => setShowFrontend(event.target.checked)} /> Frontend events</label>
+        <button className="workspace-button" type="button" onClick={downloadLogs} disabled={!filteredLogs.length}>Export filtered logs</button>
+      </div>
+      <div className="diagnostics-controls">
+        <label className="diagnostics-toggle"><input type="checkbox" checked={diagnostics.functionTraceEnabled} disabled={!diagnostics.isDesktop || traceBusy} onChange={async (event) => {
+          const enabled = event.target.checked
+          setTraceBusy(true); setTraceError('')
+          try { await diagnostics.onFunctionTraceToggle(enabled) }
+          catch (error) { setTraceError(error instanceof Error ? error.message : 'Unable to change function tracing') }
+          finally { setTraceBusy(false) }
+        }} /> Verbose Python function call/return trace</label>
+        <span className="workspace-note">{diagnostics.functionTraceEnabled ? 'Tracing enabled · high log volume and performance overhead' : 'Tracing disabled · enable temporarily to investigate a specific defect'}</span>
+      </div>
+      {traceError && <p role="alert" className="workspace-note">{traceError}</p>}
+      <div className="workspace-note">Captured: frontend errors, rejected promises, UI clicks/submits, API request lifecycle, backend API requests/exceptions, and optional Python function call/return traces. Values and credentials are redacted; logs are bounded.</div>
+      <pre className="diagnostics-log diagnostics-log-expanded" role="log" aria-live="polite">{filteredLogs.length ? filteredLogs.map(({ source, line }) => `[${source}] ${line}`).join('\n') : 'No matching diagnostic events. Try another filter or wait for new activity.'}</pre>
       <h2 className="workspace-section-title">Recent application activity</h2>
       {activityLoadState === 'error' && <p role="alert" className="workspace-note">Persisted activity could not be loaded. The displayed events may be stale.</p>}
       {activityLoadState === 'loading' && <p role="status" className="workspace-note">Loading persisted system events…</p>}

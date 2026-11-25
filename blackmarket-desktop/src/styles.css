@@ -1,0 +1,8 @@
+
+/* Expanded, searchable live diagnostics */
+.diagnostics-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}
+.diagnostics-controls .workspace-search{flex:1;min-width:180px}
+.diagnostics-controls .workspace-select{min-width:120px}
+.diagnostics-toggle{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-secondary,#a0a0a0)}
+.diagnostics-log-expanded{max-height:52vh;min-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.45;padding:10px}
+.diagnostics-controls .workspace-note{margin:0}

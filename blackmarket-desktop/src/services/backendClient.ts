@@ -1,3 +1,4 @@
+import { recordDiagnostic } from './diagnosticLogger.js'
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 export type BackendClientOptions = {
@@ -55,11 +56,20 @@ export function createBackendClient(options: BackendClientOptions) {
 
   async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const startedAt = Date.now()
+    const traceId = crypto.randomUUID()
+    const method = (init.method ?? 'GET').toUpperCase()
+    const safePath = path.split('?')[0].slice(0, 180)
+    recordDiagnostic('DEBUG', 'http.request.start', { feature: 'api-client', function: 'requestJson', trace_id: traceId, detail: `${method} ${safePath}` })
     let succeeded = false
     try {
-      const result = await performRequest<T>(path, init)
+      const result = await performRequest<T>(path, { ...init, headers: { ...(init.headers as Record<string, string> | undefined), 'X-Request-ID': traceId } })
       succeeded = true
+      recordDiagnostic('INFO', 'http.request.success', { feature: 'api-client', function: 'requestJson', trace_id: traceId, duration_ms: Date.now() - startedAt, detail: `${method} ${safePath} completed` })
       return result
+    } catch (error) {
+      const status = error instanceof BackendRequestError ? error.status : undefined
+      recordDiagnostic('ERROR', 'http.request.failure', { feature: 'api-client', function: 'requestJson', trace_id: traceId, duration_ms: Date.now() - startedAt, detail: `${method} ${safePath} failed${status ? ` · HTTP ${status}` : ''} · ${error instanceof Error ? error.name : 'Error'}: ${error instanceof Error ? error.message : 'unknown error'}` })
+      throw error
     } finally {
       requestSamples.push({ completedAt: Date.now(), durationMs: Date.now() - startedAt, succeeded })
       if (requestSamples.length > 600) requestSamples.splice(0, requestSamples.length - 600)
