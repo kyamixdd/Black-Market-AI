@@ -1,9 +1,11 @@
 """Regression tests for fail-closed model activation."""
 import json
+import numpy as np
 
 from database.connection import Database
 from database.repositories import Repository
 from learning.trainer import ModelTrainer
+import learning.trainer as trainer_module
 
 
 def _complete_gate():
@@ -82,3 +84,59 @@ def test_promotion_evidence_requires_purge_gap_at_least_target_horizon():
     gate = _complete_gate()
     gate["validation_provenance"]["purge_gap_ms"] = 1000
     assert ModelTrainer._promotion_evidence_passes(gate) is False
+
+
+def test_training_registers_validated_candidates_without_changing_active_aliases(tmp_path, monkeypatch):
+    class FakeScaler:
+        def fit_transform(self, values):
+            return values
+
+    class FakeClassifier:
+        def __init__(self, **_kwargs):
+            self.classes_ = np.asarray([0, 1, 2])
+
+        def fit(self, _features, labels):
+            self.predictions = np.asarray(labels)
+
+        def predict(self, _features):
+            return self.predictions
+
+        def save_model(self, path):
+            open(path, "wb").close()
+
+    class FakeRepository:
+        def __init__(self):
+            self.models = []
+
+        def save_model_registry(self, model):
+            self.models.append(model)
+
+    monkeypatch.setattr(trainer_module, "StandardScaler", FakeScaler)
+    monkeypatch.setattr(trainer_module, "RandomForestClassifier", FakeClassifier)
+    monkeypatch.setattr(trainer_module.xgb, "XGBClassifier", FakeClassifier)
+    monkeypatch.setattr(
+        trainer_module.joblib, "dump",
+        lambda _model, path: open(path, "wb").close(),
+    )
+
+    repo = FakeRepository()
+    trainer = ModelTrainer(repo)
+    trainer.model_dir = tmp_path
+    alias_updates = []
+    trainer._update_latest_symlinks = lambda version: alias_updates.append(version)
+    gate = _complete_gate()
+    result = trainer._train_final_models(
+        np.ones((6, 2), dtype=np.float32),
+        np.asarray([0, 1, 2, 0, 1, 2]),
+        "candidate-v1",
+        gate,
+    )
+
+    assert result["model_paths"]["rf"].endswith("rf_candidate-v1.pkl")
+    assert len(repo.models) == 2
+    assert all(model["status"] == "CANDIDATE" for model in repo.models)
+    assert all(
+        json.loads(model["evaluation_data"])["promotion_gate"]["passes"]
+        for model in repo.models
+    )
+    assert alias_updates == []

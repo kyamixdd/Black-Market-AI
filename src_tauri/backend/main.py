@@ -190,6 +190,12 @@ app = FastAPI(
 )
 
 
+def _refresh_runtime_health() -> None:
+    refresh = getattr(orchestrator, "refresh_health_status", None)
+    if callable(refresh):
+        refresh()
+
+
 _request_buckets: dict[str, deque[float]] = defaultdict(deque)
 _RATE_LIMIT_WINDOW_SECONDS = max(1, int(os.environ.get("BLACKMARKET_RATE_LIMIT_WINDOW_SECONDS", "60")))
 _API_RATE_LIMIT = max(10, int(os.environ.get("BLACKMARKET_API_RATE_LIMIT", "120")))
@@ -426,11 +432,18 @@ async def health_check():
             "uptime_seconds": 0.0,
             "version": "1.0.0",
         }
+    _refresh_runtime_health()
     health = orchestrator.health_monitor.get_status()
+    exchange_ws = getattr(orchestrator, "ws_manager", None)
+    websocket_connected = bool(
+        exchange_ws
+        and callable(getattr(exchange_ws, "status_snapshot", None))
+        and exchange_ws.status_snapshot().get("state") == "LIVE"
+    )
     return {
         "status": health.get("status", "unknown"),
         "backend_ready": True,
-        "websocket_connected": bool(ws_manager and ws_manager.get_stats().get("running")),
+        "websocket_connected": websocket_connected,
         "database_connected": db is not None,
         "market_data_active": orchestrator.scanner._running,
         "learning_active": orchestrator.intelligence.predictor.is_trained,
@@ -467,6 +480,7 @@ async def system_status():
     if not orchestrator:
         raise HTTPException(status_code=503, detail="Orchestrator not initialized")
 
+    _refresh_runtime_health()
     health = orchestrator.health_monitor.get_status()
     return {
         "status": health.get("status", "unknown"),

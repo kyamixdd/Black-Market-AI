@@ -11,6 +11,9 @@ from market.candle_manager import CandleManager
 
 def test_symbol_price_volume_validation():
     assert valid_symbol("BTCUSDT")
+    assert valid_symbol("BTCUSDT_261225")
+    assert not valid_symbol("BTCUSDT__261225")
+    assert not valid_symbol("BTCUSDT_26122A")
     assert not valid_symbol("btc/usdt")
     assert not valid_symbol("BTC USDT")
     assert valid_price("12.5") and not valid_price(float("nan"))
@@ -125,6 +128,28 @@ async def test_historical_collection_uses_exchange_clock_when_local_clock_is_beh
 
 
 @pytest.mark.asyncio
+async def test_historical_collection_accepts_binance_delivery_contract_symbols():
+    manager = CandleManager()
+
+    class Client:
+        def now_ms(self):
+            return int(time.time() * 1000)
+
+        async def get_klines(self, *_args, **_kwargs):
+            close_time = self.now_ms() - 1_000
+            open_time = close_time - 60_000
+            return [[open_time, "100", "102", "99", "101", "10", close_time]]
+
+    client = Client()
+    assert await manager.collect_historical(
+        client, client, "FUTURES", "BTCUSDT_261225", "1m",
+    ) == 1
+    status = manager.get_collection_status("FUTURES", "BTCUSDT_261225", "1m")
+    assert status["state"] == "SUCCESS"
+    assert manager.get_series("FUTURES", "BTCUSDT_261225", "1m", limit=1)
+
+
+@pytest.mark.asyncio
 async def test_exchange_clock_sync_initial_offset_and_failure_fallback(monkeypatch):
     from exchange.base_client import BasePublicClient
     from exchange.rate_limiter import RateLimiter
@@ -190,6 +215,13 @@ def test_market_cache_reports_source_and_freshness():
     assert status["state"] == "LIVE"
     assert status["data_source"] == "WEBSOCKET"
     assert status["latest_symbol"] == "BTCUSDT"
+    cache.update_ticker("FUTURES", "BTCUSDT", 100, 10, 1, source="REST")
+    cache.update_book_ticker("FUTURES", "BTCUSDT", 101)
+    snapshot = cache.get_snapshot("FUTURES", "BTCUSDT")
+    assert snapshot["price"] == 101
+    assert snapshot["volume_24h"] == 10
+    assert snapshot["price_change_24h"] == 1
+    assert snapshot["data_source"] == "WEBSOCKET_BOOK"
 
 @pytest.mark.asyncio
 async def test_websocket_manager_exposes_offline_and_reconnecting_state():

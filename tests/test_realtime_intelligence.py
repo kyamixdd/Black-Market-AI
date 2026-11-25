@@ -108,3 +108,94 @@ async def test_scanner_publishes_validated_live_ticker_event():
     assert published.symbol == "BTCUSDT"
     assert published.payload["price"] == 123.4
     assert published.payload["data_source"] == "WEBSOCKET"
+
+
+@pytest.mark.asyncio
+async def test_scanner_uses_futures_book_ticker_midpoint_with_rest_ticker_fields():
+    from market.scanner import Scanner
+
+    class Registry:
+        def is_eligible(self, symbol, market):
+            return symbol == "BTCUSDT" and market == "FUTURES"
+
+    class Cache:
+        def __init__(self):
+            self.updated = []
+
+        def get_volume(self, market, symbol):
+            return 5000.0
+
+        def get_change(self, market, symbol):
+            return 1.2
+
+        def update_book_ticker(self, *args, **kwargs):
+            self.updated.append((args, kwargs))
+
+    class CapturingBus:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            self.events.append(event)
+
+    scanner = Scanner.__new__(Scanner)
+    scanner.registry = Registry()
+    scanner.cache = Cache()
+    scanner.event_bus = CapturingBus()
+    scanner.futures_client = SimpleNamespace(
+        now_ms=lambda: int(__import__("time").time() * 1000)
+    )
+    now_ms = scanner.futures_client.now_ms()
+
+    await scanner._handle_stream_message("FUTURES", {
+        "data": {
+            "e": "bookTicker", "s": "BTCUSDT", "b": "123.3", "a": "123.5",
+            "E": now_ms,
+        }
+    })
+
+    assert scanner.cache.updated == [(("FUTURES", "BTCUSDT", 123.4), {})]
+    assert scanner.event_bus.events[0].payload["price"] == 123.4
+    assert scanner.event_bus.events[0].payload["volume_24h"] == 5000.0
+    assert scanner.event_bus.events[0].payload["data_source"] == "WEBSOCKET_BOOK"
+
+    await scanner._handle_stream_message("FUTURES", {
+        "data": {
+            "e": "bookTicker", "s": "BTCUSDT", "b": "123.6", "a": "123.5",
+            "E": now_ms,
+        }
+    })
+    assert len(scanner.cache.updated) == 1
+    assert len(scanner.event_bus.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_scanner_subscribes_to_futures_book_ticker_streams():
+    from market.scanner import Scanner
+
+    class Registry:
+        def is_eligible(self, symbol, market):
+            return symbol == "BTCUSDT" and market == "FUTURES"
+
+    class Cache:
+        def get_market_tickers(self, market):
+            assert market == "FUTURES"
+            return [{"symbol": "BTCUSDT", "volume_24h": 5000.0}]
+
+    class WebSocketManager:
+        def __init__(self):
+            self.started = None
+
+        async def start(self, spot_streams, futures_streams):
+            self.started = (spot_streams, futures_streams)
+
+    scanner = Scanner.__new__(Scanner)
+    scanner.registry = Registry()
+    scanner.cache = Cache()
+    scanner.websocket_manager = WebSocketManager()
+    scanner.stream_symbol_limit = 1
+    scanner._stream_symbols = {"SPOT": (), "FUTURES": ()}
+
+    await scanner._refresh_stream_subscriptions("FUTURES")
+
+    assert scanner.websocket_manager.started == ([], ["btcusdt@bookTicker"])

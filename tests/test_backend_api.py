@@ -352,6 +352,33 @@ def test_main_api_registers_requested_read_routes():
     )
 
 
+def test_market_snapshot_exposes_its_data_source(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src_tauri.backend.api.routes import markets
+
+    snapshot = {
+        "symbol": "BTCUSDT",
+        "market": "FUTURES",
+        "timestamp": "2026-11-25T16:05:21+00:00",
+        "price": 58_327.15,
+        "volume_24h": 1_000.0,
+        "price_change_24h": -2.0,
+        "regime": "UNKNOWN",
+        "data_source": "WEBSOCKET_BOOK",
+    }
+    bridge = SimpleNamespace(get_market_snapshot=lambda *_: snapshot)
+    monkeypatch.setattr(markets, "get_bridge", lambda: bridge)
+
+    app = FastAPI()
+    app.include_router(markets.router, prefix="/api")
+    with TestClient(app) as client:
+        response = client.get("/api/markets/BTCUSDT?market=FUTURES")
+
+    assert response.status_code == 200
+    assert response.json()["data_source"] == "WEBSOCKET_BOOK"
+
+
 def test_backend_startup_stops_when_database_integrity_check_fails(monkeypatch):
     pytest.importorskip("fastapi")
     from fastapi import FastAPI
@@ -432,6 +459,7 @@ def test_health_endpoint_reports_readiness_without_legacy_paper_trading_attribut
         health_monitor=FakeHealthMonitor(),
         scanner=SimpleNamespace(_running=True),
         intelligence=SimpleNamespace(predictor=SimpleNamespace(is_trained=False)),
+        ws_manager=SimpleNamespace(status_snapshot=lambda: {"state": "LIVE"}),
     )
     assert not hasattr(orchestrator, "paper_trading")
     monkeypatch.setattr(main, "orchestrator", orchestrator)

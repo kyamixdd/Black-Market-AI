@@ -100,6 +100,7 @@ class MarketSnapshotResponse(BaseModel):
     regime: str
     data_age_seconds: float | None = None
     data_freshness: str = "UNKNOWN"
+    data_source: str = "UNKNOWN"
 
 
 class MarketListResponse(BaseModel):

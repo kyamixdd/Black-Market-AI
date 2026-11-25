@@ -174,9 +174,6 @@ class ModelTrainer:
         xgb_model.save_model(str(xgb_path))
         joblib.dump(scaler, scaler_path)
 
-        # Update symlinks to latest
-        self._update_latest_symlinks(version)
-
         # Calculate training metrics
         rf_pred = rf.predict(Xs)
         xgb_pred = xgb_model.predict(Xs)
@@ -191,8 +188,8 @@ class ModelTrainer:
         }
 
         # Register in database
-        self._register_model(version, "random_forest", metrics, str(rf_path))
-        self._register_model(version, "xgboost", metrics, str(xgb_path))
+        self._register_model(version, "random_forest", metrics, str(rf_path), promotion_gate)
+        self._register_model(version, "xgboost", metrics, str(xgb_path), promotion_gate)
 
         logger.info("Models trained and saved: version=%s, samples=%d", version, len(X))
         return {

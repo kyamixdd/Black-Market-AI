@@ -183,21 +183,37 @@ class Scanner:
                   duration_ms=round((time.perf_counter() - scan_started) * 1000, 2))
 
     async def _handle_stream_message(self, market: str, message: dict) -> None:
-        """Consume Binance combined-stream 24h ticker events into the shared cache."""
+        """Consume validated Binance ticker events into the shared cache."""
         payload = message.get("data", message) if isinstance(message, dict) else {}
         if not isinstance(payload, dict):
             return
         symbol = payload.get("s") or payload.get("symbol")
         if not symbol or not self.registry.is_eligible(str(symbol), market):
             return
+        symbol = str(symbol).upper()
+        is_book_ticker = payload.get("e") == "bookTicker"
+        if is_book_ticker:
+            try:
+                bid = float(payload.get("b", payload.get("bidPrice", 0)))
+                ask = float(payload.get("a", payload.get("askPrice", 0)))
+            except (TypeError, ValueError, OverflowError):
+                return
+            if not valid_price(bid) or not valid_price(ask) or ask < bid:
+                return
+            price = (bid + ask) / 2
+            volume = self.cache.get_volume(market, symbol)
+            change = self.cache.get_change(market, symbol)
+            if volume is None or change is None:
+                return
+        else:
+            try:
+                price = float(payload.get("c", payload.get("lastPrice", 0)))
+                volume = float(payload.get("q", payload.get("quoteVolume", 0)))
+                change = float(payload.get("P", payload.get("priceChangePercent", 0)))
+            except (TypeError, ValueError, OverflowError):
+                return
         try:
-            price = float(payload.get("c", payload.get("lastPrice", 0)))
-            volume = float(payload.get("q", payload.get("quoteVolume", 0)))
-            change = float(payload.get("P", payload.get("priceChangePercent", 0)))
-        except (TypeError, ValueError):
-            return
-        try:
-            event_time_ms = int(payload.get("E", 0))
+            event_time_ms = int(payload.get("E", payload.get("T", 0)))
         except (TypeError, ValueError, OverflowError):
             return
         client = self.spot_client if market == "SPOT" else self.futures_client
@@ -206,15 +222,19 @@ class Scanner:
         if event_time_ms and (event_time_ms > now_ms + 5_000 or event_time_ms < now_ms - 120_000):
             return
         if valid_price(price) and valid_volume(volume) and math.isfinite(change):
-            self.cache.update_ticker(market, str(symbol), price, volume, change, source="WEBSOCKET")
+            data_source = "WEBSOCKET_BOOK" if is_book_ticker else "WEBSOCKET"
+            if is_book_ticker:
+                self.cache.update_book_ticker(market, symbol, price)
+            else:
+                self.cache.update_ticker(market, symbol, price, volume, change, source=data_source)
             # Fan out validated stream data through the existing shared EventBus.
             publish = getattr(self.event_bus, "publish", None)
             if callable(publish):
                 await publish(make_event(
-                    EventType.MARKET_DATA, "scanner.websocket", symbol=str(symbol).upper(),
+                    EventType.MARKET_DATA, "scanner.websocket", symbol=symbol,
                     market=market, price=price, volume_24h=volume,
                     price_change_24h_pct=change, exchange_event_time_ms=event_time_ms or None,
-                    data_source="WEBSOCKET",
+                    data_source=data_source,
                 ))
 
     async def _refresh_stream_subscriptions(self, market: str) -> None:
@@ -232,7 +252,7 @@ class Scanner:
             return
         self._stream_symbols[market] = selected
         spot_streams = [f"{symbol}@ticker" for symbol in self._stream_symbols["SPOT"]]
-        futures_streams = [f"{symbol}@ticker" for symbol in self._stream_symbols["FUTURES"]]
+        futures_streams = [f"{symbol}@bookTicker" for symbol in self._stream_symbols["FUTURES"]]
         try:
             await self.websocket_manager.start(spot_streams, futures_streams)
         except Exception:

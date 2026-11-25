@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,30}$")
+_SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,30}(?:_[0-9]{6})?$")
 
 
 class MarketDataState(str, Enum):

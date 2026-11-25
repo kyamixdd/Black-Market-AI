@@ -263,6 +263,98 @@ class Orchestrator:
         await self.disaster_recovery.start()
         logger.info("Initialization complete")
 
+    def refresh_health_status(self) -> dict[str, Any]:
+        """Publish current runtime readiness for diagnostics and dashboards."""
+        scanner = self.scanner.status_snapshot()
+        enabled_markets = self.scanner.enabled_markets
+        market_statuses = scanner.get("markets", {})
+        scan_failures = {
+            market: market_statuses.get(market, {}).get("refresh_failures", 0)
+            for market in enabled_markets
+        }
+        scanner_healthy = bool(enabled_markets) and scanner.get("running", False) and all(
+            market_statuses.get(market, {}).get("state") in {"SCANNING", "COMPLETE"}
+            and not market_statuses.get(market, {}).get("last_error")
+            and not scan_failures[market]
+            for market in enabled_markets
+        )
+        scanner_details = None
+        if not scanner_healthy:
+            scanner_details = "; ".join(
+                f"{market}: {market_statuses.get(market, {}).get('state', 'UNAVAILABLE')}"
+                f" ({scan_failures.get(market, 0)} refresh failures)"
+                for market in sorted(enabled_markets)
+            ) or "No markets are enabled."
+
+        websocket = self.ws_manager.status_snapshot()
+        websocket_state = websocket.get("state", "UNKNOWN")
+        websocket_healthy = not enabled_markets or websocket_state == "LIVE"
+        websocket_details = (
+            None if websocket_healthy
+            else f"Exchange WebSocket state is {websocket_state}."
+        )
+
+        predictor = self.intelligence.predictor
+        model_available = bool(predictor.is_trained)
+        learning_state = getattr(self.learning_service, "state", "unknown")
+        training_result = getattr(self.learning_service, "last_training_result", None) or {}
+        model_details = None
+        if not model_available:
+            reason = training_result.get("reason") if isinstance(training_result, dict) else None
+            model_details = "No validated active model"
+            if reason:
+                model_details += f": {reason}"
+            else:
+                model_details += f" (learning state: {learning_state})"
+
+        self.health_monitor.check_component(
+            "database",
+            self.db is not None,
+            None if self.db is not None else "Database is not initialized.",
+        )
+        self.health_monitor.check_component(
+            "market_scanner",
+            scanner_healthy,
+            scanner_details,
+        )
+        self.health_monitor.check_component(
+            "exchange_websocket",
+            websocket_healthy,
+            websocket_details,
+        )
+        self.health_monitor.check_component(
+            "learning_model",
+            model_available,
+            model_details,
+        )
+        self.health_monitor.check_component(
+            "paper_trading",
+            self.simulator is not None,
+            None if PAPER_TRADING_ENABLED else "Paper trading is disabled by configuration.",
+        )
+        self.health_monitor.update_metrics({
+            "scanner": {
+                "running": scanner.get("running", False),
+                "configured_timeframes": scanner.get("configured_timeframes", []),
+                "markets": market_statuses,
+            },
+            "eligible_symbols": {
+                market: self.registry.count(market)
+                for market in ("SPOT", "FUTURES")
+            },
+            "exchange_websocket": websocket,
+            "learning": {
+                "state": learning_state,
+                "active_model_available": model_available,
+                "last_cycle_status": getattr(self.learning_service, "last_cycle_status", "unknown"),
+            },
+            "paper_trading": {
+                "enabled": PAPER_TRADING_ENABLED,
+                "autonomous_entries_enabled": self._autonomous_enabled,
+            },
+        })
+        return self.health_monitor.get_status()
+
     def _setup_subscriptions(self) -> None:
         # Signal validation
         self.event_bus.subscribe(EventType.SIGNAL_PROPOSED, self._on_signal_proposed)
@@ -829,6 +921,7 @@ class Orchestrator:
     async def run(self) -> None:
         self._running = True
         await self.scanner.start()
+        self.refresh_health_status()
         if AUTO_MODEL_TRAINING:
             self._tasks.append(asyncio.create_task(
                 self.learning_service.run(), name="blackmarket-live-learning"
@@ -849,6 +942,7 @@ class Orchestrator:
         while self._running:
             await asyncio.sleep(60)
             self.disaster_recovery.watchdog.heartbeat()
+            self.refresh_health_status()
             # Periodic persistence
             await self._persist_state()
 

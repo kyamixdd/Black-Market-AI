@@ -858,6 +858,9 @@ class OrchestratorBridge:
 
     def get_system_health(self) -> dict:
         """Get system health status."""
+        refresh = getattr(self.orch, "refresh_health_status", None)
+        if callable(refresh):
+            refresh()
         health = self.orch.health_monitor.get_status()
         return {
             "status": health.get("status", "unknown"),

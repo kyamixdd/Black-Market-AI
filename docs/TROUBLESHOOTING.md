@@ -10,6 +10,8 @@
 
 Frontend availability does not indicate backend readiness or current market-data availability.
 
+The health summary reports component readiness separately. A `DEGRADED` status can mean the backend and market feeds are running but no validated model is available; automated paper entries remain gated until model validation passes.
+
 ## Desktop startup / backend unavailable
 
 1. Check the startup readiness state and application logs.
@@ -35,9 +37,10 @@ Do not include bearer tokens in logs, screenshots or issue reports. Remote mode 
 - Analytics requiring historical candles may remain unavailable until sufficient data is collected.
 - Exchange rate limits and service interruptions can delay updates.
 - Stale or incomplete data must not be treated as a current signal.
+- USDⓈ-M delivery-contract symbols can contain a date suffix such as `BTCUSDT_261225`; current active contracts are eligible and their candles must pass the same closed-candle and freshness checks as perpetuals.
 - `stale_latest_candle` or `empty_response` means the refresh was not accepted; the scanner backs off rather than repeatedly requesting the same failing timeframe. Spot and Futures periodically synchronize freshness checks with their own `/time` endpoint. A logged clock offset corrects the comparison but does not bypass the stale-data guard.
 - Compare the latest kline close time with the matching exchange `/time` response, not only the HTTP `Date` header. A close time later than now can be the current, still-open candle; it is excluded until complete. If exchange time and klines are themselves delayed, wait for the public feed to recover rather than overriding the freshness check.
-- `Connecting WS` is only an attempt. Look for `WebSocket connected for SPOT` and/or `WebSocket connected for FUTURES`; reconnect warnings indicate that market's feed is not currently healthy.
+- `Connecting WS` is only an attempt. Look for recent messages for both markets in the health snapshot; a connected socket with no received events is stale. Spot ticker data uses `@ticker`; Futures price updates use the live best-bid/ask midpoint while REST supplies 24-hour volume and change.
 
 ## Paper order rejection
 
@@ -75,7 +78,9 @@ The command must run under the intended Python interpreter.
 
 ## Model training or promotion blocked
 
-Promotion may be rejected because of insufficient samples, invalid timestamps, inadequate chronological/purged validation, insufficient calibration samples, or incomplete economic/champion evidence. These conditions are validation gates; reducing thresholds to bypass them invalidates the evidence.
+`active_trained_model_unavailable` means automated paper entries are being held because there is no usable trained model. Check the Learning status for its bootstrap/retraining state and last-cycle reason. New models remain inactive candidates until timestamped walk-forward validation, calibration, cost-adjusted economic evidence and champion checks pass; do not lower these safeguards to force activation. After a validated promotion, confidence calibration still needs resolved outcomes for that exact model version before automated entries become ready.
+
+Promotion may be rejected because of insufficient samples, invalid timestamps, inadequate chronological/purged validation, insufficient calibration samples, or incomplete economic/champion evidence. These conditions are validation gates; reducing thresholds to bypass them invalidates the evidence. A failed training or promotion should leave the existing active model in place.
 
 ## Bug report contents
 

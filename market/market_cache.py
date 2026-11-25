@@ -32,6 +32,17 @@ class MarketCache:
         with self._lock:
             self._prices[market][symbol] = price
 
+    def update_book_ticker(self, market: str, symbol: str, price: float) -> None:
+        """Refresh only the price from a best-bid/ask stream."""
+        if not valid_price(price):
+            return
+        with self._lock:
+            self._prices[market][symbol] = float(price)
+            now = datetime.now(timezone.utc)
+            self._updated_at[market][symbol] = now
+            self._ticker_updated_at[market][symbol] = now
+            self._sources[market][symbol] = "WEBSOCKET_BOOK"
+
     def update_ticker(self, market: str, symbol: str, price: float, volume: float, change_pct: float, source: str = "REST") -> None:
         try:
             change_value = float(change_pct)
