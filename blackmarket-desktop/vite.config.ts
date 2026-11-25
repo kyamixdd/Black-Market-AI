@@ -1,6 +1,6 @@
 import react from '@vitejs/plugin-react'
 import { createRequire } from 'node:module'
-const ts: any = createRequire(import.meta.url)('typescript')
+const ts: any = createRequire(import.meta.url)('typescript/lib/typescript.js')
 import { defineConfig, loadEnv } from 'vite'
 import type { ProxyOptions } from 'vite'
 import { readFileSync } from 'node:fs'
