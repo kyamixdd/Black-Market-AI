@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Profiler, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
   Activity,
@@ -308,7 +308,17 @@ function App() {
   const [searchValue, setSearchValue] = useState('BTCUSDT')
   const [marketType, setMarketType] = useState<'SPOT' | 'FUTURES'>('SPOT')
   const [timeframe, setTimeframe] = useState('1h')
-  const [data, setData] = useState(EMPTY_DATA)
+  const [data, setDataRaw] = useState(EMPTY_DATA)
+  const setData = useCallback((update: Parameters<typeof setDataRaw>[0]) => {
+    setDataRaw((current) => {
+      const next = typeof update === 'function' ? update(current) : update
+      const previous = current as unknown as Record<string, unknown>
+      const result = next as unknown as Record<string, unknown>
+      const changed = Object.keys(result).filter((key) => result[key] !== previous[key])
+      recordDiagnostic('DEBUG', changed.length ? 'ui.dashboard_data.updated' : 'ui.dashboard_data.no_change', { feature: 'dashboard-data', function: 'setData', detail: `changed=${changed.join('|') || 'none'} · fields=${Object.keys(result).length}` , result_summary: `changed_fields=${changed.length}` })
+      return next
+    })
+  }, [])
   const [startupStatus, setStartupStatus] = useState<StartupStatus>({
     state: 'checking',
     message: 'Checking the backend connection.',
@@ -1544,6 +1554,7 @@ function App() {
           </section>
         </aside>
       </div> : (
+        <Profiler id={activeScreen} onRender={(id, phase, actualDuration, baseDuration) => recordDiagnostic('DEBUG', 'ui.react_render.commit', { feature: id, function: 'React.Profiler', detail: `phase=${phase} · actual=${actualDuration.toFixed(2)}ms · base=${baseDuration.toFixed(2)}ms`, duration_ms: Math.round(actualDuration) })}>
         <DashboardScreen
           screen={activeScreen}
           symbol={symbol}
@@ -1620,6 +1631,7 @@ function App() {
             setActiveScreen('Market Analysis')
           }}
         />
+        </Profiler>
       )}
 
       <footer className="statusbar">

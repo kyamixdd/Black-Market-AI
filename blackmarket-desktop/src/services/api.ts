@@ -2,6 +2,9 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { backendBaseUrl, isDesktopRuntime } from './backendClient.js';
 import { getApiAuthorization } from './localAuth';
+import { recordDiagnostic, recommendDiagnosticFix } from './diagnosticLogger';
+
+const apiRequestStarts = new WeakMap<object, number>();
 
 const API_BASE_URL = backendBaseUrl();
 
@@ -30,15 +33,29 @@ class ApiService {
     });
 
     this.client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+      const requestId = crypto.randomUUID()
+      config.headers.set('X-Request-ID', requestId)
+      apiRequestStarts.set(config, performance.now())
+      recordDiagnostic('DEBUG', 'api.axios.request.started', { feature: 'api-client', function: 'axios.request', trace_id: requestId, detail: `${config.method?.toUpperCase() ?? 'GET'} ${(config.url ?? '').split('?')[0]}` })
       const authorization = getApiAuthorization()
       if (authorization) config.headers.set('Authorization', authorization.Authorization)
       return config
     })
 
     this.client.interceptors.response.use(
-      (response) => response.data,
+      (response) => {
+        const config = response.config
+        const started = apiRequestStarts.get(config) ?? performance.now()
+        const requestId = String(config.headers?.['X-Request-ID'] ?? '')
+        recordDiagnostic('INFO', 'api.axios.request.completed', { feature: 'api-client', function: 'axios.response', trace_id: requestId, duration_ms: Math.round(performance.now() - started), detail: `${response.config.method?.toUpperCase() ?? 'GET'} ${(response.config.url ?? '').split('?')[0]} · HTTP ${response.status}` })
+        return response.data
+      },
       (error: AxiosError) => {
         const message = error.response?.data?.detail || error.message || 'Unknown error';
+        const config = error.config
+        const started = config ? apiRequestStarts.get(config) ?? performance.now() : performance.now()
+        const requestId = String(config?.headers?.['X-Request-ID'] ?? '')
+        recordDiagnostic('ERROR', 'api.axios.request.failed', { feature: 'api-client', function: 'axios.response', trace_id: requestId, duration_ms: Math.round(performance.now() - started), detail: `${config?.method?.toUpperCase() ?? 'GET'} ${(config?.url ?? '').split('?')[0]} · HTTP ${error.response?.status ?? 'network'} · ${String(message)}`, ...recommendDiagnosticFix(message) })
         return Promise.reject(new Error(message));
       }
     );

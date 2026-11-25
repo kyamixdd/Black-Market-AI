@@ -1,5 +1,6 @@
 // Market data store using Zustand.
 import { create } from 'zustand';
+import { recordDiagnostic } from '../services/diagnosticLogger';
 
 interface MarketState {
   // Market data
@@ -70,3 +71,19 @@ export const useMarketStore = create<MarketState>((set) => ({
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
 }));
+
+// Observe every market-store commit without recording raw prices, tokens or user data.
+useMarketStore.subscribe((state, previous) => {
+  const current = state as unknown as Record<string, unknown>
+  const before = previous as unknown as Record<string, unknown>
+  const changed = Object.keys(current).filter((key) => current[key] !== before[key])
+  if (!changed.length) return
+  const summary = changed.map((key) => {
+    const value = current[key]
+    if (Array.isArray(value)) return `${key}:length=${value.length}`
+    if (value && typeof value === 'object') return `${key}:object`
+    if (value === null) return `${key}:null`
+    return `${key}:${typeof value}`
+  }).join(', ')
+  recordDiagnostic('DEBUG', 'ui.market_store.updated', { feature: 'market-data-ui', function: 'Zustand.subscribe', detail: `changed=${changed.join('|')} · ${summary}` })
+})

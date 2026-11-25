@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import json
+import inspect
+import functools
+import contextvars
+import uuid
 import logging
 import re
 import sys
@@ -55,7 +59,7 @@ class JsonLogFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact_sensitive_text(record.getMessage()),
         }
-        for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation", "symbol", "market", "order_type", "reason", "scanner_state", "symbols_selected", "refresh_successes", "refresh_failures", "refresh_skipped", "feature", "function", "phase", "trace_id", "error_type", "detail", "count", "enabled", "screen", "source", "level_name"):
+        for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation", "symbol", "market", "order_type", "reason", "scanner_state", "symbols_selected", "refresh_successes", "refresh_failures", "refresh_skipped", "feature", "function", "phase", "trace_id", "error_type", "detail", "count", "enabled", "screen", "source", "level_name", "root_cause", "suggested_fix", "input_count", "output_count", "state", "step", "data_age_ms", "stale", "result_summary", "operation_id"):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = sanitize_log_value(value, key)
@@ -86,6 +90,74 @@ def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> 
         if key.lower() not in _SENSITIVE_FIELD_NAMES
     }
     logger.log(level, event, extra={"event": event, **safe_fields})
+
+
+_OPERATION_TRACE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("blackmarket_operation_trace_id", default=None)
+
+
+def recommend_diagnostic_fix(error: BaseException | str) -> tuple[str, str]:
+    """Heuristic root cause and next step; not a definitive diagnosis."""
+    message = str(error)
+    text = message.lower()
+    if isinstance(error, TimeoutError) or "timeout" in text or "timed out" in text:
+        return "A dependency or operation exceeded its time limit.", "Check service readiness, exchange/API latency and timeout configuration; retry only idempotent operations."
+    if "connection" in text or "network" in text or "connect" in text:
+        return "A network or local backend connection could not be established.", "Check the backend supervisor, host/port, exchange connectivity, DNS and firewall."
+    if "rate limit" in text or "429" in text:
+        return "The upstream or local API rate limit was reached.", "Reduce request frequency, verify the rate limiter and honor Retry-After/backoff."
+    if "database" in text or "sqlite" in text or "sqlalchemy" in text or "locked" in text:
+        return "A database operation failed or the database was unavailable.", "Check database health, disk space, transaction rollback and SQLite lock contention; inspect the traceback."
+    if "permission" in text or "unauthorized" in text or "forbidden" in text or "401" in text or "403" in text:
+        return "The operation was rejected by authorization or permission checks.", "Verify the authenticated desktop session and required permission; do not bypass the guard."
+    if "invalid" in text or "validation" in text or "valueerror" in text:
+        return "Input or returned data did not satisfy validation rules.", "Inspect the event schema and upstream payload; correct the source data or validation contract."
+    if "model" in text or "predict" in text or "training" in text:
+        return "The model pipeline failed or the active model/data contract is incompatible.", "Check model artifact integrity, feature order/version, training data availability and validation/promotion status."
+    return "The operation raised an exception; inspect the correlated exception and stack trace.", "Filter by trace_id, inspect preceding events and reproduce with the same inputs and runtime state."
+
+
+def traced_operation(feature: str, component: str = "application"):
+    """Log correlated start/completion/failure events for important operations."""
+    def decorate(function):
+        name = function.__qualname__
+        if inspect.iscoroutinefunction(function):
+            @functools.wraps(function)
+            async def async_wrapper(*args, **kwargs):
+                trace_id = _OPERATION_TRACE_ID.get() or uuid.uuid4().hex
+                token = _OPERATION_TRACE_ID.set(trace_id)
+                started = time.perf_counter()
+                log_event(_TRACE_LOGGER, logging.INFO, "operation_started", component=component, feature=feature, function=name, phase="start", trace_id=trace_id)
+                try:
+                    result = await function(*args, **kwargs)
+                except Exception as exc:
+                    root, fix = recommend_diagnostic_fix(exc)
+                    log_event(_TRACE_LOGGER, logging.ERROR, "operation_failed", component=component, feature=feature, function=name, phase="failure", trace_id=trace_id, error_type=type(exc).__name__, root_cause=root, suggested_fix=fix, detail=f"{type(exc).__name__}: {exc}", duration_ms=round((time.perf_counter()-started)*1000,3))
+                    raise
+                else:
+                    log_event(_TRACE_LOGGER, logging.INFO, "operation_completed", component=component, feature=feature, function=name, phase="complete", trace_id=trace_id, duration_ms=round((time.perf_counter()-started)*1000,3))
+                    return result
+                finally:
+                    _OPERATION_TRACE_ID.reset(token)
+            return async_wrapper
+        @functools.wraps(function)
+        def sync_wrapper(*args, **kwargs):
+            trace_id = _OPERATION_TRACE_ID.get() or uuid.uuid4().hex
+            token = _OPERATION_TRACE_ID.set(trace_id)
+            started = time.perf_counter()
+            log_event(_TRACE_LOGGER, logging.INFO, "operation_started", component=component, feature=feature, function=name, phase="start", trace_id=trace_id)
+            try:
+                result = function(*args, **kwargs)
+            except Exception as exc:
+                root, fix = recommend_diagnostic_fix(exc)
+                log_event(_TRACE_LOGGER, logging.ERROR, "operation_failed", component=component, feature=feature, function=name, phase="failure", trace_id=trace_id, error_type=type(exc).__name__, root_cause=root, suggested_fix=fix, detail=f"{type(exc).__name__}: {exc}", duration_ms=round((time.perf_counter()-started)*1000,3))
+                raise
+            else:
+                log_event(_TRACE_LOGGER, logging.INFO, "operation_completed", component=component, feature=feature, function=name, phase="complete", trace_id=trace_id, duration_ms=round((time.perf_counter()-started)*1000,3))
+                return result
+            finally:
+                _OPERATION_TRACE_ID.reset(token)
+        return sync_wrapper
+    return decorate
 
 
 # Runtime Python function tracing is deliberately opt-in: it is extremely verbose.
@@ -144,7 +216,7 @@ def _function_profile(frame, event, arg):
                 _TRACE_LOGGER, logging.ERROR, "python_function_exception",
                 component="python", function=frame.f_code.co_name,
                 detail=f"{Path(frame.f_code.co_filename).name}:{frame.f_lineno} · {exception_type.__name__}: {exception_value}",
-                phase="exception", error_type=exception_type.__name__,
+                phase="exception", error_type=exception_type.__name__, root_cause=recommend_diagnostic_fix(exception_value)[0], suggested_fix=recommend_diagnostic_fix(exception_value)[1], trace_id=_OPERATION_TRACE_ID.get() or "",
             )
         else:
             started = starts.pop(frame_key, now)

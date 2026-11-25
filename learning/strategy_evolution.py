@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import logging
+from core.observability import traced_operation
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -203,6 +204,8 @@ class StrategyEvolutionEngine:
             "min_risk_reward": 0.5,
         }
 
+    @traced_operation("ai_evolution.experiment", component="learning")
+
     def generate_experiment(
         self,
         experiment_type: ExperimentType,
@@ -261,6 +264,8 @@ class StrategyEvolutionEngine:
         content = json.dumps(self._baseline_configs, sort_keys=True)
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
+    @traced_operation("ai_evolution.backtest", component="learning")
+
     def run_backtest(self, experiment_id: str) -> ExperimentResult:
         """Run historical backtest for experiment."""
         config = self._experiments.get(experiment_id)
@@ -307,6 +312,8 @@ class StrategyEvolutionEngine:
                    f"Sharpe={result.sharpe_ratio:.2f}, DD={result.max_drawdown_pct:.2f}%")
         return exp_result
 
+    @traced_operation("ai_evolution.shadow_test", component="learning")
+
     def start_shadow_test(self, experiment_id: str) -> None:
         """Start paper shadow evaluation for experiment."""
         config = self._experiments.get(experiment_id)
@@ -334,6 +341,8 @@ class StrategyEvolutionEngine:
         config.status = ExperimentStatus.SHADOW_TESTING
         self._active_shadow_experiment = experiment_id
         logger.info(f"Started shadow test for {experiment_id}")
+
+    @traced_operation("ai_evolution.shadow_evaluation", component="learning")
 
     def evaluate_shadow_test(self, experiment_id: str, days_completed: int) -> ExperimentResult:
         """Evaluate shadow test results."""
@@ -374,6 +383,8 @@ class StrategyEvolutionEngine:
         self._active_shadow_experiment = None
         result.evaluated_at = datetime.now(timezone.utc)
         return result
+
+    @traced_operation("ai_evolution.rollback", component="learning")
 
     def rollback_experiment(self, experiment_id: str) -> bool:
         """Rollback an accepted experiment if it degrades in production."""
@@ -494,6 +505,8 @@ class StrategyEvolutionEngine:
 
         return True
 
+    @traced_operation("ai_evolution.promotion", component="learning")
+
     def _promote_experiment(self, experiment_id: str) -> None:
         """Promote experiment parameters to baseline."""
         config = self._experiments[experiment_id]
@@ -506,6 +519,8 @@ class StrategyEvolutionEngine:
             target[parts[-1]] = value
 
         logger.info(f"Promoted experiment {experiment_id} to baseline")
+
+    @traced_operation("ai_evolution.rollback", component="learning")
 
     def _restore_baseline(self) -> None:
         """Restore baseline to original approved parameters."""

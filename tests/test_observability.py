@@ -78,3 +78,36 @@ def test_formatter_redacts_sensitive_values_in_structured_extras():
     assert "nested-secret" not in formatted
     assert "[REDACTED]" in formatted
     assert '"safe":"ok"' in formatted
+
+
+
+def test_recommend_diagnostic_fix_returns_heuristic_and_actionable_step():
+    from core.observability import recommend_diagnostic_fix
+
+    root_cause, suggested_fix = recommend_diagnostic_fix(TimeoutError('exchange request timed out'))
+    assert 'time limit' in root_cause
+    assert 'timeout' in suggested_fix.lower()
+
+
+def test_traced_operation_records_success_and_failure_with_trace_id(caplog):
+    import pytest
+    from core.observability import traced_operation
+
+    @traced_operation('test.operation', component='test')
+    def successful():
+        return 42
+
+    @traced_operation('test.operation', component='test')
+    def failing():
+        raise ValueError('invalid test input')
+
+    with caplog.at_level(logging.INFO):
+        assert successful() == 42
+        with pytest.raises(ValueError):
+            failing()
+    records = [record for record in caplog.records if record.name == 'blackmarket.function_trace']
+    assert any(record.event == 'operation_started' for record in records)
+    assert any(record.event == 'operation_completed' for record in records)
+    failure = next(record for record in records if record.event == 'operation_failed')
+    assert failure.trace_id
+    assert failure.suggested_fix

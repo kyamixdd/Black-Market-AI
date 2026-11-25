@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from core.observability import traced_operation
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -45,6 +46,8 @@ class LiveLearningService:
         self._last_retrain_count = 0
         self._river_model = self.predictor.river_model
         self._last_bootstrap_attempt = 0.0
+
+    @traced_operation("learning.service", component="learning")
 
     async def run(self) -> None:
         self.state = "bootstrapping"
@@ -112,6 +115,8 @@ class LiveLearningService:
             for name in ("open", "high", "low", "close", "volume")
         }
 
+    @traced_operation("learning.historical_data", component="learning")
+
     async def _fetch_history(self, market: str, symbol: str, limit: int) -> list[dict[str, Any]]:
         client = self.orch.spot_client if market == "SPOT" else self.orch.futures_client
         rows = await client.get_klines(symbol, "1h", limit=limit)
@@ -178,6 +183,8 @@ class LiveLearningService:
             "horizon_minutes": np.asarray([item[7] for item in samples], dtype=np.int32),
         }
         return (X, y, timestamps, metadata) if include_metadata else (X, y, timestamps)
+
+    @traced_operation("learning.bootstrap_training", component="learning")
 
     async def _bootstrap(self) -> None:
         self._last_bootstrap_attempt = asyncio.get_running_loop().time()
@@ -403,11 +410,15 @@ class LiveLearningService:
         self.predictor._load_latest()
         return True
 
+    @traced_operation("learning.prediction", component="learning")
+
     async def _predict_latest(self, histories: dict[tuple[str, str], list[dict[str, Any]]]) -> None:
         for market, symbol in self._pairs:
             candles = histories.get((market, symbol), [])
             if candles:
                 await self._record_prediction(market, symbol, candles)
+
+    @traced_operation("learning.live_inference_learning", component="learning")
 
     async def _live_cycle(self) -> None:
         if not self._pairs or (
@@ -446,6 +457,8 @@ class LiveLearningService:
                 and resolved_count - self._last_retrain_count >= 100):
             await self._retrain_from_live_outcomes(resolved_count)
 
+    @traced_operation("learning.prediction_record", component="learning")
+
     async def _record_prediction(self, market: str, symbol: str, candles: list[dict[str, Any]]) -> None:
         closed = [candle for candle in candles if int(candle["close_time"]) < int(datetime.now(timezone.utc).timestamp() * 1000)]
         if len(closed) < 50:
@@ -480,6 +493,8 @@ class LiveLearningService:
             "created_at": created_at,
         })
         self._last_prediction_open[key] = open_time
+
+    @traced_operation("learning.online_learning", component="learning")
 
     def _learn_resolved_predictions(self) -> int:
         if self._river_model is None:
@@ -521,6 +536,8 @@ class LiveLearningService:
         })
         # Online River updates are experimental candidates. They cannot activate
         # or replace a champion without the same purged OOF promotion gate.
+
+    @traced_operation("learning.retraining", component="learning")
 
     async def _retrain_from_live_outcomes(self, resolved_count: int) -> None:
         self.last_cycle_status = f"retraining_from_{resolved_count}_resolved_predictions"

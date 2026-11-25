@@ -9,6 +9,10 @@ export type DiagnosticEntry = {
   detail?: string
   duration_ms?: number
   trace_id?: string
+  root_cause?: string
+  suggested_fix?: string
+  operation_id?: string
+  result_summary?: string
 }
 
 const STORAGE_KEY = 'blackmarket-diagnostic-events-v1'
@@ -46,6 +50,16 @@ function persist(): void {
   }
 }
 
+export function recommendDiagnosticFix(error: unknown): { root_cause: string; suggested_fix: string } {
+  const message = error instanceof Error ? error.message : String(error ?? 'Unknown error')
+  const text = message.toLowerCase()
+  if (text.includes('timeout') || text.includes('timed out')) return { root_cause: 'A request or dependency timed out.', suggested_fix: 'Check backend readiness, network/exchange latency and timeout settings; retry only idempotent operations.' }
+  if (text.includes('network') || text.includes('fetch') || text.includes('connection')) return { root_cause: 'The frontend could not connect to the requested service.', suggested_fix: 'Check the desktop backend process, API address, connection status and local firewall.' }
+  if (text.includes('401') || text.includes('403') || text.includes('unauthorized')) return { root_cause: 'The request was rejected by authentication or authorization.', suggested_fix: 'Check the authenticated desktop session and permission; do not bypass security checks.' }
+  if (text.includes('429') || text.includes('rate limit')) return { root_cause: 'The request was rate-limited.', suggested_fix: 'Reduce polling/request frequency and honor retry/backoff headers.' }
+  return { root_cause: 'The frontend operation failed; inspect the correlated request and stack details.', suggested_fix: 'Filter by trace_id/request_id, inspect the backend event immediately before this failure, and reproduce with the same screen and inputs.' }
+}
+
 export function recordDiagnostic(
   level: DiagnosticLevel,
   event: string,
@@ -63,6 +77,10 @@ export function recordDiagnostic(
     ...(fields.detail ? { detail: redact(fields.detail) } : {}),
     ...(typeof fields.duration_ms === 'number' ? { duration_ms: fields.duration_ms } : {}),
     ...(fields.trace_id ? { trace_id: redact(fields.trace_id) } : {}),
+    ...(fields.root_cause ? { root_cause: redact(fields.root_cause) } : {}),
+    ...(fields.suggested_fix ? { suggested_fix: redact(fields.suggested_fix) } : {}),
+    ...(fields.operation_id ? { operation_id: redact(fields.operation_id) } : {}),
+    ...(fields.result_summary ? { result_summary: redact(fields.result_summary) } : {}),
   }
   entries.push(entry)
   if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES)
@@ -106,7 +124,7 @@ export function installDiagnosticCapture(): void {
   console.error = (...args: unknown[]) => {
     try {
       recordDiagnostic('ERROR', 'frontend.console.error', {
-        feature: activeScreen, function: 'console.error',
+        feature: activeScreen, function: 'console.error', ...recommendDiagnosticFix(args.find((arg) => arg instanceof Error) ?? args.join(' ')),
         detail: args.map((arg) => arg instanceof Error ? `${arg.name}: ${arg.message}\n${arg.stack ?? ''}` : typeof arg === 'string' ? arg : Object.prototype.toString.call(arg)).join(' ').slice(0, 1000),
       })
     } catch { /* Diagnostic capture must not affect the console. */ }
@@ -114,7 +132,7 @@ export function installDiagnosticCapture(): void {
   }
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event.reason instanceof Error ? `${event.reason.name}: ${event.reason.message}\n${event.reason.stack ?? ''}` : String(event.reason)
-    recordDiagnostic('ERROR', 'frontend.unhandled_rejection', { feature: activeScreen, function: 'promise', detail: reason })
+    recordDiagnostic('ERROR', 'frontend.unhandled_rejection', { feature: activeScreen, function: 'promise', detail: reason, ...recommendDiagnosticFix(reason) })
   })
   document.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target.closest('button,[role="button"],a,[data-diagnostic-feature]') : null

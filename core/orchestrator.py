@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from core.observability import traced_operation
 import time
 import uuid
 import numpy as np
@@ -133,6 +134,8 @@ class Orchestrator:
             return {}
         return SettingsRequest.model_validate(saved).model_dump(exclude_none=True)
 
+    @traced_operation("runtime.settings", component="core")
+
     def apply_runtime_settings(self, settings: dict, persist: bool = True) -> None:
         """Apply validated settings to live components; never reset active paper equity."""
         from core.runtime_settings_store import save_runtime_settings
@@ -234,6 +237,10 @@ class Orchestrator:
 
         self._runtime_settings = next_settings
         self._autonomous_enabled = bool(next_settings.get("autonomous_enabled", AUTO_PAPER_TRADING_ENABLED))
+
+
+
+    @traced_operation("runtime.initialization", component="core")
 
 
 
@@ -381,6 +388,8 @@ class Orchestrator:
         self.event_bus.subscribe(EventType.MODEL_PROMOTED, self._on_model_promoted)
         self.event_bus.subscribe(EventType.MODEL_ROLLED_BACK, self._on_model_rolled_back)
 
+    @traced_operation("signal.pipeline", component="core")
+
     async def _on_signal_proposed(self, event) -> None:
         await self.decision_engine.evaluate_signal(event.payload)
 
@@ -520,6 +529,8 @@ class Orchestrator:
             logger.exception("Live paper confidence gate failed closed for %s", signal.get("signal_id"))
             return False, "confidence_gate_error"
 
+    @traced_operation("signal.validation", component="core")
+
     async def _on_signal_validated(self, event) -> None:
         signal = self._signal_payload(event)
         if not PAPER_TRADING_ENABLED:
@@ -558,6 +569,8 @@ class Orchestrator:
         self._record_autonomous_decision(signal, "EXECUTED", "paper_position_opened", position_id=position_id)
         if self.telegram and self._telegram_preference("executions"):
             await self.telegram.send_autonomous_decision(self.last_autonomous_decision)
+
+    @traced_operation("signal.validation", component="core")
 
     async def _on_signal_rejected(self, event) -> None:
         signal = self._signal_payload(event)
@@ -742,12 +755,16 @@ class Orchestrator:
             if price and price > 0:
                 await self.simulator.check_limit_orders(market, symbol, price)
 
+    @traced_operation("paper_trading.position", component="core")
+
     async def _on_position_closed(self, event) -> None:
         trade = event.payload.get("trade")
         if trade:
             self.repo.save_trade_history(trade)
             if self.telegram and self._telegram_preference("executions"):
                 await self.telegram.send_position_closed(trade)
+
+    @traced_operation("paper_trading.position", component="core")
 
     async def _on_position_opened(self, event) -> None:
         position = event.payload.get("position")
@@ -756,16 +773,24 @@ class Orchestrator:
             if self.telegram and self._telegram_preference("executions"):
                 await self.telegram.send_position_opened(position)
 
+    @traced_operation("paper_trading.order", component="core")
+
     async def _on_order_placed(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
+
+    @traced_operation("paper_trading.execution", component="core")
 
     async def _on_order_filled(self, event) -> None:
         order = event.payload.get("order")
         if not order or not order.get("_durably_persisted"):
             self._persist_paper_order(order)
 
+    @traced_operation("paper_trading.order", component="core")
+
     async def _on_order_cancelled(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
+
+    @traced_operation("database.paper_order", component="core")
 
     def _persist_paper_order(self, order: dict[str, Any] | None) -> None:
         if not order:
@@ -891,13 +916,19 @@ class Orchestrator:
                 break
         return decisions
 
+    @traced_operation("learning.model", component="core")
+
     async def _on_model_trained(self, event) -> None:
         if self.telegram and self._telegram_preference("learning"):
             await self.telegram.send_learning_report(event.payload)
 
+    @traced_operation("learning.model", component="core")
+
     async def _on_model_promoted(self, event) -> None:
         if self.telegram and self._telegram_preference("learning"):
             await self.telegram.send_message(f"🚀 <b>MODEL PROMOTED</b>\n\nVersion: {event.payload.get('version', 'unknown')}")
+
+    @traced_operation("learning.model", component="core")
 
     async def _on_model_rolled_back(self, event) -> None:
         if self.telegram and self._telegram_preference("learning"):
@@ -917,6 +948,8 @@ class Orchestrator:
             self.repo.save_system_event(event_dict)
         except Exception as exc:
             logger.error("Failed to persist event %s: %s", event.event_id, exc)
+
+    @traced_operation("runtime.orchestrator", component="core")
 
     async def run(self) -> None:
         self._running = True
@@ -946,6 +979,8 @@ class Orchestrator:
             # Periodic persistence
             await self._persist_state()
 
+    @traced_operation("runtime.persistence", component="core")
+
     async def _persist_state(self) -> None:
         try:
             # Save open positions
@@ -956,6 +991,8 @@ class Orchestrator:
             self.simulator._persist_daily_equity_baseline()
         except Exception as exc:
             logger.error("State persistence failed: %s", exc)
+
+    @traced_operation("runtime.shutdown", component="core")
 
     async def stop(self) -> None:
         logger.info("Shutting down...")

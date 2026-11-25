@@ -32,7 +32,7 @@ load_dotenv(config_path if config_path.is_file() else PROJECT_ROOT / ".env")
 from config import DATABASE_URL, LOG_LEVEL
 from core.config_validator import validate_config_or_exit
 from core.event_models import EventType, make_event
-from core.observability import configure_structured_logging, function_trace_enabled, log_event, set_function_trace_enabled
+from core.observability import configure_structured_logging, function_trace_enabled, log_event, set_function_trace_enabled, recommend_diagnostic_fix
 from core.orchestrator import Orchestrator
 from database.connection import Database
 
@@ -535,6 +535,10 @@ async def ingest_frontend_diagnostics(request: Request):
             phase=event_name,
             trace_id=str(item.get("trace_id", ""))[:80],
             detail=str(item.get("detail", ""))[:1200],
+            root_cause=str(item.get("root_cause", ""))[:500],
+            suggested_fix=str(item.get("suggested_fix", ""))[:700],
+            operation_id=str(item.get("operation_id", ""))[:80],
+            result_summary=str(item.get("result_summary", ""))[:500],
         )
         accepted += 1
     return {"accepted": accepted, "dropped": max(0, len(events) - accepted)}
@@ -559,6 +563,8 @@ async def system_status():
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Log diagnostic details locally without exposing them to API clients."""
+    root_cause, suggested_fix = recommend_diagnostic_fix(exc)
+    log_event(logger, logging.ERROR, "api.unhandled_exception", request_id=getattr(request.state, "request_id", ""), method=request.method, path=getattr(request.scope.get("route"), "path", None) or request.url.path, error_type=type(exc).__name__, root_cause=root_cause, suggested_fix=suggested_fix, detail=f"{type(exc).__name__}: {exc}")
     logger.exception(
         "Unhandled API exception for %s %s",
         request.method,

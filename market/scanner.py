@@ -16,7 +16,7 @@ from exchange.symbol_registry import SymbolRegistry
 from market.candle_manager import TIMEFRAME_SECONDS
 from market.market_cache import MarketCache
 from market.data_reliability import valid_price, valid_volume
-from core.observability import log_event
+from core.observability import log_event, traced_operation
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,8 @@ class Scanner:
         attempts = self._refresh_retry_state.get(key, (0, 0.0))[0] + 1
         delay = min(300.0, 60.0 * (2 ** min(attempts - 1, 3)))
         self._refresh_retry_state[key] = (attempts, time.monotonic() + delay)
+
+    @traced_operation("scanner.filter_rank_analyze", component="market")
 
     async def _analyze_market(self, market: str) -> None:
         """Refresh candles for the most liquid symbols, then run strategy analysis."""
@@ -182,6 +184,8 @@ class Scanner:
                   refresh_skipped=status["refresh_skipped"],
                   duration_ms=round((time.perf_counter() - scan_started) * 1000, 2))
 
+    @traced_operation("scanner.market_stream", component="market")
+
     async def _handle_stream_message(self, market: str, message: dict) -> None:
         """Consume validated Binance ticker events into the shared cache."""
         payload = message.get("data", message) if isinstance(message, dict) else {}
@@ -258,6 +262,8 @@ class Scanner:
         except Exception:
             logger.exception("Unable to refresh Binance ticker stream subscriptions")
 
+    @traced_operation("scanner.symbol_retrieval", component="market")
+
     async def _scan_market_tickers(self, market: str) -> None:
         client = self.spot_client if market == "SPOT" else self.futures_client
         while self._running:
@@ -294,6 +300,8 @@ class Scanner:
                 logger.error("%s ticker scan failed: %s", market, exc)
             await asyncio.sleep(30)
 
+    @traced_operation("scanner.futures_market", component="market")
+
     async def _scan_futures_extra(self) -> None:
         while self._running:
             try:
@@ -324,6 +332,8 @@ class Scanner:
         if market in {"SPOT", "FUTURES"}:
             await self._handle_stream_message(market, message)
 
+    @traced_operation("scanner.lifecycle", component="market")
+
     async def start(self) -> None:
         if self._running:
             return
@@ -334,6 +344,8 @@ class Scanner:
         self._tasks.append(asyncio.create_task(self._scan_market_tickers("FUTURES")))
         self._tasks.append(asyncio.create_task(self._scan_futures_extra()))
         logger.info("Scanner started")
+
+    @traced_operation("scanner.lifecycle", component="market")
 
     async def stop(self) -> None:
         self._running = False

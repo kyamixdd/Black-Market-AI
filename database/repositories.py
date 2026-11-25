@@ -35,6 +35,8 @@ from .models import (
     AssistantPreferenceModel,
 )
 
+from core.observability import traced_operation
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +48,7 @@ class Repository:
         return self._session_maker()
 
     # --- Symbol Repo ---
+    @traced_operation("database.write", component="database")
     def save_symbols(self, symbols: list[dict[str, Any]]) -> int:
         with self._get_session() as session:
             count = 0
@@ -70,6 +73,7 @@ class Repository:
             return list(session.scalars(stmt).all())
 
     # --- Candle Repo ---
+    @traced_operation("database.write", component="database")
     def save_candles(self, candles: list[dict[str, Any]]) -> int:
         if not candles:
             return 0
@@ -104,6 +108,7 @@ class Repository:
             return candles
 
     # --- Market Snapshot ---
+    @traced_operation("database.write", component="database")
     def save_snapshot(self, snapshot: dict[str, Any]) -> int:
         with self._get_session() as session:
             obj = MarketSnapshotModel(**snapshot)
@@ -131,6 +136,7 @@ class Repository:
             return list(session.scalars(stmt).all())
 
     # --- Signal Repo ---
+    @traced_operation("database.write", component="database")
     def save_signal(self, signal: dict[str, Any]) -> str:
         with self._get_session() as session:
             sig_dict = dict(signal)
@@ -185,6 +191,8 @@ class Repository:
             session.commit()
         return len(candles)
 
+    @traced_operation("database.write", component="database")
+
     def save_prediction(self, pred: dict[str, Any]) -> str:
         with self._get_session() as session:
             existing = session.get(PredictionModel, pred["prediction_id"])
@@ -195,6 +203,8 @@ class Repository:
                 session.add(PredictionModel(**pred))
             session.commit()
             return pred["prediction_id"]
+
+    @traced_operation("database.write", component="database")
 
     def update_prediction_outcome(self, prediction_id: str, actual_outcome: str,
                                   actual_return_pct: float, is_correct: bool,
@@ -224,6 +234,7 @@ class Repository:
             return list(session.scalars(stmt).all())
 
     # --- Paper Orders & Positions ---
+    @traced_operation("database.write", component="database")
     def save_order(self, order: dict[str, Any]) -> str:
         with self._get_session() as session:
             existing = session.get(PaperOrderModel, order["order_id"])
@@ -252,6 +263,8 @@ class Repository:
                 stmt = stmt.where(PaperOrderModel.market == market)
             return list(session.scalars(stmt).all())
 
+    @traced_operation("database.write", component="database")
+
     def save_position(self, pos: dict[str, Any]) -> str:
         with self._get_session() as session:
             allowed = {column.key for column in PaperPositionModel.__table__.columns}
@@ -272,6 +285,8 @@ class Repository:
                 stmt = stmt.where(PaperPositionModel.market == market)
             return list(session.scalars(stmt).all())
 
+    @traced_operation("database.write", component="database")
+
     def record_completed_trade(self, trade: dict[str, Any]) -> int:
         with self._get_session() as session:
             obj = TradeHistoryModel(**trade)
@@ -285,6 +300,8 @@ class Repository:
             if limit is not None:
                 stmt = stmt.limit(limit)
             return list(session.scalars(stmt).all())
+
+    @traced_operation("database.write", component="database")
 
     def save_trade_history(self, trade: dict[str, Any]) -> str:
         """Persist a completed trade and close its position in one transaction."""
@@ -333,6 +350,8 @@ class Repository:
             session.commit()
             return trade["position_id"]
 
+    @traced_operation("database.write", component="database")
+
     def save_partial_trade(self, trade: dict[str, Any], position: dict[str, Any]) -> str:
         """Persist a partial execution and its remaining open position atomically."""
         with self._get_session() as session:
@@ -358,6 +377,7 @@ class Repository:
             return trade["position_id"]
 
     # --- Strategy Metrics & Models ---
+    @traced_operation("database.write", component="database")
     def update_strategy_metrics(self, strategy: str, market: str, win: bool, pnl: float) -> None:
         with self._get_session() as session:
             key = (strategy, market)
@@ -383,6 +403,8 @@ class Repository:
         with self._get_session() as session:
             stmt = select(StrategyMetricsModel)
             return list(session.scalars(stmt).all())
+
+    @traced_operation("database.write", component="database")
 
     def save_model_registry(self, record: dict[str, Any]) -> str:
         with self._get_session() as session:
@@ -445,6 +467,8 @@ class Repository:
         except (TypeError, ValueError, AttributeError):
             return False
 
+    @traced_operation("database.write", component="database")
+
     def promote_models(self, versions: list[str]) -> bool:
         """Atomically activate a set of model artifacts only with complete OOF evidence."""
         if not versions or len(set(versions)) != len(versions):
@@ -471,9 +495,13 @@ class Repository:
             session.commit()
             return True
 
+    @traced_operation("database.write", component="database")
+
     def promote_model(self, version: str) -> bool:
         """Strict single-model promotion; unvalidated legacy/River records fail closed."""
         return self.promote_models([version])
+
+    @traced_operation("database.write", component="database")
 
     def rollback_model(self, version: str) -> str | None:
         with self._get_session() as session:
@@ -523,6 +551,8 @@ class Repository:
             "is_favorite": is_favorite, "is_owner": is_owner, "created_at": obj.created_at.isoformat() if obj.created_at else None,
             "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
         }
+
+    @traced_operation("database.write", component="database")
 
     def publish_public_strategy(self, record: dict[str, Any], owner_key: str) -> dict[str, Any]:
         from hashlib import sha256
@@ -601,6 +631,8 @@ class Repository:
                                           "snapshot": json.loads(v.snapshot_json)} for v in versions]
             return result
 
+    @traced_operation("database.write", component="database")
+
     def set_strategy_favorite(self, public_id: str, owner_key: str, favorite: bool) -> bool:
         with self._get_session() as session:
             strategy = session.get(PublicStrategyModel, public_id)
@@ -615,6 +647,8 @@ class Repository:
             session.commit()
             return True
 
+    @traced_operation("database.write", component="database")
+
     def hide_public_strategy(self, public_id: str, owner_key: str) -> bool:
         with self._get_session() as session:
             obj = session.get(PublicStrategyModel, public_id)
@@ -624,6 +658,8 @@ class Repository:
             obj.updated_at = datetime.now(timezone.utc)
             session.commit()
             return True
+
+    @traced_operation("database.write", component="database")
 
     def flag_public_strategy(self, public_id: str, reporter_key: str, reason: str, details: str = "") -> bool:
         with self._get_session() as session:
@@ -656,6 +692,8 @@ class Repository:
         parsed = json.loads(value)
         return parsed if isinstance(parsed, dict) else {}
 
+    @traced_operation("database.write", component="database")
+
     def save_strategy_definition(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._get_session() as session:
             obj = session.get(SavedStrategyModel, record["strategy_id"])
@@ -687,6 +725,8 @@ class Repository:
             rows = session.scalars(select(SavedStrategyModel).order_by(SavedStrategyModel.updated_at.desc()).limit(limit)).all()
             return [self._strategy_dict(row) for row in rows]
 
+    @traced_operation("database.write", component="database")
+
     def delete_strategy_definition(self, strategy_id: str) -> bool:
         with self._get_session() as session:
             obj = session.get(SavedStrategyModel, strategy_id)
@@ -704,6 +744,8 @@ class Repository:
             "created_at": obj.created_at.isoformat() if obj.created_at else None,
             "updated_at": obj.updated_at.isoformat() if obj.updated_at else None,
         }
+
+    @traced_operation("database.write", component="database")
 
     def save_backtest_report(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._get_session() as session:
@@ -735,6 +777,8 @@ class Repository:
             rows = session.scalars(select(BacktestReportModel).order_by(BacktestReportModel.created_at.desc()).limit(limit)).all()
             return [self._report_dict(row) for row in rows]
 
+    @traced_operation("database.write", component="database")
+
     def delete_backtest_report(self, report_id: str) -> bool:
         with self._get_session() as session:
             obj = session.get(BacktestReportModel, report_id)
@@ -751,6 +795,8 @@ class Repository:
             "config": json.loads(obj.config_json), "report": json.loads(obj.report_json), "origin": obj.origin,
             "created_at": obj.created_at.isoformat() if obj.created_at else None,
         }
+
+    @traced_operation("database.write", component="database")
 
     def save_workspace(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._get_session() as session:
@@ -780,6 +826,8 @@ class Repository:
             rows = session.scalars(select(WorkspaceModel).where(WorkspaceModel.owner_key == owner_key).order_by(WorkspaceModel.updated_at.desc()).limit(limit)).all()
             return [self._workspace_dict(row) for row in rows]
 
+    @traced_operation("database.write", component="database")
+
     def delete_workspace(self, workspace_id: str, owner_key: str = "local") -> bool:
         with self._get_session() as session:
             obj = session.get(WorkspaceModel, workspace_id)
@@ -798,6 +846,7 @@ class Repository:
         }
 
     # --- System Events & Notifications ---
+    @traced_operation("database.write", component="database")
     def save_system_event(self, event_dict: dict[str, Any]) -> str:
         with self._get_session() as session:
             ev = SystemEventModel(
@@ -811,6 +860,8 @@ class Repository:
             session.add(ev)
             session.commit()
             return ev.event_id
+
+    @traced_operation("database.write", component="database")
 
     def save_notification(self, notif: dict[str, Any]) -> int:
         with self._get_session() as session:
@@ -838,6 +889,8 @@ class Repository:
             from database.models import SystemEventModel
             return session.get(SystemEventModel, event_id) is not None
 
+    @traced_operation("database.write", component="database")
+
     def update_system_event_status(self, event_id: str, status: str) -> None:
         """Update system event status."""
         with self._get_session() as session:
@@ -852,6 +905,7 @@ class Repository:
                 session.commit()
 
     # --- Assistant feedback and preference adaptation ---
+    @traced_operation("database.write", component="database")
     def save_assistant_feedback(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._get_session() as session:
             obj = AssistantFeedbackModel(**record)
@@ -883,6 +937,8 @@ class Repository:
                      "confidence": row.confidence, "version": row.version,
                      "updated_at": row.updated_at.isoformat()} for row in rows]
 
+    @traced_operation("database.write", component="database")
+
     def set_assistant_preference(self, owner_key: str, preference_key: str,
                                  preference_value: str, *, source: str,
                                  evidence_count: int, confidence: float) -> dict[str, Any]:
@@ -905,6 +961,8 @@ class Repository:
                     "source": obj.source, "evidence_count": obj.evidence_count,
                     "confidence": obj.confidence, "version": obj.version}
 
+    @traced_operation("database.write", component="database")
+
     def delete_assistant_preference(self, owner_key: str, preference_key: str) -> bool:
         with self._get_session() as session:
             obj = session.get(AssistantPreferenceModel, (owner_key, preference_key))
@@ -915,6 +973,7 @@ class Repository:
             return True
 
     # --- Persistent assistant memory ---
+    @traced_operation("database.write", component="database")
     def save_assistant_memory(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._get_session() as session:
             existing = session.get(AssistantMemoryModel, record["memory_id"])
@@ -977,6 +1036,8 @@ class Repository:
             session.commit()
             return [self._assistant_memory_dict(row) for row in rows]
 
+    @traced_operation("database.write", component="database")
+
     def delete_assistant_memory(self, memory_id: str, owner_key: str) -> bool:
         with self._get_session() as session:
             obj = session.get(AssistantMemoryModel, memory_id)
@@ -985,6 +1046,8 @@ class Repository:
             session.delete(obj)
             session.commit()
             return True
+
+    @traced_operation("database.write", component="database")
 
     def delete_expired_assistant_memories(self, *, now: datetime | None = None) -> int:
         from sqlalchemy import delete
