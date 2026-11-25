@@ -4,9 +4,12 @@ import './index.css'
 import './design-tokens.css'
 import './App.css'
 import App from './App.tsx'
+import { DiagnosticErrorBoundary } from './components/DiagnosticErrorBoundary'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <DiagnosticErrorBoundary>
+      <App />
+    </DiagnosticErrorBoundary>
   </StrictMode>,
 )

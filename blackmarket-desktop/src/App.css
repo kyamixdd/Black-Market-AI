@@ -3490,3 +3490,11 @@ button:not(:disabled):active {
 .diagnostics-toggle{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-secondary,#a0a0a0)}
 .diagnostics-log-expanded{max-height:52vh;min-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.45;padding:10px}
 .diagnostics-controls .workspace-note{margin:0}
+
+.diagnostic-crash-screen{min-height:100vh;display:grid;place-items:center;background:var(--app-bg,#0b0b0d);color:var(--text-primary,#f3f3f3);padding:24px}
+.diagnostic-crash-screen section{max-width:620px;border:1px solid var(--border-color,#303036);background:var(--panel-bg,#121216);padding:28px;border-radius:12px}
+.diagnostic-crash-kicker{font-size:11px;letter-spacing:.16em;color:#ff7676}
+.diagnostic-crash-screen h1{font-size:24px;margin:8px 0 14px}
+.diagnostic-crash-screen p{color:var(--text-secondary,#a7a7ad);line-height:1.6}
+.diagnostic-crash-screen pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;padding:12px;background:#09090b;border:1px solid #29292f;border-radius:6px}
+.diagnostic-crash-screen button{margin-top:12px;padding:10px 16px;border:1px solid #444;border-radius:6px;background:#1d1d22;color:inherit;cursor:pointer}

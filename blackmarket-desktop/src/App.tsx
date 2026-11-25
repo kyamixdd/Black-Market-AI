@@ -31,7 +31,7 @@ import { LiveMarketChart } from './components/charts/LiveMarketChart'
 import { DashboardScreen } from './screens/DashboardScreens'
 import { getApiAuthorization, setApiToken } from './services/localAuth'
 import { backendBaseUrl, getBackendRequestMetrics, mutateJson, requestJson } from './services/backendClient'
-import { getDiagnosticLogSnapshot, installDiagnosticCapture, setDiagnosticScreen } from './services/diagnosticLogger'
+import { getDiagnosticLogSnapshot, installDiagnosticCapture, recordDiagnostic, setDiagnosticScreen } from './services/diagnosticLogger'
 import {
   assessMarketData,
   marketChartKey,
@@ -712,6 +712,13 @@ function App() {
   useEffect(() => {
     setDiagnosticScreen(activeScreen)
   }, [activeScreen])
+  useEffect(() => {
+    recordDiagnostic('INFO', 'runtime.connection_state', {
+      feature: 'runtime',
+      function: 'connection-state',
+      detail: `backend=${startupStatus.state}; apiReady=${apiReady}; websocket=${websocketConnected}; marketData=${marketDataStatus}; marketType=${marketType}; symbol=${symbol}`,
+    })
+  }, [startupStatus.state, apiReady, websocketConnected, marketDataStatus, marketType, symbol])
 
   useEffect(() => {
     if (activeScreen !== 'Diagnostics') return
