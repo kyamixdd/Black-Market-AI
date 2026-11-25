@@ -71,7 +71,7 @@ def test_log_event_redacts_secrets_in_structured_fields(caplog):
 def test_formatter_redacts_sensitive_values_in_structured_extras():
     record = logging.LogRecord("test", logging.INFO, __file__, 1, "diagnostic", (), None)
     record.detail = "token=private api_key=hidden"
-    record.context = {"password": "nested-secret", "safe": "ok"}
+    record.symbols_selected = {"password": "nested-secret", "safe": "ok"}
     formatted = JsonLogFormatter().format(record)
     assert "private" not in formatted
     assert "hidden" not in formatted
