@@ -20,6 +20,7 @@ const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 const LOG_TAIL_BYTES: u64 = 64 * 1024;
+const LOG_ROTATE_BYTES: u64 = 16 * 1024 * 1024;
 const LOG_TAIL_LINES: usize = 200;
 const MAX_LOG_LINE_CHARS: usize = 2000;
 
@@ -265,6 +266,15 @@ impl BackendSupervisor {
             drop(process_lock);
             self.fail(
                 format!("Could not create the backend log directory: {error}"),
+                Some(log_path),
+            );
+            return;
+        }
+
+        if let Err(error) = rotate_log_file_if_needed(&log_path) {
+            drop(process_lock);
+            self.fail(
+                format!("Could not rotate the previous backend log: {error}"),
                 Some(log_path),
             );
             return;
@@ -854,6 +864,23 @@ fn read_recent_log_lines(path: &Path) -> Result<Vec<String>, String> {
     Ok(bounded_log_lines(contents))
 }
 
+fn rotate_log_file_if_needed(path: &Path) -> std::io::Result<()> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.len() <= LOG_ROTATE_BYTES {
+        return Ok(());
+    }
+    let rotated = PathBuf::from(format!("{}.1", path.display()));
+    if rotated.exists() {
+        fs::remove_file(&rotated)?;
+    }
+    fs::rename(path, rotated)?;
+    Ok(())
+}
+
 fn bounded_log_lines(contents: &str) -> Vec<String> {
     let mut lines: Vec<String> = contents
         .lines()
@@ -903,7 +930,18 @@ fn hide_console(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LOG_TAIL_LINES, Probe, bounded_log_lines, parse_health_response, redact_log_line};
+    use super::{LOG_ROTATE_BYTES, LOG_TAIL_LINES, Probe, bounded_log_lines, parse_health_response, redact_log_line, rotate_log_file_if_needed};
+    use std::fs;
+
+    #[test]
+    fn backend_log_rotates_only_when_size_exceeds_limit() {
+        let path = std::env::temp_dir().join(format!("blackmarket-log-{}.log", uuid::Uuid::new_v4()));
+        fs::write(&path, vec![b'x'; (LOG_ROTATE_BYTES + 1) as usize]).unwrap();
+        rotate_log_file_if_needed(&path).unwrap();
+        assert!(!path.exists());
+        assert_eq!(fs::metadata(format!("{}.1", path.display())).unwrap().len(), LOG_ROTATE_BYTES + 1);
+        let _ = fs::remove_file(format!("{}.1", path.display()));
+    }
 
     #[test]
     fn health_check_requires_backend_database_and_websocket_readiness() {

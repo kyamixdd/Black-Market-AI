@@ -61,10 +61,13 @@ def configure_structured_logging(level: str = "INFO") -> None:
 
 def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> None:
     """Write a structured event; fields should be bounded and non-sensitive."""
-    safe_fields = {
-        key: value for key, value in fields.items()
-        if key.lower() not in {"token", "password", "secret", "authorization", "api_key", "access_token", "refresh_token", "credential"}
-    }
+    safe_fields = {}
+    for key, value in fields.items():
+        if key.lower() in {"token", "password", "secret", "authorization", "api_key", "access_token", "refresh_token", "credential"}:
+            continue
+        if isinstance(value, str):
+            value = redact_sensitive_text(value)[:2000]
+        safe_fields[key] = value
     logger.log(level, event, extra={"event": event, **safe_fields})
 
 

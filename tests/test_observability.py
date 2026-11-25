@@ -52,3 +52,13 @@ def test_function_trace_can_be_enabled_and_disabled_without_crashing(caplog):
         assert set_function_trace_enabled(False) is False
     assert "python_function_trace_changed" in caplog.text
     assert function_trace_enabled() is False
+
+
+
+def test_log_event_redacts_secrets_in_structured_fields(caplog):
+    logger = logging.getLogger("observability-field-redaction")
+    with caplog.at_level(logging.INFO):
+        log_event(logger, logging.INFO, "diagnostic", detail="token=private api_key=hidden")
+    assert "private" not in caplog.text
+    assert "hidden" not in caplog.text
+    assert "[REDACTED]" in caplog.text
