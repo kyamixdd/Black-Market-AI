@@ -59,6 +59,9 @@ def test_log_event_redacts_secrets_in_structured_fields(caplog):
     logger = logging.getLogger("observability-field-redaction")
     with caplog.at_level(logging.INFO):
         log_event(logger, logging.INFO, "diagnostic", detail="token=private api_key=hidden")
-    assert "private" not in caplog.text
-    assert "hidden" not in caplog.text
-    assert "[REDACTED]" in caplog.text
+    record = next(record for record in caplog.records if record.name == logger.name)
+    assert record.detail == "token=[REDACTED] api_key=[REDACTED]"
+    formatted = JsonLogFormatter().format(record)
+    assert "private" not in formatted
+    assert "hidden" not in formatted
+    assert "[REDACTED]" in formatted
