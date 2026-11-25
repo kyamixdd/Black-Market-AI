@@ -1,0 +1,595 @@
+BLACKMARKET AI — SOURCE AND RELEASE AUDIT
+Review date: 24 November 2026
+Product version in source: 1.0.0
+Workspace: C:\Users\MARIA\Desktop\Black-Market-AI-Beta
+Release classification: Desktop beta candidate; website private preview
+Overall engineering-readiness score: 6.0 / 10
+Public release decision: BLOCKED
+
+===============================================================================
+1. EXECUTIVE SUMMARY
+===============================================================================
+
+BlackMarket AI is a broad local-first market research and paper-trading product.
+The source contains a Tauri desktop client, supervised FastAPI/Python engine,
+shared React dashboard, Next.js private-preview frontend, Binance public-data
+clients, strategy research/backtesting, simulated Spot/Futures order lifecycle,
+risk and learning modules, SQLite persistence/recovery, assistant, notifications,
+and a terminal interface.
+
+The project has substantial implementation and automated coverage. The most
+important release blockers are:
+
+1. A Telegram token was present in .env.example. It has been removed from the
+   template, but revocation and external history/artifact review remain open.
+   A local scan found no Telegram-token-shaped value in this workspace.
+2. The adaptive risk engine no longer reports fabricated drawdown or
+   correlation values. These measures are unavailable unless the caller
+   supplies persisted high-water-mark evidence and validated aligned returns.
+3. This workspace has an initialized Git repository with no commits. All files
+   are uncommitted. Prior branch, commit and CI claims in old documentation
+   cannot be verified against this source tree.
+4. No current Tauri installer, clean Windows install/upgrade/uninstall, hosted
+   backend, production exchange stream, release signature, or backup restore
+   was verified in this audit.
+5. The website has a shared-password gate and shared backend state. It is not a
+   multi-user service with individual identity or account/data isolation.
+
+Configuration now fails closed for unsupported real-trading mode, malformed
+explicit boolean/numeric values, and non-SQLite database URLs. Unused Binance
+private API key/secret settings were removed. The exposed Telegram values were
+removed from .env.example, and the template now disables Telegram by default.
+
+The score is an engineering-readiness score, not a financial or profitability
+rating. No market strategy, backtest, model or trading result was evaluated for
+profitability.
+
+===============================================================================
+2. AUDIT SCOPE AND EVIDENCE
+===============================================================================
+
+The source/test inventory contains 226 authored Python, TypeScript/JavaScript,
+Rust and test files outside generated build output. The review traced the
+application entry points and inspected the high-impact API authentication,
+desktop supervisor, market data, risk, paper execution, persistence, recovery,
+ML validation, website session/proxy, configuration, CI/release and UI paths.
+All Markdown files were inventoried; stale duplicated status appendices were
+removed and current status docs were reconciled.
+
+This is a risk-based code audit, not a formal proof of every line or every GUI
+interaction. Runtime claims that require a live deployment or installer are
+marked unverified rather than inferred from code or old documentation.
+
+Verified in this workspace:
+- .venv Python regression suite on Python 3.13: 669 passed, 3 live exchange tests deselected.
+- Desktop frontend service tests: 16 passed.
+- Desktop frontend production build passed.
+- Website security tests: 8 passed.
+- Website TypeScript check and production build passed.
+- Website npm ci and npm audit --audit-level=high passed with zero vulnerabilities.
+- Desktop npm audit reported zero vulnerabilities.
+- Desktop lint completed successfully with warnings.
+- Python pip-audit reported no known vulnerabilities; pip check reported no
+  broken requirements.
+- Python wheel built, installed into an isolated target, and imported from a
+  clean working directory on Python 3.13. Required benchmark, risk, monitoring,
+  and src_tauri.backend modules imported successfully.
+- Tauri CSP configuration tests, adaptive-risk regressions, promotion tests,
+  and per-market stream status tests are included in the passing Python suite.
+
+Not verified:
+- Python 3.12 test run; only Python 3.13 was available locally.
+- Python 3.12 wheel installation/import smoke.
+- Tauri native build, NSIS installer, clean-machine lifecycle, signing or
+  checksum verification.
+- Current-head CI or a source commit; the local Git repository has no commits.
+- Production Binance stream connectivity, hosted backend, complete
+  browser/device acceptance, fresh backtest/training, database restore, or
+  financial performance.
+
+The full Python suite completed with one Starlette deprecation warning: its
+TestClient integration uses httpx, which Starlette recommends replacing with
+httpx2. The three deselected tests call live Binance endpoints.
+
+===============================================================================
+3. FEATURE AND ARCHITECTURE STATUS
+===============================================================================
+
+3.1 Desktop and shared frontend
+
+Implementation:
+- blackmarket-desktop/src is the shared React/TypeScript dashboard.
+- Tauri supervises a Python backend on 127.0.0.1:8765.
+- The frontend build and 16 frontend service tests passed.
+- The dashboard exposes market, signals, analysis, portfolio, positions,
+  history, intelligence, learning, strategy lab, community, risk, activity and
+  settings views.
+
+Verification:
+- scripts/responsive_smoke.mjs passed at viewport widths 320, 375, 430, 768,
+  1024, 1280, 1440 and 1920 pixels. It checked horizontal overflow, Markets and
+  Overview navigation, chart-settings open/close, and uncaught page errors.
+
+Remaining work:
+- Full screen/component interaction acceptance and manual interaction in the
+  Tauri desktop application were not performed.
+- Oxlint reports unused imports/variables, unsafe optional chaining, missing
+  hook dependencies, state updates inside effects, impure render-time clock
+  calls, and warnings in the legacy MarketChart component.
+- The production Vite build reports a 560.79 kB minified main chunk.
+- This smoke test does not validate visual fidelity, keyboard accessibility,
+  every screen, or all responsive interactions.
+- Verify high-impact desktop actions, keyboard focus, loading/error states, and
+  market/timeframe switching in the actual Tauri app.
+
+3.2 Backend API and desktop security boundary
+
+Implementation evidence:
+- src_tauri/backend/main.py binds to loopback by default and rejects non-loopback
+  peers unless remote API mode is explicitly enabled.
+- REST API requests use bearer authentication; token comparison uses
+  hmac.compare_digest.
+- The desktop WebSocket separately checks the loopback peer and requires a
+  token-authentication message.
+- CORS uses a fixed Tauri origin list plus explicitly configured remote origins;
+  development origins are added only in desktop development mode.
+- /health is public for startup readiness and returns readiness/version fields,
+  not credentials or private account data.
+- The desktop supervisor generates per-process API and shutdown tokens, keeps
+  them out of frontend source/URLs/logs, checks readiness, and requests graceful
+  shutdown from its owned child.
+- REST and WebSocket rate limits are process-local.
+
+Remaining work:
+- Re-test REST and WebSocket auth independently on the exact release build.
+- Development WebSocket origins were removed from the packaged CSP and placed
+  in blackmarket-desktop/src-tauri/tauri.dev.conf.json. Configuration tests
+  pass; verify the effective CSP in the exact release artifact.
+- Process-local rate limits reset on restart and do not coordinate across
+  instances; hosted multi-instance protection requires shared/upstream controls.
+- Review the explicit public community/share routes separately from authenticated
+  API routes in release acceptance.
+
+3.3 Market data and exchange connections
+
+Implementation:
+- exchange/spot_client.py and futures_client.py use public Binance REST market
+  endpoints; no order endpoint or signed order request was found in the reviewed
+  exchange clients/routes.
+- Scanner discovery, ticker snapshots, candle history, multi-timeframe refresh,
+  and staleness/freshness checks are present. A WebSocket manager and stream
+  reconnection helpers exist as components.
+
+Remaining work:
+- Production scanning uses public REST polling; exchange stream subscriptions
+  are not configured in the production scanner. Binance streams are not
+  established as configured/operational in production.
+- Do not describe the feed as live until both markets' stream status, freshness,
+  reconnect and REST fallback have been tested against the release deployment.
+- The three live exchange tests were deliberately deselected from the local run.
+- Check rate-limit handling, exchange schema changes, clock skew and incomplete
+  candles against live fixtures before release.
+
+3.4 Strategies, research and backtesting
+
+Implementation:
+- Strategy families, signal evaluation, Strategy Lab, historical backtesting,
+  report persistence and strategy comparison are present.
+- Historical tests cover strategy behavior, timeframe handling and walk-forward
+  validation.
+
+Remaining work:
+- No fresh backtest or performance result was produced for this audit.
+- Verify assumptions for fees, spread, slippage, funding, candle availability,
+  partial fills and liquidation in every strategy-report path.
+- Display provenance, sample interval, data gaps, fees and limitations with
+  every persisted/public strategy report. Never describe backtests as guarantees.
+
+3.5 Paper trading and risk
+
+Implementation:
+- Paper simulator models order/position lifecycle and supports simulated costs,
+  leverage, funding and liquidation logic.
+- Database repository saves completed trade history and closes its position in
+  one SQLAlchemy session/transaction (database/repositories.py:289-334).
+- Partial trade and remaining position are also persisted in one transaction
+  (database/repositories.py:336-358).
+- The paper-trading risk manager and autonomous paper readiness gates are
+  separate from the adaptive risk assessment module.
+
+Resolved in this remediation:
+- risk/adaptive_risk.py no longer returns fixed drawdown or correlation
+  placeholders. Drawdown requires a persisted high-water mark and tracking
+  start time. Correlation uses validated, chronological, aligned UTC return
+  series with a minimum observation count and positive-correlation clustering.
+- Missing risk evidence produces UNAVAILABLE rather than a safe-looking score.
+  Focused tests cover missing inputs, invalid high-water data, aligned returns,
+  ordering, and persistence continuity across engine recreation.
+- Integration limitation: the main simulator does not supply all persisted
+  high-water/return evidence to the adaptive assessment. Treat those factors as
+  unavailable unless a caller provides the required data. This adaptive
+  assessment is not the simulator's independent trade gate.
+
+3.6 Learning and model lifecycle
+
+Implementation:
+- Prediction outcome records, dataset building, training, chronological/
+  walk-forward validation, confidence calibration, model registry, promotion
+  checks, rollback and performance views exist.
+- The test suite includes leakage/alignment, validation, promotion and rollback
+  cases.
+
+Remaining work:
+- No new model was trained, promoted, or evaluated in this audit.
+- The legacy LearningOrchestrator now forwards validation evidence to model
+  promotion; live-service status reports blocked promotion rather than claiming
+  activation when promotion fails. Regression tests cover both paths.
+- Run a reproducible training/evaluation from a clean database and record the
+  dataset version, time interval, sample counts, temporal split, metrics,
+  calibration and rollback result.
+- Verify model artifact provenance, migration compatibility and failed-training
+  recovery on a disposable copy.
+- Validation metrics do not establish profitability or future predictive power.
+
+3.7 SQLite, backups, recovery and events
+
+Implementation:
+- SQLite uses WAL, foreign keys, busy timeout, full synchronous mode, startup
+  quick/integrity checks and migration logic.
+- Trade close persistence is transactional and position recovery uses persistent
+  identifiers; recovery idempotence is covered by tests.
+- Backup, restore, integrity checking, event persistence and startup recovery
+  routines are present.
+
+Remaining work:
+- Thirty compressed database backups were found under data/backups/. The root
+  .gitignore already excludes data/backups/*.db.gz. Their contents were not
+  opened and their tracked status cannot be known without Git commits.
+- Validate backup creation and restore, sidecar handling, corrupt database
+  recovery and retention on disposable files.
+- The application does not encrypt databases, model artifacts or backups.
+  Document OS-level encryption and filesystem protection.
+- Non-SQLite DATABASE_URL values are rejected during startup validation. The
+  database migration/backup code remains SQLite-specific.
+
+3.8 Assistant and external integrations
+
+Implementation:
+- Assistant tools are allow-listed and evidence-oriented; memory/preferences
+  have owner fields and bounded data structures.
+- Optional Telegram notification code validates configuration and the template
+  now leaves credentials empty and disabled.
+- An optional OpenAI-compatible provider exists. It is an external data-flow
+  boundary when configured.
+
+Remaining work:
+- Document what user/context data is sent to any configured interpretation
+  provider, require explicit operator configuration, and ensure credentials and
+  request bodies are not logged.
+- Revoke the leaked Telegram token. Do not infer successful revocation from the
+  local template change.
+- Review notification duplicate suppression, retry behavior and delivery state
+  against restarted processes.
+
+3.9 Website private preview
+
+Implementation:
+- Next.js server-side single-password gate uses a signed session cookie and
+  scrypt password verification.
+- Proxy checks a session, applies request limits/body bounds and sends backend
+  credentials from server-side environment only.
+- Eight session/rate-limit tests pass.
+
+P1 conditional blocker for public hosting:
+- There is no multi-user identity, roles, per-user portfolio/position/history/
+  settings/workspace isolation, or account-level authorization.
+- The shared backend is common state for all logged-in preview users. The
+  X-BM-Community-Owner header is not a substitute for verified user identity.
+- Session revocation and login/proxy/API rate limits are process-local.
+
+Required fix:
+- Keep the website private. Before public multi-user access, add a real identity
+  provider, server-verified principals, tenant-scoped database access and
+  authorization, shared durable session/revocation and rate-limit controls,
+  security review, privacy/retention operations, and deployment E2E tests.
+- blackmarket-web/package-lock.json is now present; CI uses npm ci and the local
+  locked dependency audit reported zero vulnerabilities. Commit the lockfile
+  with the release source and repeat the audit there.
+- Verify HTTPS ingress, durable storage, SSE/auth behavior, startup, restart,
+  backup and restore on the actual hosted service.
+
+3.10 Configuration and distribution
+
+Resolved in this audit:
+- REAL_TRADING_ENABLED=true was previously accepted by general configuration
+  validation when paper trading was false, although the product has no real
+  execution path. Startup now rejects the setting. Regression test:
+  tests/test_config.py.
+- Unused BINANCE_API_KEY/BINANCE_API_SECRET settings were removed from config.py.
+- Invalid explicit boolean/numeric settings now fail parsing instead of silently
+  becoming false/default values.
+- Non-SQLite DATABASE_URL now fails configuration validation; the application
+  documents and enforces SQLite-only persistence.
+
+Resolved in this remediation:
+- pyproject.toml now requires Python >=3.12 and registers benchmarks, risk,
+  monitoring, and src_tauri packages. An isolated-target wheel installation and
+  import smoke passed on Python 3.13; main.py now initializes its log directory
+  before configuring a file handler.
+
+Remaining work:
+- Python 3.13 passed locally. Run tests and the wheel smoke on Python 3.12
+  before claiming both supported CI matrix versions are validated.
+
+===============================================================================
+4. FINDINGS BY SEVERITY
+===============================================================================
+
+P0 — EXPOSED TELEGRAM TOKEN (LOCAL TEMPLATE FIXED; REVOCATION OPEN)
+
+Evidence:
+- A non-placeholder Telegram bot token and chat ID were in .env.example when
+  the audit began. The token value is intentionally not repeated here.
+- .env.example now has empty Telegram values and TELEGRAM_ENABLED=false.
+
+Impact:
+- Anyone with access to the exposed token may act as the bot and access its
+  authorized chat interactions. Treat the token as compromised.
+
+Required fix:
+- Revoke the token via BotFather immediately.
+- Search any public repository history, release archives, logs and screenshots.
+- If published, remove the value from history where feasible after revocation;
+  never rely on history rewriting instead of token revocation.
+- Configure a new token only in private runtime configuration and verify logs
+  do not include it.
+
+P1 — ADAPTIVE RISK EVIDENCE AND SIMULATOR INTEGRATION
+
+Status: PLACEHOLDER CALCULATIONS RESOLVED; EVIDENCE INTEGRATION REMAINS OPEN.
+
+Evidence: risk/adaptive_risk.py calculates drawdown only when persisted
+high-water-mark evidence is supplied and calculates correlation from validated
+aligned UTC return series. Insufficient evidence is represented as unavailable.
+Focused risk tests pass.
+
+Impact: the main simulator does not currently supply all evidence to the
+adaptive assessment. These fields can remain unavailable and must not be
+presented as measured. The adaptive assessment is not the independent simulator
+trade gate.
+
+Remaining action: integrate durable high-water/return evidence where this
+assessment is displayed or retain the unavailable state.
+
+P1 — NO SOURCE PROVENANCE OR CURRENT-HEAD RELEASE EVIDENCE
+
+Evidence:
+- git status lists all project files as untracked.
+- git log has no commits; HEAD cannot be resolved.
+- Existing documentation referred to differing source commits and CI runs; those
+claims cannot be tied to the current source.
+
+Impact: a release cannot be mapped to a reviewed source revision or reproducible
+CI evidence.
+
+Required fix: establish the intended remote/branch, commit reviewed source,
+inspect the resulting diff/history for secrets/data, run CI on that commit, and
+build/verify the exact artifact from that same commit.
+
+P1 — HOSTED WEBSITE IS NOT A MULTI-USER SERVICE
+
+Evidence: blackmarket-web/README.md: Authentication limitations and current
+session/rate-limit implementation; backend proxy uses a shared backend and
+caller-supplied community owner header.
+
+Impact: shared-password login does not identify individual users or isolate
+account state. One user's data/actions cannot be treated as isolated from
+another user's.
+
+Required fix: retain private-preview classification. Implement authenticated
+user identity, authorization and tenant-scoped data access before public
+multi-user hosting. Add hosted E2E tests for cross-user read/write denial.
+
+P1 — EXCHANGE STREAM AND WATCHDOG RECOVERY ARE NOT PRODUCTION-VERIFIED
+
+Evidence:
+- The production scanner currently uses public REST polling; exchange stream
+  subscriptions are not configured in the production scanner.
+- The watchdog stall handler logs a stall but does not restart components.
+
+Impact: real-time feed continuity and automatic self-healing are not established.
+Users could confuse local API/WebSocket readiness with live Binance stream
+readiness.
+
+Required fix: test production Spot/Futures stream availability, feed age, stream
+failure/reconnect, REST fallback and frontend degraded state. Either implement
+and test recovery or document that watchdog detection only logs and does not
+recover.
+
+P1 — WINDOWS RELEASE ARTIFACT ACCEPTANCE NOT VERIFIED
+
+Evidence: release scripts/workflows are present; this audit did not build the
+Tauri/NSIS installer or perform clean-machine install/upgrade/uninstall.
+
+Impact: packaging, native startup/shutdown, data retention and artifact identity
+remain unproven for this source tree.
+
+Required fix: run the installer workflow on a committed source revision; verify
+clean install, readiness, local auth, duplicate launch, graceful close, upgrade,
+preserved user data, uninstall cleanup, signature status, manifest and SHA-256.
+
+P2 — WEBSITE DEPENDENCY TREE (RESOLVED LOCALLY; COMMIT REQUIRED)
+
+Evidence: blackmarket-web/package-lock.json is present; CI uses npm ci; local
+npm ci, security tests, TypeScript check, build, and npm audit passed. npm audit
+reported zero vulnerabilities.
+
+Remaining action: commit the lockfile with the reviewed release source and
+repeat checks on that exact source revision.
+
+P2 — PYTHON DEPENDENCY VULNERABILITY SCAN (RESOLVED LOCALLY; COMMIT REQUIRED)
+
+Evidence: pip-audit -r src_tauri/backend/requirements.txt reported no known
+vulnerabilities; pip check reported no broken requirements.
+
+Remaining action: run this audit from CI against the committed release source.
+
+P2 — Tauri PRODUCTION CSP DEVELOPMENT ORIGINS (RESOLVED IN LOCAL SOURCE)
+
+Evidence: the production Tauri CSP excludes development-server origins; the
+origins are in tauri.dev.conf.json. Configuration tests pass.
+
+Remaining action: verify the effective CSP in the exact release artifact.
+
+P2 — CONFIGURATION PARSING CAN SILENTLY CHANGE VALUES
+
+Status: RESOLVED in this audit.
+
+Evidence: config.py now raises ValueError for invalid explicit boolean, integer
+and float values; tests/test_config.py covers malformed inputs.
+
+P2 — SQLITE-ONLY IMPLEMENTATION ACCEPTS OTHER DATABASE URLs AS A WARNING
+
+Status: RESOLVED in this audit.
+
+Evidence: core/config_validator.py now rejects non-SQLite DATABASE_URL values;
+tests/test_config.py covers the unsupported dialect.
+
+P2 — PYTHON WHEEL CONTENTS AND INSTALL (RESOLVED ON PYTHON 3.13)
+
+Evidence: pyproject.toml registers benchmarks, risk, monitoring and src_tauri
+packages. A local wheel built and installed into an isolated target; imports
+passed from a clean working directory. CI defines a wheel install/import smoke
+step.
+
+Remaining action: verify on Python 3.12 in CI.
+
+P2 — NO FULL SCREEN/DEVICE ACCEPTANCE; FRONTEND QUALITY WARNINGS
+
+Evidence:
+- Desktop unit suite covers services, not all dashboard controls.
+- Desktop lint warnings include stale/unused code, hook dependencies/state
+  updates and unsafe optional access.
+- Vite build reports a 560.79 kB minified main chunk.
+- The responsive browser smoke passed eight viewport widths and tested
+  navigation and chart-settings interaction; it is not complete visual or
+  full-workflow acceptance.
+
+Impact: screens can regress without service-level tests detecting interaction,
+layout, navigation or loading-state defects.
+
+Required fix: extend the browser control matrix to the remaining main workflows;
+resolve confirmed warnings, consolidate CSS only with visual regression
+coverage, and measure/split the main bundle where it improves startup.
+
+P2 — BACKUP RESTORE AND DATA CONFIDENTIALITY REQUIRE ACCEPTANCE
+
+Evidence: 30 compressed database backups exist; contents were not inspected.
+SQLite databases, model files and compressed backups are not app-encrypted.
+
+Impact: recovery and confidentiality cannot be inferred from backup creation or
+SHA-256 integrity manifests.
+
+Required fix: inspect backups safely for provenance/sensitive data, test restore
+and corruption recovery on copies, document retention, and protect data with
+OS-level encryption/access controls.
+
+P3 — DEPENDENCY DEPRECATION AND BUILD WARNINGS
+
+Evidence:
+- Python suite warns that Starlette's TestClient integration uses httpx, which
+  Starlette marks deprecated in favor of httpx2.
+- The current website build completed without the earlier Windows SWC fallback
+  warning.
+- Desktop build reports the large-main-chunk warning noted above.
+
+Impact: current builds pass, but upstream compatibility and startup/performance
+regressions should be monitored.
+
+Required fix: reproduce on a clean supported environment, update dependency
+versions intentionally, and verify build/test behavior after updates.
+
+===============================================================================
+5. CURRENT SCORES
+===============================================================================
+
+| Area | Score |
+|---|---:|
+| Shared frontend | 7.0/10 |
+| Python backend and API | 7.5/10 |
+| Market data | 6.0/10 |
+| Paper trading and risk | 6.0/10 |
+| Learning and research | 6.5/10 |
+| Persistence and recovery | 7.0/10 |
+| Desktop packaging | 5.0/10 |
+| Hosted website | 4.0/10 |
+| Automated verification | 8.0/10 |
+| Public release readiness | 3.5/10 |
+| OVERALL ENGINEERING READINESS | 6.0/10 |
+
+Interpretation: the source is feature-rich and locally testable, but operational
+and release evidence is incomplete. Some adaptive risk factors remain
+unavailable until the caller supplies validated evidence. The hosted website
+is preview-only. A score does not equal approval to publish.
+
+===============================================================================
+6. RELEASE GATE ORDER
+===============================================================================
+
+Immediate:
+1. Revoke the leaked Telegram token and check external history/artifacts.
+2. Keep TELEGRAM_ENABLED=false in the example; keep secrets out of source/logs.
+3. Keep real trading unsupported and startup validation fail-closed.
+
+Before desktop public release:
+4. Ensure adaptive-risk evidence is supplied where measured risk is displayed;
+   preserve unavailable status otherwise.
+5. Establish a clean source commit and run CI on that exact commit.
+6. Repeat secret/dependency scans and resolve release-critical results on the
+   committed source and built artifact.
+7. Build and manually accept the exact Windows installer on clean systems.
+8. Verify upgrade/uninstall/data retention, signing, source identity and hash.
+9. Test database backup/restore and document local data protection.
+10. Complete browser/desktop interaction acceptance and resolve critical lint
+    issues.
+11. Confirm license, EULA, third-party notices, privacy and support scope.
+
+Before public website hosting:
+12. Implement user identity, authorization and tenant isolation.
+13. Implement shared/durable session revocation and rate limiting or use an
+    upstream identity/security gateway.
+14. Commit the website package lockfile and repeat its dependency audit on the
+    release source.
+15. Verify remote backend TLS/ingress, event streaming, persistence, restore,
+    paper order round-trip and restart behavior against the real host.
+
+===============================================================================
+7. CHANGES MADE DURING THIS AUDIT
+===============================================================================
+
+- Removed Telegram token and chat ID from .env.example; disabled Telegram in
+  that template.
+- Removed unused Binance API key/secret settings from config.py.
+- Added fail-closed startup validation for REAL_TRADING_ENABLED=true.
+- Made malformed explicit boolean/numeric settings and non-SQLite database URLs
+  fail configuration validation.
+- Added test coverage for the unsupported real-trading setting.
+- Configured the pytest live marker and async fixture loop scope.
+- Replaced fabricated adaptive drawdown/correlation values with evidence-based
+  calculations and explicit unavailable states; added regression tests.
+- Forwarded legacy model-validation evidence to promotion and corrected live
+  service activation status when promotion is blocked.
+- Split production and development Tauri CSP origins.
+- Added market-specific WebSocket status and prevented malformed messages from
+  refreshing valid-message freshness.
+- Added the website lockfile and PostCSS override; website audit reports zero
+  vulnerabilities.
+- Updated FastAPI/Starlette runtime pins, Python support metadata, wheel package
+  list, and CI checks for wheel/import and dependency audits.
+- Hardened assistant provider URL validation and diagnostic logging.
+- Reconciled README, security, release readiness, project status, development
+  progress, release notes, local audit summary, private-preview and technical
+  audit documents; removed repeated stale repository-status appendices.
+- Created this report.
+
+END OF REPORT

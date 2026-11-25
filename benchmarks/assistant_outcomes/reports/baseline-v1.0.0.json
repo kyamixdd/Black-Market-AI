@@ -1,0 +1,50 @@
+{
+  "report_version": "1.0.0",
+  "report_kind": "approved-baseline-measurement",
+  "benchmark_id": "black-market-assistant-outcome-benchmark",
+  "dataset_version": "1.0.0",
+  "source_commit": "7c975d69b17aa7d13d9f0ea3f04786073c38ef8a",
+  "workflow_run_id": 45147538731,
+  "generated_at": "2026-11-23T09:30:28.344969+00:00",
+  "environment": "GitHub Actions ubuntu-latest, Python 3.12, deterministic local bridge; no live market provider or model API",
+  "sample_counts": {
+    "intent": 14,
+    "tools": 11,
+    "memory": 3,
+    "completion": 3
+  },
+  "metrics": {
+    "intent_exact_match": 0.7143,
+    "tool_registry_safety": 1,
+    "memory_top1_relevance": 1,
+    "completion_accuracy": 1
+  },
+  "intent_failures": [
+    {
+      "case_id": "intent-004",
+      "issue": "scanner query also classifies as market_snapshot"
+    },
+    {
+      "case_id": "intent-009",
+      "issue": "trade history query also classifies as historical_candles"
+    },
+    {
+      "case_id": "intent-010",
+      "issue": "portfolio risk query also classifies as paper_account"
+    },
+    {
+      "case_id": "intent-013",
+      "issue": "unresolved pronoun request is classified as market_snapshot instead of requesting clarification"
+    }
+  ],
+  "promotion": {
+    "eligible": false,
+    "reason": "Measured baseline does not meet the 0.90 intent exact-match threshold. No candidate improvement is claimed."
+  },
+  "limitations": [
+    "Small deterministic regression dataset; not a general language understanding accuracy estimate.",
+    "Memory relevance is evaluated on three synthetic owner-scoped fixtures.",
+    "Completion is tested with a deterministic mock bridge, not live backend or deployment.",
+    "No trading performance, prediction accuracy, or profitability is measured."
+  ]
+}
