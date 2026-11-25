@@ -1,3 +1,4 @@
+import { recordDiagnostic } from './diagnosticLogger.ts'
 import { getApiToken } from './localAuth.js'
 import { backendEventStreamUrl, backendWebSocketUrl, isDesktopRuntime } from './backendClient.js'
 
@@ -60,7 +61,11 @@ export class WebSocketService {
 
   private setState(state: ConnectionState) {
     if (this.state !== state) {
+      const previous = this.state
       this.state = state
+      recordDiagnostic(state === 'disconnected' ? 'WARNING' : 'INFO', 'realtime.connection.state', {
+        feature: 'realtime', function: 'setState', detail: `${previous} → ${state}`,
+      })
       this.emit('stateChange', state)
     }
   }
@@ -86,6 +91,10 @@ export class WebSocketService {
             const event: unknown = JSON.parse(message.data)
             if (typeof event !== 'object' || event === null || !('event_type' in event)) return
             const eventType = String(event.event_type)
+            recordDiagnostic('DEBUG', 'realtime.sse.event', {
+              feature: 'realtime', function: 'onmessage',
+              detail: `${eventType} · ${String((event as { source?: unknown }).source ?? 'unknown source')}`,
+            })
             const channels: Record<string, WebSocketChannel[]> = {
               MARKET_DATA: ['price_updates'],
               MARKET_SNAPSHOT: ['market_updates'],
@@ -120,6 +129,7 @@ export class WebSocketService {
         }
         source.onerror = () => {
           if (this.eventSource !== source) return
+          recordDiagnostic('ERROR', 'realtime.sse.error', { feature: 'realtime', function: 'onerror', detail: 'Authenticated desktop event stream encountered a connection error' })
           this.setState('reconnecting')
           this.emit('error', 'The authenticated website event stream disconnected.')
           if (!settled) { settled = true; reject(new Error('Website event stream unavailable')) }
@@ -150,11 +160,13 @@ export class WebSocketService {
 
         socket.onopen = () => {
           if (this.ws !== socket) return
+          recordDiagnostic('INFO', 'realtime.websocket.open', { feature: 'realtime', function: 'onopen', detail: 'Socket opened; sending authentication handshake' })
           this.send({ type: 'authenticate', token })
         }
 
-        socket.onclose = () => {
+        socket.onclose = (event) => {
           if (this.ws !== socket) return
+          recordDiagnostic('WARNING', 'realtime.websocket.close', { feature: 'realtime', function: 'onclose', detail: `code=${event.code} clean=${event.wasClean}` })
           this.ws = null
           this.stopPing()
           this.setState('disconnected')
@@ -167,6 +179,7 @@ export class WebSocketService {
         }
 
         socket.onerror = (error) => {
+          recordDiagnostic('ERROR', 'realtime.websocket.error', { feature: 'realtime', function: 'onerror', detail: 'WebSocket transport error' })
           this.emit('error', error)
           if (!settled) {
             settled = true
@@ -179,6 +192,10 @@ export class WebSocketService {
             const parsed: unknown = JSON.parse(String(event.data))
             if (typeof parsed !== 'object' || parsed === null) return
             const message = parsed as WebSocketMessage
+            recordDiagnostic(message.type === 'error' ? 'ERROR' : 'DEBUG', 'realtime.websocket.message', {
+              feature: 'realtime', function: 'onmessage',
+              detail: `${message.type}${message.channel ? ` · channel=${message.channel}` : ''}${message.detail ? ` · ${message.detail}` : ''}`,
+            })
             if (message.type === 'authenticated') {
               this.setState('connected')
               this.reconnectAttempts = 0
@@ -225,6 +242,9 @@ export class WebSocketService {
       this.maxReconnectDelay,
     )
     this.reconnectAttempts += 1
+    recordDiagnostic('WARNING', 'realtime.reconnect.scheduled', {
+      feature: 'realtime', function: 'scheduleReconnect', detail: `attempt=${this.reconnectAttempts} delay_ms=${delay}`,
+    })
     this.setState('reconnecting')
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
@@ -264,6 +284,11 @@ export class WebSocketService {
   }
 
   private send(message: object) {
+    const data = message as { type?: string; channels?: string[] }
+    recordDiagnostic('DEBUG', 'realtime.websocket.send', {
+      feature: 'realtime', function: 'send',
+      detail: `${data.type ?? 'message'}${data.channels ? ` · ${data.channels.join(',')}` : ''} · ${this.ws?.readyState === WebSocket.OPEN ? 'sent' : 'socket-not-open'}`,
+    })
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message))
   }
 
