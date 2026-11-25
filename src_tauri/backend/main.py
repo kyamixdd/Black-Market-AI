@@ -242,12 +242,34 @@ async def request_observability(request: Request, call_next):
         )
         raise
     finally:
+        failure_fields = {}
+        if status_code >= 500:
+            failure_fields = {
+                "root_cause": "The backend route returned a server error; its correlated exception or route-level failure should identify the cause.",
+                "suggested_fix": "Search backend logs by request_id, inspect the route traceback and preceding operation events, then add a regression test for the failing input.",
+            }
+        elif status_code == 429:
+            failure_fields = {
+                "root_cause": "The API request was rejected by a rate limit.",
+                "suggested_fix": "Check the configured rate limit, reduce request frequency and apply bounded retry/backoff.",
+            }
+        elif status_code in {401, 403}:
+            failure_fields = {
+                "root_cause": "The request was rejected by authentication or authorization.",
+                "suggested_fix": "Verify the desktop API token/session and endpoint permission; do not bypass the authorization middleware.",
+            }
+        elif status_code >= 400:
+            failure_fields = {
+                "root_cause": "The request was rejected as invalid or unavailable.",
+                "suggested_fix": "Inspect the response detail and request schema; verify required fields, symbol/market values and current service readiness.",
+            }
         log_event(
-            logger, logging.INFO if status_code < 500 else logging.WARNING,
+            logger, logging.INFO if status_code < 400 else logging.WARNING,
             "api_request",
             request_id=request_id, method=request.method,
             path=safe_path, status_code=status_code,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            **failure_fields,
         )
 
 
