@@ -117,14 +117,20 @@ export async function flushDiagnosticLogs(): Promise<void> {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     const token = await invoke<string>('backend_api_token')
+    const events = batch.map((entry) => ({
+      level: entry.level,
+      event: entry.event,
+      timestamp: entry.timestamp,
+      feature: entry.feature,
+      function: entry.function,
+      detail: entry.detail,
+      duration_ms: entry.duration_ms,
+      trace_id: entry.trace_id,
+    }))
     const response = await fetch('http://127.0.0.1:8765/api/diagnostics/frontend-events', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        events: batch.map(({ level, event, timestamp, feature, function: fn, detail, duration_ms, trace_id }) => ({
-          level, event, timestamp, feature, function: fn, detail, duration_ms, trace_id,
-        })),
-      }),
+      body: JSON.stringify({ events }),
     })
     if (!response.ok) return
     const sent = new Set(batch.map((entry) => entry.id))
