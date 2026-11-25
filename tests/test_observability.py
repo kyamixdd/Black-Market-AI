@@ -111,3 +111,14 @@ def test_traced_operation_records_success_and_failure_with_trace_id(caplog):
     failure = next(record for record in records if record.event == 'operation_failed')
     assert failure.trace_id
     assert failure.suggested_fix
+
+
+
+def test_error_events_automatically_include_root_cause_and_suggested_fix(caplog):
+    logger = logging.getLogger("observability-error-hints")
+    with caplog.at_level(logging.ERROR):
+        log_event(logger, logging.ERROR, "exchange.connection_failed", detail="exchange connection timed out")
+    record = next(record for record in caplog.records if record.name == logger.name)
+    assert record.root_cause
+    assert record.suggested_fix
+    assert "timeout" in record.suggested_fix.lower()
