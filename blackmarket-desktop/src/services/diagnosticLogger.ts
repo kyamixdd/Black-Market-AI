@@ -92,6 +92,26 @@ export function installDiagnosticCapture(): void {
       detail: `${event.message} at line ${event.lineno}:${event.colno}`,
     })
   })
+  const originalConsoleWarn = console.warn.bind(console)
+  const originalConsoleError = console.error.bind(console)
+  console.warn = (...args: unknown[]) => {
+    try {
+      recordDiagnostic('WARNING', 'frontend.console.warn', {
+        feature: activeScreen, function: 'console.warn',
+        detail: args.map((arg) => arg instanceof Error ? `${arg.name}: ${arg.message}` : typeof arg === 'string' ? arg : Object.prototype.toString.call(arg)).join(' ').slice(0, 1000),
+      })
+    } catch { /* Diagnostic capture must not affect the console. */ }
+    originalConsoleWarn(...args)
+  }
+  console.error = (...args: unknown[]) => {
+    try {
+      recordDiagnostic('ERROR', 'frontend.console.error', {
+        feature: activeScreen, function: 'console.error',
+        detail: args.map((arg) => arg instanceof Error ? `${arg.name}: ${arg.message}\n${arg.stack ?? ''}` : typeof arg === 'string' ? arg : Object.prototype.toString.call(arg)).join(' ').slice(0, 1000),
+      })
+    } catch { /* Diagnostic capture must not affect the console. */ }
+    originalConsoleError(...args)
+  }
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event.reason instanceof Error ? `${event.reason.name}: ${event.reason.message}\n${event.reason.stack ?? ''}` : String(event.reason)
     recordDiagnostic('ERROR', 'frontend.unhandled_rejection', { feature: activeScreen, function: 'promise', detail: reason })
