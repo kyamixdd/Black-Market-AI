@@ -136,7 +136,7 @@ class CandleManager:
         start_time_ms: int | None = None, limit: int = 500, closed_only: bool = True,
     ) -> list[dict]:
         """Return cached candles bounded by timestamps; exclude unfinished candles by default."""
-        series = self.get_series(market, symbol, limit=limit)
+        series = self.get_series(market, symbol, timeframe, limit=limit)
         bounded = [
             candle for candle in series
             if int(candle["open_time"]) <= end_time_ms
