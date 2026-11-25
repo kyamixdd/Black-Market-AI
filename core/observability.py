@@ -59,7 +59,7 @@ class JsonLogFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact_sensitive_text(record.getMessage()),
         }
-        for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation", "symbol", "market", "order_type", "reason", "scanner_state", "symbols_selected", "refresh_successes", "refresh_failures", "refresh_skipped", "feature", "function", "phase", "trace_id", "error_type", "detail", "count", "enabled", "screen", "source", "level_name", "root_cause", "suggested_fix", "input_count", "output_count", "state", "step", "data_age_ms", "stale", "result_summary", "operation_id"):
+        for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation", "symbol", "market", "order_type", "reason", "scanner_state", "symbols_selected", "refresh_successes", "refresh_failures", "refresh_skipped", "feature", "function", "phase", "trace_id", "error_type", "detail", "count", "enabled", "screen", "source", "level_name", "root_cause", "suggested_fix", "input_count", "output_count", "state", "step", "data_age_ms", "stale", "result_summary", "operation_id", "eligible_count", "candidate_count", "selected_count", "filtered_count", "decision", "position_id", "model_status", "learning_updates", "paper_mode", "exchange_client", "source_count", "invalid_count", "feature_count", "render_phase", "render_duration_ms"):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = sanitize_log_value(value, key)

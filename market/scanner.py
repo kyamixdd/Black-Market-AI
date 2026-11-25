@@ -92,6 +92,7 @@ class Scanner:
             and self.registry.is_eligible(item["symbol"], market)
         ]
         candidates.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
+        log_event(logger, logging.INFO, "scanner.filter_rank_completed", component="scanner", market=market, source_count=len(snapshots), candidate_count=len(candidates), filtered_count=max(0, len(snapshots)-len(candidates)), detail="Eligible tickers ranked by 24h quote volume descending")
         if not candidates:
             self._scan_status[market].update({"state": "NO_ELIGIBLE_DATA", "completed_at": datetime.now(timezone.utc).isoformat(), "last_error": "No eligible ticker snapshot available"})
             return
@@ -108,6 +109,7 @@ class Scanner:
             selected = candidates[:batch_size]
             self._analysis_offsets[market] = 0
         prioritized = [(market, str(item["symbol"])) for item in selected]
+        log_event(logger, logging.INFO, "scanner.symbol_batch_selected", component="scanner", market=market, candidate_count=len(candidates), selected_count=len(prioritized), detail=f"rotation_offset={offset}; scan_all_eligible={self.scan_all_eligible}")
         if not prioritized:
             return
 
@@ -266,6 +268,7 @@ class Scanner:
 
     async def _scan_market_tickers(self, market: str) -> None:
         client = self.spot_client if market == "SPOT" else self.futures_client
+        log_event(logger, logging.INFO, "scanner.exchange_client_selected", component="scanner", market=market, exchange_client=type(client).__name__, detail="Market-to-exchange client selection completed")
         while self._running:
             try:
                 if market not in self.enabled_markets:
@@ -273,9 +276,13 @@ class Scanner:
                     continue
                 await client.sync_clock_if_due()
                 tickers = await client.get_all_tickers()
+                log_event(logger, logging.INFO, "scanner.symbols_retrieved", component="scanner", market=market, exchange_client=type(client).__name__, source_count=len(tickers), detail="Exchange ticker universe fetched")
+                valid_count = 0
+                rejected_count = 0
                 for ticker in tickers:
                     symbol = ticker.get("symbol")
                     if not self.registry.is_eligible(symbol, market):
+                        rejected_count += 1
                         continue
                     try:
                         price = float(ticker.get("lastPrice", 0))
@@ -284,8 +291,11 @@ class Scanner:
                     except (TypeError, ValueError, OverflowError):
                         continue
                     if not valid_price(price) or not valid_volume(volume) or not math.isfinite(change):
+                        rejected_count += 1
                         continue
+                    valid_count += 1
                     self.cache.update_ticker(market, symbol, price, volume, change, source="REST")
+                log_event(logger, logging.INFO, "scanner.ticker_validation_completed", component="scanner", market=market, eligible_count=valid_count, invalid_count=rejected_count, detail="Validated and cached ticker records")
                 await self._refresh_stream_subscriptions(market)
                 await self.event_bus.publish(make_event(
                     EventType.MARKET_SNAPSHOT, "scanner", market=market,

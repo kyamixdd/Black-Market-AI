@@ -21,6 +21,7 @@ from config import (
     USDM_FUTURES_ENABLED,
 )
 from core.event_bus import EventBus
+from core.observability import log_event
 from core.disaster_recovery import create_disaster_recovery_orchestrator
 from core.event_models import EventType
 from database.connection import Database
@@ -256,10 +257,10 @@ class Orchestrator:
                 "min_notional": s.min_notional, "status": s.status,
                 "is_eligible": s.is_eligible,
             })
-        logger.info("Loaded %d symbols from DB", len(saved))
+        log_event(logger, logging.INFO, "runtime.symbols_loaded_from_database", component="runtime", source_count=len(saved), detail="Eligible persisted symbol records loaded")
         # Discover fresh market universe
         result = await self._discovery.discover_all()
-        logger.info("Discovered: spot=%d, futures=%d", result["spot"], result["futures"])
+        log_event(logger, logging.INFO, "exchange.market_universe_discovered", component="exchange", source_count=int(result["spot"])+int(result["futures"]), detail=f"spot={result['spot']} futures={result['futures']}")
         # Persist symbols
         self.repo.save_symbols(self.registry.to_dicts())
         # Setup event persistence (critical events to SQLite for recovery)
@@ -533,6 +534,7 @@ class Orchestrator:
 
     async def _on_signal_validated(self, event) -> None:
         signal = self._signal_payload(event)
+        log_event(logger, logging.INFO, "autonomous.signal_received", component="paper_trading", feature="autonomous-entry", symbol=str(signal.get("symbol") or ""), market=str(signal.get("market") or ""), detail=f"signal_id={signal.get('signal_id')}; direction={signal.get('direction')}; strategy={signal.get('strategy')}")
         if not PAPER_TRADING_ENABLED:
             self._record_autonomous_decision(signal, "BLOCKED", "paper_trading_disabled")
             return
@@ -627,6 +629,7 @@ class Orchestrator:
             "position_id": position_id,
         }
         self.last_autonomous_decision = decision
+        log_event(logger, logging.INFO if status in {"EXECUTED", "BLOCKED", "PAUSED", "RISK_REJECTED", "EXECUTION_REJECTED"} else logging.WARNING, "autonomous.paper_trade_decision", component="paper_trading", feature="autonomous-entry", decision=status, reason=reason, symbol=str(decision.get("symbol") or ""), market=str(decision.get("market") or ""), position_id=str(position_id or ""), paper_mode=True, detail=f"signal_id={decision.get('signal_id')}; model={((decision.get('model') or {}).get('model_version') if isinstance(decision.get('model'), dict) else None)}")
         try:
             self.repo.save_system_event({
                 "event_id": f"AUTODEC-{signal.get('signal_id') or uuid.uuid4().hex}-{status}"[:64],

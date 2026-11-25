@@ -21,6 +21,8 @@ from learning.outcome_labeler import DIRECTIONAL_LABEL_THRESHOLD, OutcomeLabeler
 from learning.trainer import ModelTrainer
 from learning.walkforward_validator import WalkForwardValidator
 
+from core.observability import log_event
+
 logger = logging.getLogger(__name__)
 
 
@@ -445,6 +447,7 @@ class LiveLearningService:
         labeler = OutcomeLabeler(self.repo, self.orch.simulator)
         labeled = labeler.evaluate_unresolved()
         online_updates = self._learn_resolved_predictions()
+        log_event(logger, logging.INFO, "learning.live_cycle_completed", component="learning", feature="online-learning", count=len(histories), learning_updates=online_updates, detail=f"labeled_outcomes={labeled}; pairs_configured={len(self._pairs)}; state={self.state}")
         self.last_cycle_status = f"live_ok:labeled={labeled}:online_updates={online_updates}"
         if online_updates and self._river_model is not None:
             self._persist_river()
@@ -473,6 +476,7 @@ class LiveLearningService:
         if feature.shape != (36,) or not np.isfinite(feature).all():
             return
         prediction = self.predictor.predict(feature)
+        log_event(logger, logging.INFO, "learning.prediction_generated", component="learning", feature="inference", symbol=symbol, market=market, model_status=str(prediction.get("model_version") or "unknown"), feature_count=int(feature.size), detail=f"predicted_class={prediction.get('predicted_class')}; confidence={float(prediction.get('confidence',0)):.4f}")
         created_at = datetime.fromtimestamp((int(candle["close_time"]) + 1) / 1000, timezone.utc)
         prediction_id = f"live:{market}:{symbol}:1h:{open_time}"
         self.repo.save_prediction({
@@ -518,6 +522,7 @@ class LiveLearningService:
                 logger.exception("Unable to apply online update for prediction %s", prediction.prediction_id)
         if updates:
             self.river_updates += updates
+        log_event(logger, logging.INFO, "learning.online_update_batch", component="learning", feature="online-learning", learning_updates=updates, count=len(self._river_seen), model_status="candidate_only", detail="Online model updates applied; promotion gate remains required")
         return updates
 
     def _persist_river(self) -> None:
@@ -541,7 +546,9 @@ class LiveLearningService:
 
     async def _retrain_from_live_outcomes(self, resolved_count: int) -> None:
         self.last_cycle_status = f"retraining_from_{resolved_count}_resolved_predictions"
+        log_event(logger, logging.INFO, "learning.retraining_started", component="learning", feature="model-training", count=resolved_count, detail="Training and out-of-sample validation started")
         result = await asyncio.to_thread(self.trainer.train_and_validate)
+        log_event(logger, logging.INFO if result.get("status") == "trained" else logging.WARNING, "learning.retraining_result", component="learning", feature="model-training", model_status=str(result.get("status", "unknown")), count=resolved_count, detail=f"validation={self._validation_summary(result.get('validation'))}")
         self._last_retrain_count = resolved_count
         if result.get("status") == "trained":
             if self._activate_batch_models(result):
