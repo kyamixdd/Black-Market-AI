@@ -26,6 +26,25 @@ def redact_sensitive_text(value: str) -> str:
     return result
 
 
+_SENSITIVE_FIELD_NAMES = {"token", "password", "secret", "authorization", "api_key", "access_token", "refresh_token", "credential"}
+
+
+def sanitize_log_value(value: Any, field_name: str = "") -> Any:
+    """Redact sensitive assignments recursively from structured log values."""
+    if field_name.lower() in _SENSITIVE_FIELD_NAMES:
+        return "[REDACTED]"
+    if isinstance(value, str):
+        return redact_sensitive_text(value)[:2000]
+    if isinstance(value, dict):
+        return {
+            str(key)[:120]: sanitize_log_value(item, str(key))
+            for key, item in list(value.items())[:100]
+        }
+    if isinstance(value, (list, tuple)):
+        return [sanitize_log_value(item) for item in value[:100]]
+    return value
+
+
 class JsonLogFormatter(logging.Formatter):
     """Emit one compact JSON object per log record."""
 
@@ -39,7 +58,7 @@ class JsonLogFormatter(logging.Formatter):
         for key in ("event", "request_id", "method", "path", "status_code", "duration_ms", "component", "operation", "symbol", "market", "order_type", "reason", "scanner_state", "symbols_selected", "refresh_successes", "refresh_failures", "refresh_skipped", "feature", "function", "phase", "trace_id", "error_type", "detail", "count", "enabled", "screen", "source", "level_name"):
             value = getattr(record, key, None)
             if value is not None:
-                payload[key] = value
+                payload[key] = sanitize_log_value(value, key)
         if record.exc_info:
             payload["exception"] = redact_sensitive_text(self.formatException(record.exc_info))
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -61,13 +80,11 @@ def configure_structured_logging(level: str = "INFO") -> None:
 
 def log_event(logger: logging.Logger, level: int, event: str, **fields: Any) -> None:
     """Write a structured event; fields should be bounded and non-sensitive."""
-    safe_fields = {}
-    for key, value in fields.items():
-        if key.lower() in {"token", "password", "secret", "authorization", "api_key", "access_token", "refresh_token", "credential"}:
-            continue
-        if isinstance(value, str):
-            value = redact_sensitive_text(value)[:2000]
-        safe_fields[key] = value
+    safe_fields = {
+        key: sanitize_log_value(value, key)
+        for key, value in fields.items()
+        if key.lower() not in _SENSITIVE_FIELD_NAMES
+    }
     logger.log(level, event, extra={"event": event, **safe_fields})
 
 
