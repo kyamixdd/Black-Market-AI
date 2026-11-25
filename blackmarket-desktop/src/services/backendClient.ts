@@ -1,4 +1,4 @@
-import { recordDiagnostic } from './diagnosticLogger.js'
+import { recordDiagnostic } from './diagnosticLogger.ts'
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 export type BackendClientOptions = {
