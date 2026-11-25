@@ -1,0 +1,14 @@
+﻿{
+    "product":  "BlackMarket AI",
+    "version":  "1.0.0",
+    "installer":  "BlackMarket AI_1.0.0_x64-setup.exe",
+    "installerBytes":  111106911,
+    "installerSha256":  "a80961f29443d6f7817107c6837bdf5e7d295ca2c5d66c2b341586f8c5fea9f1",
+    "sourceCommit":  "985977eaed80e94f23b7f4f801ba27e3e228264c",
+    "sourceBranch":  "local",
+    "workflowRunId":  null,
+    "workflowRunUrl":  null,
+    "generatedUtc":  "2026-11-24T16:23:06Z",
+    "signatureStatus":  "NotSigned",
+    "signerSubject":  null
+}

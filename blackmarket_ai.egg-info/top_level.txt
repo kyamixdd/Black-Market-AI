@@ -1,0 +1,16 @@
+benchmarks
+config
+core
+database
+exchange
+intelligence
+learning
+main
+market
+monitoring
+notifications
+paper_trading
+risk
+src_tauri
+strategies
+terminal

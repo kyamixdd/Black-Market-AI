@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T18:09:54.066727+00:00",
+  "description": "shutdown",
+  "database_name": "tmphd0c4bo3",
+  "compressed": true,
+  "backup_file": "tmphd0c4bo3_20261124_180953_971030_shutdown.db.gz",
+  "backup_size_bytes": 6433,
+  "sha256": "71bfeb9ce811e86853b4fc6937fa76af31c9880ac16b36f1241e95c41025ca2c",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

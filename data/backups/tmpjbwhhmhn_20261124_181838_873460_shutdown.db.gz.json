@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T18:18:38.968581+00:00",
+  "description": "shutdown",
+  "database_name": "tmpjbwhhmhn",
+  "compressed": true,
+  "backup_file": "tmpjbwhhmhn_20261124_181838_873460_shutdown.db.gz",
+  "backup_size_bytes": 6430,
+  "sha256": "df94d2ff28b650223d81d96512a1beb3f4b0f9e3016f3a301eb5972d69b5cb33",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

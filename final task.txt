@@ -1,0 +1,1024 @@
+# BLACKMARKET AI — DESKTOP PUBLIC RELEASE COMPLETION PROMPT
+
+You are the lead software engineer, senior desktop application developer, QA engineer, security engineer, release engineer, and technical auditor responsible for completing BlackMarket AI.
+
+Your assignment is to **finish the existing BlackMarket AI desktop application and make it genuinely ready for a public desktop release**.
+
+Do not merely provide recommendations, an audit report, a roadmap, or a list of tasks. Inspect the actual repository, implement the required fixes, test the application, correct failures, and complete the release process as far as the available environment permits.
+
+The final goal is a stable, secure, functional, installable desktop application that can be distributed to public users.
+
+---
+
+# 1. PROJECT SCOPE — DESKTOP ONLY
+
+The project is BlackMarket AI.
+
+## Desktop development is the only priority
+
+The BlackMarket Web application is on hold.
+
+Do not develop, redesign, improve, or expand:
+
+- BlackMarket Web UI
+- Next.js website pages
+- Web-specific features
+- Vercel deployment
+- Web hosting
+- Website marketing pages
+- Web-specific authentication flows
+- Web-specific backend integration
+
+Do not modify `blackmarket-web/` unless a change is absolutely necessary to fix a shared desktop dependency or prevent a desktop build failure. If that happens, make the smallest possible change and explain why it was required.
+
+Do not delete the web application. Preserve its existing source code and configuration while leaving it untouched.
+
+The desktop application must be independently buildable, testable, and usable without depending on the unfinished web application or a Vercel deployment.
+
+Focus on the existing desktop architecture, including:
+
+- Tauri
+- React
+- TypeScript
+- Python backend
+- FastAPI
+- SQLite
+- Existing market-data integration
+- Existing paper-trading engine
+- Existing intelligence and learning systems
+- Existing desktop UI and components
+
+Do not replace the architecture just because another framework is easier. Improve the existing implementation unless a specific architectural defect makes that impossible.
+
+---
+
+# 2. IMPORTANT DEVELOPMENT RULES
+
+## Inspect before changing
+
+Before implementing anything:
+
+1. Inspect the entire repository structure.
+2. Read the project documentation and global development rules.
+3. Inspect the current Git branch and working tree.
+4. Inspect the current release-fix branch and PR #86 if accessible.
+5. Review all existing uncommitted changes.
+6. Identify the actual desktop entry points, build scripts, backend startup mechanism, Tauri configuration, and installer configuration.
+7. Identify the actual test commands and CI workflows.
+8. Establish the current desktop build and test status.
+
+Do not overwrite existing work.
+
+Do not assume earlier audit findings are still accurate without checking the current source.
+
+## Work autonomously
+
+Do not stop after every individual issue to ask for permission.
+
+Make reasonable engineering decisions, implement fixes, and continue through the entire project.
+
+Ask a question only when an essential decision cannot be made safely from the repository or project documentation.
+
+## Do not fake completion
+
+Never:
+
+- Skip a failing test and report success.
+- Disable a test merely to make CI green.
+- Lower security requirements to make a feature work.
+- Replace real functionality with mock data without clearly labeling it.
+- Claim an API is connected when it is not.
+- Claim a model is trained when validation failed.
+- Claim a backtest is accurate without verified historical simulation.
+- Claim the application is release-ready based only on a successful build.
+- Hide errors from users.
+- Remove important functionality to make the application appear stable.
+
+If a feature cannot be completed, identify the exact blocker and keep the release status blocked.
+
+---
+
+# 3. FIRST PRIORITY — ESTABLISH A CLEAN DESKTOP RELEASE BRANCH
+
+Inspect the current Git state.
+
+If the current branch is not appropriate for release work, create or continue a dedicated branch:
+
+`desktop-public-release`
+
+Use the latest correct desktop source as the base.
+
+If `release-readiness-fixes` or PR #86 contains useful changes, inspect every change and retain only correct, tested modifications.
+
+Do not blindly merge the draft PR.
+
+Do not rewrite shared branch history, force-push, delete branches, or overwrite remote work.
+
+Preserve the existing development branch.
+
+Keep all desktop release changes isolated until they have passed validation.
+
+---
+
+# 4. REPOSITORY CLEANUP AND SOURCE CONTROL
+
+Inspect and fix repository hygiene.
+
+Previously identified concerns include:
+
+- Generated Next.js `.next` files tracked in Git.
+- Runtime data and backup manifests tracked in Git.
+- Local account/equity state tracked in Git.
+- Incidental `desktop.ini` files.
+- Incomplete ignore rules.
+- Potentially exposed credentials in old repository history.
+- An orphaned branch history without a common ancestor.
+
+Verify each concern against the current branch.
+
+## Required cleanup
+
+Remove generated build output from version control while preserving the actual source code.
+
+Remove runtime data from version control, including:
+
+- Local databases
+- Runtime account state
+- Backup manifests
+- Backup archives
+- Logs
+- Cache files
+- Generated model files
+- Temporary data
+- Local user settings
+
+Add appropriate ignore rules.
+
+Ensure `.env.example` remains trackable even if `.env*` is ignored.
+
+Never delete a user's real local database or runtime data as part of repository cleanup.
+
+Do not remove existing backups from a user's machine.
+
+If tracked runtime files must be removed from Git, preserve the files locally and document the migration.
+
+## Git history
+
+Inspect repository history for:
+
+- API keys
+- Telegram tokens
+- Passwords
+- Session secrets
+- Database credentials
+- Private keys
+- Personal information
+- Build artifacts containing secrets
+
+Previously, a Telegram token was identified as potentially exposed.
+
+Treat it as compromised until confirmed revoked or rotated.
+
+Do not print secrets into logs, terminal output, commits, or the final report.
+
+If a credential cannot be revoked directly, provide a clear manual action required before release.
+
+---
+
+# 5. DESKTOP ARCHITECTURE AND STARTUP
+
+Inspect the complete desktop startup lifecycle.
+
+The desktop application must:
+
+1. Launch the Tauri application.
+2. Start or connect to the local Python backend correctly.
+3. Wait for backend readiness.
+4. Establish the frontend connection.
+5. Initialize market data.
+6. Initialize the event system.
+7. Initialize local persistence.
+8. Display accurate system status.
+9. Shut down cleanly when the application closes.
+
+Fix:
+
+- Startup races
+- Incorrect backend ports
+- Hardcoded development addresses
+- Incorrect working directories
+- Missing environment variables
+- Backend process leaks
+- Duplicate backend instances
+- Incorrect health checks
+- Incorrect connection status
+- Broken restart behavior
+- Shutdown deadlocks
+- Missing error handling
+
+The desktop application must not depend on a manually running development server.
+
+It must not require the user to manually launch Python, Vite, or a terminal command after installation.
+
+## Backend process management
+
+Review the Tauri backend supervisor.
+
+Ensure:
+
+- The backend starts automatically.
+- The backend is monitored.
+- Failed startup produces a useful error.
+- Unexpected backend termination is handled safely.
+- The frontend does not falsely display READY when the backend is unavailable.
+- The backend can be stopped cleanly.
+- Ports are configured safely.
+- Only the intended local process can access sensitive local endpoints.
+- The desktop app does not expose its local backend to the public internet.
+
+Use a robust health-check and readiness mechanism.
+
+---
+
+# 6. DESKTOP UI AND USER EXPERIENCE
+
+Inspect every desktop screen and major interaction.
+
+The application must be visually consistent, responsive, readable, and usable at supported desktop resolutions.
+
+Test:
+
+- 1920×1080
+- 1600×900
+- 1366×768
+- 1280×720
+- Resized and maximized windows
+
+Fix:
+
+- Clipped panels
+- Incorrect scaling
+- Overflowing tables
+- Hidden buttons
+- Broken navigation
+- Unreadable typography
+- Excessive empty space
+- Incorrect card sizing
+- Inconsistent spacing
+- Broken scrolling
+- Modal positioning
+- Incorrect loading states
+- Incorrect empty states
+- Incorrect error states
+- UI elements that appear functional but do nothing
+
+Preserve the existing BlackMarket AI visual identity.
+
+Do not redesign the entire interface unnecessarily. Improve the current design systematically.
+
+## Required UI behavior
+
+Every visible button, menu, toggle, form, and navigation item must either:
+
+- Perform its intended function, or
+- Be clearly disabled with an explanation.
+
+No dead buttons.
+
+No fake success notifications.
+
+No permanently loading screens.
+
+No silently failing actions.
+
+No misleading status indicators.
+
+## Status accuracy
+
+The UI must accurately reflect:
+
+- Backend connection
+- Market-data connection
+- WebSocket connection
+- Scanner activity
+- Paper-trading mode
+- Model availability
+- Learning validation
+- Autonomous entry status
+- Database status
+- Error conditions
+
+Never display `LIVE`, `READY`, `RUNNING`, or `CONNECTED` unless the underlying system has actually verified that state.
+
+---
+
+# 7. MARKET DATA AND CANDLE SYSTEM
+
+Inspect the entire market-data pipeline.
+
+Verify:
+
+- Binance public market-data connection
+- REST fallback
+- WebSocket reconnection
+- Subscription management
+- Candle collection
+- Candle storage
+- Candle updates
+- Market symbol validation
+- Timeframe validation
+- Data freshness
+- Missing candle handling
+- Duplicate candle handling
+- Invalid price handling
+- Rate-limit handling
+- Network failure handling
+
+Previously identified concern:
+
+Different parts of the application accept different timeframe values. Some timeframes may be accepted by settings or UI but unsupported by the candle collector or backtesting system.
+
+Create one canonical timeframe registry and use it consistently across:
+
+- Settings
+- Frontend
+- Backend
+- Candle manager
+- Scanner
+- Strategy engine
+- Intelligence
+- Learning
+- Backtesting
+
+Reject unsupported timeframes explicitly.
+
+Never silently report successful collection when no valid candles were collected.
+
+## Data freshness
+
+Calculate freshness from actual market-data timestamps.
+
+Do not hardcode `LIVE`.
+
+Display stale, delayed, disconnected, or incomplete data accurately.
+
+Reject or appropriately downgrade signals derived from stale data.
+
+---
+
+# 8. STRATEGY AND SIGNAL ENGINE
+
+Inspect all existing strategies:
+
+- Momentum
+- Breakout
+- Trend following
+- Mean reversion
+- Reversal
+
+Verify:
+
+- Signal generation
+- Signal direction
+- Confidence calculation
+- Strategy weights
+- Signal deduplication
+- Candle requirements
+- Indicator calculations
+- Risk integration
+- Market regime handling
+- Stale-data rejection
+- Invalid input handling
+
+Fix incorrect calculations and inconsistent strategy interfaces.
+
+Ensure strategy outputs use a consistent schema.
+
+Ensure a signal cannot bypass the risk manager or decision engine.
+
+Do not artificially increase confidence to make signals pass.
+
+Do not tune strategies merely to create more trades.
+
+The objective is correct, explainable, and safe behavior.
+
+---
+
+# 9. BACKTESTING — CRITICAL RELEASE REQUIREMENT
+
+The previous audit found serious backtesting integrity concerns.
+
+Reinspect the current implementation and fix every confirmed defect.
+
+Previously identified issues include:
+
+- Historical simulation reading the latest live candle instead of the candle at simulated time.
+- Strategy features potentially using future candles.
+- Regime analysis potentially using live cached data.
+- Duplicate trade accounting.
+- Incorrect equity curves.
+- Incorrect drawdown calculations.
+- Incorrect Sharpe and Sortino calculations.
+- Open positions being closed at entry price at the end of the test.
+- Holdout data being included in the main simulation.
+- Insufficient historical data silently passing.
+- Weak tests that do not validate actual trade outcomes.
+- Infinite values that may break JSON serialization.
+
+## Required backtest integrity
+
+A backtest must be strictly chronological.
+
+At simulation time `t`, it may only use information that was available at or before `t`.
+
+Implement and test:
+
+- Historical candle cutoff
+- No-lookahead signal generation
+- No-lookahead regime detection
+- Correct entry timing
+- Correct exit timing
+- Correct stop-loss behavior
+- Correct take-profit behavior
+- Correct fees
+- Correct slippage assumptions
+- Correct position sizing
+- Correct leverage constraints
+- Correct realized PnL
+- Correct unrealized PnL
+- Correct equity curve
+- Correct maximum drawdown
+- Correct profit factor
+- Correct win rate
+- Correct Sharpe and Sortino calculations
+- Correct end-of-test position closing
+- Correct holdout isolation
+- Correct missing-data behavior
+
+The backtest must not silently substitute live data for historical data.
+
+If the historical dataset is incomplete, fail clearly or report the test as incomplete.
+
+## Required deterministic tests
+
+Create tests with known candles and expected outcomes.
+
+Test:
+
+1. A profitable trade.
+2. A losing trade.
+3. Stop-loss execution.
+4. Take-profit execution.
+5. Position sizing.
+6. Fees and slippage.
+7. Position limits.
+8. Daily loss limits.
+9. Multiple trades.
+10. Open positions at test end.
+11. Missing candles.
+12. Duplicate candles.
+13. No-lookahead behavior.
+14. Holdout separation.
+15. Equity reconciliation.
+16. Drawdown calculation.
+17. JSON-safe metrics.
+
+The tests must assert exact expected values where possible.
+
+A test such as `assert len(trades) >= 0` is invalid as meaningful coverage. Replace weak tests with assertions that prove correctness.
+
+Do not advertise backtest performance until these tests pass.
+
+---
+
+# 10. PAPER TRADING AND RISK MANAGEMENT
+
+The desktop application must remain paper-trading-only for public release unless a separately reviewed, fully implemented, and explicitly authorized live-trading system exists.
+
+Do not enable real-money trading.
+
+Verify:
+
+- Market orders
+- Limit orders
+- Order cancellation
+- Partial position closing
+- Full position closing
+- Stop-loss updates
+- Take-profit updates
+- Position sizing
+- Fees
+- Slippage
+- Funding assumptions
+- Liquidation calculations
+- Balance updates
+- Equity updates
+- Persistence
+- Restart recovery
+- Duplicate order prevention
+- Concurrent order safety
+- Risk limits
+
+## Autonomous entries
+
+The system must not open autonomous paper positions when:
+
+- No validated model is active and the configured system requires one.
+- Market data is stale.
+- Risk checks fail.
+- The daily loss limit is reached.
+- The user has paused entries.
+- The backend is in an unsafe state.
+
+The current learning screenshots showed:
+
+- Model unavailable or not trained.
+- Learning validation failed.
+- Autonomous entries paused.
+- Paper-only mode active.
+
+Preserve this safe behavior until a model has passed validation.
+
+Do not force the system to trade just to make the Autonomous screen look active.
+
+Make the reason for paused entries visible and understandable.
+
+---
+
+# 11. LEARNING AND MACHINE LEARNING
+
+Inspect the complete learning pipeline.
+
+Verify:
+
+- Outcome labeling
+- Training dataset construction
+- Chronological data splitting
+- Feature integrity
+- Label integrity
+- Model training
+- Model evaluation
+- Walk-forward validation
+- Holdout validation
+- Model registry
+- Model promotion
+- Model rollback
+- Drift detection
+- Prediction persistence
+- Prediction outcome resolution
+- Model versioning
+
+Previously displayed validation results failed configured thresholds.
+
+Do not bypass those thresholds.
+
+Do not promote a model merely because it trained successfully.
+
+Do not use the same samples for training and final evaluation.
+
+Do not allow future information to leak into training features.
+
+## Model status
+
+The UI must distinguish:
+
+- Not trained
+- Training
+- Trained but unvalidated
+- Validation failed
+- Validated candidate
+- Active model
+- Unavailable
+- Error
+
+A fallback `FLAT` prediction with confidence `0.000` must not be presented as a trained model prediction.
+
+If no model passes validation, keep the model unavailable and autonomous entries safely paused.
+
+## Learning UI
+
+Correct inconsistencies between the Learning and Autonomous screens.
+
+If one screen says `Unavailable` and another says `Not Trained`, use a consistent state model with clear definitions.
+
+Ensure metrics are correctly labeled:
+
+- Historical resolved prediction accuracy is not model holdout accuracy.
+- Classification accuracy is not trading profitability.
+- Backtest results are not live results.
+- Missing metrics must be displayed as unavailable, not zero.
+
+---
+
+# 12. INTELLIGENCE AND AUTONOMOUS SYSTEM
+
+Inspect:
+
+- Intelligence analysis
+- Market regime classification
+- Strategy evaluation
+- Strategy weights
+- Decision records
+- Autonomous planning
+- Signal rejection
+- Risk checks
+- Entry pausing
+- Telegram notifications
+- System status
+
+Previously identified concern:
+
+The intelligence system unconditionally set signal freshness to `LIVE`.
+
+Fix this using real timestamps and validated data.
+
+Ensure decision records explain:
+
+- What was evaluated
+- Which strategy generated the signal
+- Why it was accepted or rejected
+- Whether risk checks passed
+- Whether entries were paused
+- Whether the model was available
+- Whether data was stale
+
+Do not show fabricated strategy performance.
+
+Do not show a successful strategy evaluation when no evaluation was actually persisted.
+
+---
+
+# 13. ASSISTANT AND AI FUNCTIONALITY
+
+Inspect the existing assistant architecture.
+
+Verify:
+
+- Natural-language understanding
+- Intent classification
+- Entity extraction
+- Planning
+- Tool registry
+- Tool execution
+- Context handling
+- Memory persistence
+- Error handling
+- Unsupported request handling
+
+The assistant must not claim to have executed an operation when it only generated an explanation.
+
+If a request is unsupported, say so clearly.
+
+Ensure all trading-related tools respect the risk manager and paper-only restrictions.
+
+Do not add unrestricted shell execution or unrestricted code execution to the assistant.
+
+Do not expose secrets or internal credentials through assistant responses.
+
+---
+
+# 14. SECURITY
+
+Perform a full desktop security review.
+
+Inspect:
+
+- Tauri configuration
+- Content Security Policy
+- WebView permissions
+- IPC commands
+- Local API endpoints
+- CORS
+- Authentication
+- Session handling
+- Secret storage
+- File access
+- Path traversal
+- Input validation
+- SQL injection
+- Command injection
+- Dependency vulnerabilities
+- Logging
+- Error messages
+- Local backend exposure
+
+## Desktop security requirements
+
+The desktop application must not expose sensitive local APIs to arbitrary remote websites.
+
+Use the narrowest required Tauri permissions.
+
+Do not enable unrestricted filesystem or shell access.
+
+Validate every IPC argument.
+
+Use parameterized SQL queries.
+
+Do not store secrets in frontend source code.
+
+Do not ship development credentials.
+
+Do not log session tokens, API keys, or private user data.
+
+If Telegram is configured, ensure credentials are stored securely and never included in public logs or packaged defaults.
+
+## User data
+
+The desktop application must store its data in the correct operating-system application-data directory.
+
+Do not rely on the current working directory.
+
+Do not store user data inside the installation directory.
+
+Ensure the application can run without administrator privileges where possible.
+
+---
+
+# 15. SQLITE, PERSISTENCE, BACKUPS, AND RECOVERY
+
+Inspect the complete persistence layer.
+
+Verify:
+
+- Database initialization
+- Database migrations
+- SQLite WAL behavior
+- Repository methods
+- Transaction handling
+- Concurrent access
+- Data integrity
+- Backup creation
+- Backup restoration
+- Backup corruption handling
+- Interrupted writes
+- Restart recovery
+
+Create and test a real backup-and-restore procedure.
+
+A backup is not verified merely because a file was created.
+
+Test restoration into a temporary database and confirm the restored data matches the original.
+
+Ensure local user data survives:
+
+- Application restart
+- Application update
+- Backend restart
+- Desktop window restart
+
+Never overwrite a user's database during an update without a safe migration and backup.
+
+---
+
+# 16. WINDOWS DESKTOP PACKAGING
+
+The primary release target is the existing supported Windows desktop application.
+
+Inspect the Tauri build and installer configuration.
+
+Produce a clean release build using the project's actual supported packaging system.
+
+Verify:
+
+- Release build configuration
+- Correct application name
+- Correct application icon
+- Correct version
+- Correct installer metadata
+- Correct backend packaging
+- Correct Python runtime or bundled backend
+- Correct frontend assets
+- Correct database paths
+- Correct environment handling
+- Correct startup behavior
+- Correct shutdown behavior
+
+The installed application must not require:
+
+- A developer's local Python environment
+- A manually started Vite server
+- A local source checkout
+- A development-only backend process
+- A developer's `.env` file
+- A developer's machine-specific path
+
+Do not include:
+
+- Test credentials
+- Development secrets
+- `.env` files
+- Debug artifacts
+- Unnecessary source maps
+- Temporary build files
+- Local databases
+- Runtime backups
+- Test fixtures containing private data
+
+If code signing is unavailable, document the exact signing requirement and do not falsely claim the installer is signed.
+
+---
+
+# 17. AUTOMATED TESTING AND CI
+
+Run the full test suite.
+
+Do not rely on previous test results.
+
+Use the project's actual test commands.
+
+Run:
+
+- Python unit tests
+- Python integration tests
+- Backend API tests
+- Strategy tests
+- Risk-management tests
+- Paper-trading tests
+- Backtesting tests
+- Learning tests
+- Assistant tests
+- Frontend tests
+- TypeScript checks
+- Lint checks
+- Desktop UI checks
+- Tauri build checks
+- Installer smoke tests
+- Security checks
+
+Fix failures and rerun the affected tests.
+
+Then run the complete suite again.
+
+Ensure CI runs on the desktop release branch.
+
+The desktop release must not depend on Vercel or the web application's CI.
+
+If the existing workflow only runs on `main` or `black-market-ai-beta`, update the desktop CI triggers appropriately.
+
+Do not disable workflows to make the release appear successful.
+
+---
+
+# 18. REAL DESKTOP ACCEPTANCE TEST
+
+Run the application as a normal installed desktop user.
+
+Test the actual packaged application, not only the development server.
+
+The acceptance test must cover:
+
+1. Fresh installation.
+2. First launch.
+3. Backend startup.
+4. Backend health check.
+5. Market-data connection.
+6. Market screen.
+7. Signal screen.
+8. Analysis screen.
+9. Portfolio screen.
+10. Positions screen.
+11. History screen.
+12. Intelligence screen.
+13. Learning screen.
+14. Autonomous screen.
+15. Strategy Lab.
+16. Risk screen.
+17. Settings screen.
+18. Local persistence.
+19. Paper-trading workflow.
+20. Application restart.
+21. Backend restart.
+22. Application shutdown.
+23. Uninstallation behavior.
+
+Use realistic market-data conditions.
+
+Do not use fake data without clearly identifying it.
+
+If network access is unavailable, test the offline behavior and report the limitation.
+
+---
+
+# 19. RELEASE DOCUMENTATION
+
+Update the documentation to reflect the actual desktop release.
+
+Update or create the appropriate documents:
+
+- `README.md`
+- `SECURITY.md`
+- `docs/PROJECT_STATUS.md`
+- `docs/RELEASE_READINESS.md`
+- `docs/RELEASING_AND_HOSTING.md`
+- `docs/BACKUP_GUIDE.md`
+- `docs/RELEASE_NOTES.md`
+- Desktop installation guide
+- Desktop troubleshooting guide
+
+Do not make web development part of the release documentation beyond stating that the web application is currently on hold.
+
+Document:
+
+- Supported operating systems
+- Installation requirements
+- Installation steps
+- First-run setup
+- Market-data behavior
+- Paper-trading restrictions
+- Model validation behavior
+- Local data storage
+- Backup and restore
+- Troubleshooting
+- Known limitations
+- Security reporting
+- Version number
+- Release status
+
+Remove outdated or contradictory claims.
+
+Do not claim a feature is complete unless it has been verified.
+
+---
+
+# 20. PUBLIC RELEASE REQUIREMENTS
+
+Before declaring the desktop application ready, verify all of the following:
+
+- [ ] Desktop source builds successfully.
+- [ ] Desktop installer builds successfully.
+- [ ] Installer launches on a clean environment.
+- [ ] Backend starts automatically.
+- [ ] Backend health checks are accurate.
+- [ ] Market data works or degrades safely.
+- [ ] No known critical or high-severity security issue remains.
+- [ ] No exposed credential remains active.
+- [ ] No development secrets are packaged.
+- [ ] Runtime user data is not committed.
+- [ ] Generated build artifacts are not committed.
+- [ ] Backtesting has no known lookahead defects.
+- [ ] Backtest deterministic tests pass.
+- [ ] Paper trading passes its acceptance tests.
+- [ ] Risk limits are enforced.
+- [ ] Learning validation is honest and safe.
+- [ ] Autonomous entries remain blocked when validation fails.
+- [ ] UI status reflects actual system state.
+- [ ] No dead buttons or broken core workflows remain.
+- [ ] Database persistence works.
+- [ ] Backup and restore are tested.
+- [ ] CI passes on the release branch.
+- [ ] Installer smoke tests pass.
+- [ ] Documentation matches the actual application.
+- [ ] Release notes are accurate.
+- [ ] The application can run without the web project.
+- [ ] The application does not require a developer environment.
+
+---
+
+# 21. FINAL RELEASE PROCESS
+
+After all fixes and tests pass:
+
+1. Review the entire diff.
+2. Remove accidental changes.
+3. Verify no secrets or runtime data were added.
+4. Verify the desktop release branch is clean.
+5. Run the full test suite one final time.
+6. Build the final installer.
+7. Test the final installer.
+8. Update the version and release notes.
+9. Create a release candidate if appropriate.
+10. Prepare the final public release.
+
+Do not publish a release if a critical requirement remains unresolved.
+
+Do not claim that signing, external credentials, or clean-machine tests were completed if they were not.
+
+---
+
+# 22. FINAL REPORT
+
+Do not send me another long overview or a list of suggestions.
+
+Work through the repository and implement the fixes.
+
+When the work is complete, provide a concise final report containing:
+
+- Desktop release status
+- Pull request or release link, if created
+- Installer location
+- Build result
+- Test result
+- Security result
+- Any remaining manual action that genuinely cannot be completed from the coding environment
+
+The desired final report is:
+
+**“Yes, the BlackMarket AI desktop application is ready for public release.”**
+
+Only use that exact readiness claim if every required release gate has actually passed.
+
+If a release gate remains blocked, do not pretend it passed. Continue fixing what can be fixed and identify only the specific external action that remains.
+
+Your responsibility is to complete the desktop application—not merely to explain how it could be completed.
+
+Begin now.

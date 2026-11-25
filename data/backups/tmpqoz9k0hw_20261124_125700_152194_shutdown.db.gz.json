@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T12:57:00.209079+00:00",
+  "description": "shutdown",
+  "database_name": "tmpqoz9k0hw",
+  "compressed": true,
+  "backup_file": "tmpqoz9k0hw_20261124_125700_152194_shutdown.db.gz",
+  "backup_size_bytes": 6191,
+  "sha256": "ee0e18c345c90a1aad06a5d655857bdfd8774f5ccded400a3872a2ce3ae6ddf5",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

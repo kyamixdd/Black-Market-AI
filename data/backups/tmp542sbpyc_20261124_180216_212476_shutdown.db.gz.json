@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T18:02:16.301552+00:00",
+  "description": "shutdown",
+  "database_name": "tmp542sbpyc",
+  "compressed": true,
+  "backup_file": "tmp542sbpyc_20261124_180216_212476_shutdown.db.gz",
+  "backup_size_bytes": 6281,
+  "sha256": "e3bb16de19c0f05e32663c739ec1a0c8460da0a28686c5bde8d34210f6e611d3",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

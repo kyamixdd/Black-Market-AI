@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: blackmarket-ai
+Version: 1.0.0
+Summary: Local autonomous market research and paper trading simulation platform
+Requires-Python: >=3.12
+License-File: LICENSE
+Requires-Dist: aiohttp
+Requires-Dist: websockets
+Requires-Dist: python-dotenv
+Requires-Dist: pydantic
+Requires-Dist: sqlalchemy
+Requires-Dist: aiosqlite
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: scipy
+Requires-Dist: scikit-learn
+Requires-Dist: xgboost
+Requires-Dist: river
+Requires-Dist: joblib
+Requires-Dist: ta
+Requires-Dist: rich
+Requires-Dist: textual
+Requires-Dist: fastapi<1,>=0.165
+Requires-Dist: starlette<2,>=1.10
+Requires-Dist: uvicorn[standard]<1,>=0.30
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-asyncio; extra == "dev"
+Dynamic: license-file

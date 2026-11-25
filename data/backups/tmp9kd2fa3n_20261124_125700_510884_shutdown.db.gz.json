@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T12:57:00.562812+00:00",
+  "description": "shutdown",
+  "database_name": "tmp9kd2fa3n",
+  "compressed": true,
+  "backup_file": "tmp9kd2fa3n_20261124_125700_510884_shutdown.db.gz",
+  "backup_size_bytes": 6343,
+  "sha256": "f181b734764b055954662d5ee6b126f1245e961acdac978bfe9293d8321a6ea9",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}

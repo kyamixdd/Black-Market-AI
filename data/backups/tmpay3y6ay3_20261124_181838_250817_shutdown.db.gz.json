@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "created_at": "2026-11-24T18:18:38.534009+00:00",
+  "description": "shutdown",
+  "database_name": "tmpay3y6ay3",
+  "compressed": true,
+  "backup_file": "tmpay3y6ay3_20261124_181838_250817_shutdown.db.gz",
+  "backup_size_bytes": 6280,
+  "sha256": "f1fea76c8b8bccf261702a24009648cf8f7110ad337eb406d9c9617e4bfb9b62",
+  "integrity_check": "ok",
+  "settings_backup_file": null,
+  "settings_sha256": null,
+  "settings_size_bytes": null
+}
