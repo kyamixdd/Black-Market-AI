@@ -25,7 +25,8 @@ function diagnosticFunctionTracing() {
         || file.endsWith('.d.ts')
       ) return null
 
-      const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : file.endsWith('.jsx') ? ts.ScriptKind.JSX : file.endsWith('.js') ? ts.ScriptKind.JS : ts.ScriptKind.TS
+      // Stable parser-kind numeric values avoid TypeScript 7 enum export differences.
+      const kind = file.endsWith('.tsx') ? 4 : file.endsWith('.jsx') ? 2 : file.endsWith('.js') ? 1 : 3
       const source = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, kind)
       const edits: Array<{ start: number; end: number; text: string }> = []
       const relativeFile = file.slice(file.lastIndexOf('/src/') + 5)
