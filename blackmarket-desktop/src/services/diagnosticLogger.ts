@@ -18,6 +18,8 @@ export type DiagnosticEntry = {
 const STORAGE_KEY = 'blackmarket-diagnostic-events-v1'
 const MAX_ENTRIES = 1200
 const MAX_BATCH = 80
+const FRONTEND_TRACE_KEY = 'blackmarket-frontend-function-trace-v1'
+let frontendFunctionTraceEnabled = false
 let entries: DiagnosticEntry[] = []
 let loaded = false
 let installed = false
@@ -58,6 +60,38 @@ export function recommendDiagnosticFix(error: unknown): { root_cause: string; su
   if (text.includes('401') || text.includes('403') || text.includes('unauthorized')) return { root_cause: 'The request was rejected by authentication or authorization.', suggested_fix: 'Check the authenticated desktop session and permission; do not bypass security checks.' }
   if (text.includes('429') || text.includes('rate limit')) return { root_cause: 'The request was rate-limited.', suggested_fix: 'Reduce polling/request frequency and honor retry/backoff headers.' }
   return { root_cause: 'The frontend operation failed; inspect the correlated request and stack details.', suggested_fix: 'Filter by trace_id/request_id, inspect the backend event immediately before this failure, and reproduce with the same screen and inputs.' }
+}
+
+export type FrontendFunctionTrace = { id: string; started: number; file: string; name: string } | null
+
+export function getFrontendFunctionTraceEnabled(): boolean {
+  if (typeof window === 'undefined') return frontendFunctionTraceEnabled
+  try { frontendFunctionTraceEnabled = window.localStorage.getItem(FRONTEND_TRACE_KEY) === '1' } catch { /* Keep in-memory setting. */ }
+  return frontendFunctionTraceEnabled
+}
+
+export function setFrontendFunctionTraceEnabled(enabled: boolean): void {
+  frontendFunctionTraceEnabled = enabled
+  try { window.localStorage.setItem(FRONTEND_TRACE_KEY, enabled ? '1' : '0') } catch { /* In-memory tracing still works. */ }
+  recordDiagnostic('INFO', 'frontend.function_trace.changed', { feature: 'diagnostics', function: 'setFrontendFunctionTraceEnabled', detail: `enabled=${enabled}` })
+}
+
+export function traceFunctionStart(file: string, name: string): FrontendFunctionTrace {
+  if (!getFrontendFunctionTraceEnabled()) return null
+  const context = { id: crypto.randomUUID(), started: performance.now(), file: redact(file), name: redact(name) }
+  recordDiagnostic('DEBUG', 'frontend.function.call', { feature: context.file, function: context.name, trace_id: context.id, detail: 'function entered' })
+  return context
+}
+
+export function traceFunctionFailure(context: FrontendFunctionTrace, error: unknown): void {
+  if (!context) return
+  const message = error instanceof Error ? `${error.name}: ${error.message}\\n${error.stack ?? ''}` : String(error)
+  recordDiagnostic('ERROR', 'frontend.function.failure', { feature: context.file, function: context.name, trace_id: context.id, duration_ms: Math.round(performance.now()-context.started), detail: redact(message), ...recommendDiagnosticFix(error) })
+}
+
+export function traceFunctionEnd(context: FrontendFunctionTrace, success: boolean): void {
+  if (!context) return
+  recordDiagnostic('DEBUG', 'frontend.function.complete', { feature: context.file, function: context.name, trace_id: context.id, duration_ms: Math.round(performance.now()-context.started), detail: success ? 'function completed' : 'function exited after exception' })
 }
 
 export function recordDiagnostic(
@@ -145,7 +179,7 @@ export function installDiagnosticCapture(): void {
     if (!form) return
     recordDiagnostic('INFO', 'ui.form.submit', { feature: activeScreen, function: 'submit', detail: form.getAttribute('aria-label') ?? form.className.toString().slice(0, 100) })
   }, true)
-  window.setInterval(() => { void flushDiagnosticLogs() }, 5000)
+  window.setInterval(() => { void flushDiagnosticLogs() }, 1000)
 }
 
 export async function flushDiagnosticLogs(): Promise<void> {
