@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import time
 import uuid
 import numpy as np
@@ -44,6 +45,8 @@ from market.market_cache import MarketCache
 from market.scanner import Scanner
 from notifications.telegram_client import TelegramClient
 from paper_trading.simulator import Simulator
+from risk.adaptive_risk import AdaptiveRiskEngine
+from monitoring.drift_monitor import DriftMonitor
 from core.health_monitor import HealthMonitor
 from core.observability import log_event
 
@@ -71,6 +74,9 @@ class Orchestrator:
         self.feature_engine: FeatureEngine = self.intelligence.feature_engine
         self.predictor: Predictor = self.intelligence.predictor
         self.simulator: Simulator = Simulator(self.event_bus, self.cache)
+        self.adaptive_risk: AdaptiveRiskEngine = AdaptiveRiskEngine()
+        self.simulator.adaptive_risk = self.adaptive_risk
+        self.adaptive_risk.close_riskiest_callback = self._schedule_close_riskiest_position
         self._confidence_threshold_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self.simulator.persist_order_callback = self._persist_paper_order
         self.simulator.persist_position_callback = self.repo.save_position
@@ -83,11 +89,15 @@ class Orchestrator:
             websocket_manager=self.ws_manager,
         )
         self.telegram: TelegramClient | None = TelegramClient() if TELEGRAM_ENABLED else None
+        self._telegram_queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        self._telegram_worker_task: asyncio.Task | None = None
         # Keep one canonical predictor for the API, live inference, and learning loop.
         self.learning_service = LiveLearningService(self)
         # Learning accountability
         self.outcome_labeler = OutcomeLabeler(self.repo, self.simulator)
         self.performance_analyzer = PerformanceAnalyzer(self.repo)
+        self.drift_monitor: DriftMonitor = DriftMonitor(self.repo, risk_engine=self.adaptive_risk)
+        self._last_drift_check_at: float = 0.0
         self.health_monitor: HealthMonitor = HealthMonitor()
         self._runtime_settings = {}
         self._autonomous_enabled = AUTO_PAPER_TRADING_ENABLED
@@ -345,6 +355,14 @@ class Orchestrator:
             None if websocket_healthy
             else f"Exchange WebSocket state is {websocket_state}."
         )
+        self._scanning = bool(scanner.get("running", False))
+        self._ws_connected = bool(websocket.get("active_connections", 0) > 0 or websocket_state == "LIVE")
+        list_symbols = getattr(self.registry, "list_symbols", None)
+        self._tracked_symbols = list(dict.fromkeys(
+            item["symbol"]
+            for item in ((list_symbols() if callable(list_symbols) else None) or [])
+            if isinstance(item, dict) and item.get("symbol")
+        ))
 
         predictor = self.intelligence.predictor
         model_available = bool(predictor.is_trained)
@@ -406,6 +424,9 @@ class Orchestrator:
             },
             "database_writes": self.db.write_diagnostics()
             if callable(getattr(self.db, "write_diagnostics", None))
+            else {},
+            "drift_monitor": self.drift_monitor.get_status()
+            if getattr(self, "drift_monitor", None) is not None
             else {},
         })
         return self.health_monitor.get_status()
@@ -597,7 +618,8 @@ class Orchestrator:
                 signal.get("signal_id"), reason,
             )
             if self.telegram and self._telegram_preference("decisions"):
-                await self.telegram.send_autonomous_decision(self.last_autonomous_decision)
+                decision = dict(self.last_autonomous_decision or {})
+                self._enqueue_telegram(lambda d=decision: self.telegram.send_autonomous_decision(d))
             return
         # Add strategy weight
         strategy = signal.get("strategy")
@@ -608,24 +630,27 @@ class Orchestrator:
         if not risk_ok:
             self._record_autonomous_decision(signal, "RISK_REJECTED", risk_reason)
             if self.telegram and self._telegram_preference("risk"):
-                await self.telegram.send_autonomous_decision(self.last_autonomous_decision)
+                decision = dict(self.last_autonomous_decision or {})
+                self._enqueue_telegram(lambda d=decision: self.telegram.send_autonomous_decision(d))
             return
         position_id = await self.simulator.execute_signal(signal)
         if not position_id:
             self._record_autonomous_decision(signal, "EXECUTION_REJECTED", "paper_simulator_rejected_after_risk_recheck")
             if self.telegram and self._telegram_preference("executions"):
-                await self.telegram.send_autonomous_decision(self.last_autonomous_decision)
+                decision = dict(self.last_autonomous_decision or {})
+                self._enqueue_telegram(lambda d=decision: self.telegram.send_autonomous_decision(d))
             return
         self._record_autonomous_decision(signal, "EXECUTED", "paper_position_opened", position_id=position_id)
         if self.telegram and self._telegram_preference("executions"):
-            await self.telegram.send_autonomous_decision(self.last_autonomous_decision)
+            decision = dict(self.last_autonomous_decision or {})
+            self._enqueue_telegram(lambda d=decision: self.telegram.send_autonomous_decision(d))
 
     async def _on_signal_rejected(self, event) -> None:
         signal = self._signal_payload(event)
         self._update_current_regime(signal)
         self._record_autonomous_decision(signal, "SIGNAL_REJECTED", signal.get("reason", "strategy_signal_rejected"))
         if self.telegram and self._telegram_preference("decisions"):
-            await self.telegram.send_signal_update(signal, "rejected")
+            self._enqueue_telegram(lambda s=dict(signal): self.telegram.send_signal_update(s, "rejected"))
 
     @staticmethod
     def _signal_payload(event) -> dict[str, Any]:
@@ -710,6 +735,42 @@ class Orchestrator:
     def _telegram_preference(self, category: str) -> bool:
         return bool(self._runtime_settings.get(f"telegram_notify_{category}", True))
 
+    def _ensure_telegram_worker(self) -> None:
+        if self._telegram_worker_task is None or self._telegram_worker_task.done():
+            self._telegram_worker_task = asyncio.create_task(
+                self._telegram_worker(), name="blackmarket-telegram-worker"
+            )
+
+    def _enqueue_telegram(self, factory) -> None:
+        if not self.telegram:
+            return
+        self._ensure_telegram_worker()
+        try:
+            self._telegram_queue.put_nowait(factory)
+        except asyncio.QueueFull:
+            try:
+                self._telegram_queue.get_nowait()
+                self._telegram_queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._telegram_queue.put_nowait(factory)
+            except asyncio.QueueFull:
+                pass
+            logger.warning("Telegram notification queue full; dropped oldest notification")
+
+    async def _telegram_worker(self) -> None:
+        while True:
+            factory = await self._telegram_queue.get()
+            try:
+                await factory()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Telegram notification failed: %s", type(exc).__name__)
+            finally:
+                self._telegram_queue.task_done()
+
     def get_autonomous_status(self) -> dict[str, Any]:
         predictor = self.intelligence.predictor
         try:
@@ -782,19 +843,26 @@ class Orchestrator:
 
     async def _on_signal_expired(self, event) -> None:
         if self.telegram and self._telegram_preference("decisions"):
-            await self.telegram.send_signal_update(event.payload, "expired")
+            payload = dict(event.payload)
+            self._enqueue_telegram(lambda p=payload: self.telegram.send_signal_update(p, "expired"))
 
     async def _on_market_data(self, event) -> None:
         payload = event.payload
         market = payload.get("market", "SPOT")
         symbol = payload.get("symbol")
         price = payload.get("price")
-        if price and symbol:
+        if price and price > 0 and symbol:
             await self.simulator.update_prices(market, symbol, price)
+            if any(
+                order.get("symbol") == symbol and order.get("market") == market and order.get("status") == "OPEN"
+                for order in self.simulator.open_orders.values()
+            ):
+                await self.simulator.check_limit_orders(market, symbol, price)
 
     async def _on_market_snapshot(self, event) -> None:
         """Mark open positions and check pending limits from the scanner's latest cache."""
         market = event.market or event.payload.get("market", "SPOT")
+        self._recent_snapshots = self.cache.get_all_snapshots(market)[:50]
         positions = self.simulator._get_positions(market)
         symbols = {
             position.get("symbol") for position in positions.values()
@@ -821,20 +889,88 @@ class Orchestrator:
             price = self.cache.get_price(market, symbol)
             if price and price > 0:
                 await self.simulator.check_limit_orders(market, symbol, price)
+        self._evaluate_adaptive_risk()
+        self._evaluate_drift()
+
+    def _evaluate_drift(self) -> None:
+        """Run throttled DriftMonitor checks against live runtime state."""
+        if getattr(self, "drift_monitor", None) is None:
+            return
+        now = time.monotonic()
+        if (now - getattr(self, "_last_drift_check_at", 0.0)) < 60.0:
+            return
+        self._last_drift_check_at = now
+        try:
+            cpu_pct = None
+            memory_pct = None
+            disk_pct = None
+            try:
+                import psutil
+                cpu_pct = psutil.cpu_percent(interval=None)
+                memory_pct = psutil.virtual_memory().percent
+                disk_pct = psutil.disk_usage(".").percent
+            except ImportError:
+                try:
+                    usage = shutil.disk_usage(".")
+                    if usage.total > 0:
+                        disk_pct = (usage.used / usage.total) * 100.0
+                except OSError:
+                    pass
+            regime = self._current_regime if self._current_regime != "UNKNOWN" else None
+            self.drift_monitor.check_all(
+                current_regime=regime,
+                system_cpu_pct=cpu_pct,
+                system_memory_pct=memory_pct,
+                system_disk_pct=disk_pct,
+            )
+        except Exception:
+            logger.exception("DriftMonitor evaluation failed")
+
+    def _evaluate_adaptive_risk(self) -> None:
+        """Run periodic AdaptiveRiskEngine assessment against live simulator state."""
+        if getattr(self, "adaptive_risk", None) is None:
+            return
+        try:
+            equity = self.simulator.get_account_equity_breakdown()["total_equity"]
+            open_positions = {
+                **self.simulator.spot_positions,
+                **self.simulator.futures_positions,
+            }
+            self.adaptive_risk.assess_risk(
+                portfolio_value=equity,
+                daily_pnl=self.simulator.get_daily_pnl(),
+                open_positions=open_positions,
+                current_volatility=None,
+            )
+        except Exception:
+            logger.exception("AdaptiveRiskEngine assessment failed")
 
     async def _on_position_closed(self, event) -> None:
         trade = event.payload.get("trade")
         if trade:
             self.repo.save_trade_history(trade)
+            if getattr(self, "adaptive_risk", None) is not None:
+                try:
+                    self.adaptive_risk.record_trade_result(float(trade.get("pnl", 0.0)))
+                except (TypeError, ValueError):
+                    pass
             if self.telegram and self._telegram_preference("executions"):
-                await self.telegram.send_position_closed(trade)
+                self._enqueue_telegram(lambda t=dict(trade): self.telegram.send_position_closed(t))
+
+    def _schedule_close_riskiest_position(self) -> None:
+        """Schedule closing the riskiest position when AdaptiveRiskEngine triggers it."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.simulator.close_riskiest_position())
+        except RuntimeError:
+            logger.warning("CLOSE_RISKIEST_POSITIONS triggered outside running event loop")
 
     async def _on_position_opened(self, event) -> None:
         position = event.payload.get("position")
         if position:
             self.repo.save_position(position)
             if self.telegram and self._telegram_preference("executions"):
-                await self.telegram.send_position_opened(position)
+                self._enqueue_telegram(lambda p=dict(position): self.telegram.send_position_opened(p))
 
     async def _on_order_placed(self, event) -> None:
         self._persist_paper_order(event.payload.get("order"))
@@ -874,29 +1010,27 @@ class Orchestrator:
         alert_type = payload.get("alert_type", "UNKNOWN")
         if self.telegram and self._telegram_preference("risk") and alert_type in ("DAILY_LOSS", "MARGIN_RISK", "LIQUIDATION"):
             if alert_type == "DAILY_LOSS":
-                await self.telegram.send_daily_risk_warning(
-                    self.simulator.get_daily_pnl(),
-                    self.simulator.spot_balance + self.simulator.futures_balance
-                )
+                pnl = self.simulator.get_daily_pnl()
+                bal = self.simulator.spot_balance + self.simulator.futures_balance
+                self._enqueue_telegram(lambda p=pnl, b=bal: self.telegram.send_daily_risk_warning(p, b))
             elif alert_type == "MARGIN_RISK":
-                await self.telegram.send_early_warning(
-                    f"Margin risk: {payload.get('message', '')}",
-                    payload.get("symbol", ""), payload.get("market", "")
-                )
+                msg = f"Margin risk: {payload.get('message', '')}"
+                sym = payload.get("symbol", "")
+                mkt = payload.get("market", "")
+                self._enqueue_telegram(lambda m=msg, s=sym, k=mkt: self.telegram.send_early_warning(m, s, k))
             elif alert_type == "LIQUIDATION":
-                await self.telegram.send_early_warning(
-                    f"LIQUIDATION: {payload.get('message', '')}",
-                    payload.get("symbol", ""), payload.get("market", "")
-                )
+                msg = f"LIQUIDATION: {payload.get('message', '')}"
+                sym = payload.get("symbol", "")
+                mkt = payload.get("market", "")
+                self._enqueue_telegram(lambda m=msg, s=sym, k=mkt: self.telegram.send_early_warning(m, s, k))
 
     async def _on_system_health(self, event) -> None:
         if self.telegram and self._telegram_preference("risk"):
             payload = event.payload
-            await self.telegram.send_connection_status(
-                payload.get("component", "SYSTEM"),
-                payload.get("status", "unknown"),
-                payload.get("message", "")
-            )
+            comp = payload.get("component", "SYSTEM")
+            st = payload.get("status", "unknown")
+            msg = payload.get("message", "")
+            self._enqueue_telegram(lambda c=comp, s=st, m=msg: self.telegram.send_connection_status(c, s, m))
 
     async def _handle_telegram_command(self, text: str) -> str:
         """Handle controls only after TelegramClient has verified the chat ID."""
@@ -973,15 +1107,18 @@ class Orchestrator:
 
     async def _on_model_trained(self, event) -> None:
         if self.telegram and self._telegram_preference("learning"):
-            await self.telegram.send_learning_report(event.payload)
+            payload = dict(event.payload)
+            self._enqueue_telegram(lambda p=payload: self.telegram.send_learning_report(p))
 
     async def _on_model_promoted(self, event) -> None:
         if self.telegram and self._telegram_preference("learning"):
-            await self.telegram.send_message(f"🚀 <b>MODEL PROMOTED</b>\n\nVersion: {event.payload.get('version', 'unknown')}")
+            ver = event.payload.get("version", "unknown")
+            self._enqueue_telegram(lambda v=ver: self.telegram.send_message(f"🚀 <b>MODEL PROMOTED</b>\n\nVersion: {v}"))
 
     async def _on_model_rolled_back(self, event) -> None:
         if self.telegram and self._telegram_preference("learning"):
-            await self.telegram.send_message(f"↩️ <b>MODEL ROLLED BACK</b>\n\nVersion: {event.payload.get('version', 'unknown')}")
+            ver = event.payload.get("version", "unknown")
+            self._enqueue_telegram(lambda v=ver: self.telegram.send_message(f"↩️ <b>MODEL ROLLED BACK</b>\n\nVersion: {v}"))
 
     async def _persist_event(self, event) -> None:
         """Persist critical events to SQLite for state recovery after interruptions."""
@@ -1083,6 +1220,10 @@ class Orchestrator:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
             self._tasks.clear()
+        if self._telegram_worker_task is not None:
+            self._telegram_worker_task.cancel()
+            await asyncio.gather(self._telegram_worker_task, return_exceptions=True)
+            self._telegram_worker_task = None
         await self.scanner.stop()
         await self.disaster_recovery.ws_reconnection.stop()
         await self.ws_manager.stop()
@@ -1098,6 +1239,14 @@ class Orchestrator:
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
         )
 
-    async def handle_signal(self, sig: int, frame) -> None:
+    async def handle_signal(self, sig: int, frame=None) -> None:
         logger.info("Received signal %s", sig)
         await self.stop()
+
+    def request_shutdown(self, sig: int, frame=None) -> None:
+        """Synchronous signal.signal()-compatible callback that schedules shutdown."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(lambda: asyncio.create_task(self.handle_signal(sig, frame)))
+        except RuntimeError:
+            self._running = False

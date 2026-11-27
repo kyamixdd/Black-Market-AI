@@ -22,7 +22,7 @@ class LiquidationEngine:
             return 0.0
         mmr = self.DEFAULT_MMR
 
-        if position["side"] == "LONG":
+        if str(position.get("side", "")).upper() in ("LONG", "BUY"):
             # Long liquidation: mark_price <= entry * (1 - 1/leverage + mmr)
             return entry * (1 - (1 / leverage) + mmr)
         else:
@@ -43,7 +43,7 @@ class LiquidationEngine:
         liq_price = self.calculate_liquidation_price(position)
         if liq_price <= 0:
             return False
-        if position["side"] == "LONG":
+        if str(position.get("side", "")).upper() in ("LONG", "BUY"):
             return price <= liq_price
         else:
             return price >= liq_price
@@ -63,7 +63,7 @@ class LiquidationEngine:
                 or leverage < 1.0 or entry_price <= 0 or price <= 0):
             return 0.0
 
-        if position["side"] == "LONG":
+        if str(position.get("side", "")).upper() in ("LONG", "BUY"):
             pnl_pct = (price - entry_price) / entry_price
         else:
             pnl_pct = (entry_price - price) / entry_price

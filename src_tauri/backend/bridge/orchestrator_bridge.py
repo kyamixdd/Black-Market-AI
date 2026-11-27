@@ -37,11 +37,15 @@ class OrchestratorBridge:
         self._analytics_cache: OrderedDict[tuple[str, str], tuple[float, dict]] = OrderedDict()
 
     @staticmethod
-    def _remember_cache(cache: OrderedDict, key, value) -> None:
+    def _remember_cache(cache: OrderedDict | dict, key, value) -> None:
         cache[key] = value
-        cache.move_to_end(key)
-        while len(cache) > _CACHE_MAX_ENTRIES:
-            cache.popitem(last=False)
+        if isinstance(cache, OrderedDict):
+            cache.move_to_end(key)
+            while len(cache) > _CACHE_MAX_ENTRIES:
+                cache.popitem(last=False)
+        else:
+            while len(cache) > _CACHE_MAX_ENTRIES:
+                cache.pop(next(iter(cache)))
 
 
     def get_market_data_status(self) -> dict:

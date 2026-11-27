@@ -93,8 +93,9 @@ class IntelligenceCore:
             try:
                 signal = strategy.analyze(symbol, market, ohlc_data)
                 if signal:
-                    # Add market regime
-                    trend = self.trend_analyzer.get_trend_summary(market, symbol)
+                    # Add market regime — computed once per symbol, not per-strategy (I-5)
+                    if not signals:
+                        trend = self.trend_analyzer.get_trend_summary(market, symbol)
                     signal["regime"] = trend.get("regime", "UNKNOWN")
                     signal["data_freshness"] = "LIVE"
                     # Multi-timeframe scoring using strategy selector

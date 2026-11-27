@@ -92,6 +92,12 @@ class BasePublicClient:
                     async with session.get(
                         url, params=params, timeout=aiohttp.ClientTimeout(total=timeout)
                     ) as resp:
+                        used_weight = resp.headers.get("X-MBX-USED-WEIGHT-1M")
+                        if used_weight is not None and hasattr(self.rate_limiter, "update_used_weight"):
+                            try:
+                                self.rate_limiter.update_used_weight(f"{self.name}_rest", int(used_weight))
+                            except (TypeError, ValueError):
+                                pass
                         if resp.status in (418, 429) or 500 <= resp.status <= 599:
                             if attempt >= self._max_retries:
                                 resp.raise_for_status()

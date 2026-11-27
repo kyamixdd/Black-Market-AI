@@ -35,6 +35,7 @@ class BaseStrategy(ABC):
             "stop_loss": stop_loss,
             "take_profit": take_profit,
             "raw_score": score,
+            "confidence": max(0.0, min(1.0, score / 100.0)),
             "reasons": reasons,
             "created_at": datetime.now(timezone.utc),
         }

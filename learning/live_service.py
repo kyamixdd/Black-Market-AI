@@ -25,6 +25,37 @@ from core.observability import log_event
 logger = logging.getLogger(__name__)
 
 
+def _downsample_ohlc(candles_1h: list[dict[str, Any]], ratio: int) -> dict[str, np.ndarray]:
+    """Aggregate 1h candles into a coarser timeframe (ratio = bars per candle).
+
+    Returns a dict with open/high/low/close/volume arrays, discarding incomplete
+    leading bars so that every output bar covers exactly `ratio` input bars.
+    """
+    # Align to complete groups from the end so we always have full bars
+    aligned = candles_1h[len(candles_1h) % ratio:]
+    if not aligned:
+        return {}
+    opens, highs, lows, closes, volumes = [], [], [], [], []
+    for i in range(0, len(aligned), ratio):
+        chunk = aligned[i:i + ratio]
+        if not chunk:
+            continue
+        opens.append(chunk[0]["open"])
+        highs.append(max(c["high"] for c in chunk))
+        lows.append(min(c["low"] for c in chunk))
+        closes.append(chunk[-1]["close"])
+        volumes.append(sum(c["volume"] for c in chunk))
+    if not opens:
+        return {}
+    return {
+        "open": np.array(opens, dtype=np.float64),
+        "high": np.array(highs, dtype=np.float64),
+        "low": np.array(lows, dtype=np.float64),
+        "close": np.array(closes, dtype=np.float64),
+        "volume": np.array(volumes, dtype=np.float64),
+    }
+
+
 class LiveLearningService:
     """Runs real historical bootstrap, then emits and labels live hourly predictions."""
 
@@ -154,7 +185,7 @@ class LiveLearningService:
             candles = histories.get((market, symbol), [])
             for index in range(50, len(candles) - 1):
                 window = candles[max(0, index - 199):index + 1]
-                feature = self.features.build_features(symbol, market, {"1h": self._ohlc(window)})
+                feature = self.features.build_features(symbol, market, self._build_ohlc_dict(window))
                 if feature.shape != (36,) or not np.isfinite(feature).all():
                     continue
                 price = float(candles[index]["close"])
@@ -166,11 +197,7 @@ class LiveLearningService:
                     else 1
                 )
                 close_time = int(candles[index]["close_time"])
-                recent_close = np.asarray([float(item["close"]) for item in candles[max(0, index - 20):index + 1]], dtype=float)
-                recent_returns = np.diff(np.log(recent_close)) if len(recent_close) > 1 else np.asarray([], dtype=float)
-                trend_return = recent_close[-1] / recent_close[0] - 1.0 if len(recent_close) > 1 and recent_close[0] > 0 else 0.0
-                volatility = float(np.std(recent_returns)) if len(recent_returns) else 0.0
-                regime = "VOLATILE" if volatility >= 0.015 else "TREND_UP" if trend_return >= 0.02 else "TREND_DOWN" if trend_return <= -0.02 else "RANGE"
+                regime = self._classify_regime(candles[max(0, index - 20):index + 1])
                 # Fees and slippage are the same round-trip cost calculation used by outcome labeling.
                 costs = cost_labeler._calculate_costs(market, "UP", price, next_price) / price
                 samples.append((close_time, feature, label, forward_return * 100.0, costs, regime, market, 60))
@@ -551,6 +578,53 @@ class LiveLearningService:
             recommendation=None if history_failures == 0 else "Inspect learning_live_history_failed entries; successfully collected symbols continued through labeling.",
         )
 
+    @staticmethod
+    def _build_ohlc_dict(candles_window: list[dict[str, Any]], base_tf: str = "1h") -> dict[str, dict[str, np.ndarray]]:
+        """Build multi-timeframe OHLC dict from a 1h candle window."""
+        base_ohlc = LiveLearningService._static_ohlc(candles_window)
+        ohlc: dict[str, dict[str, np.ndarray]] = {}
+        if base_ohlc:
+            ohlc[base_tf] = base_ohlc
+        # 15m not constructible from 1h (would need finer data) — omit rather than fabricate
+        # 4h = every 4 × 1h bars
+        d4h = _downsample_ohlc(candles_window, 4)
+        if d4h:
+            ohlc["4h"] = d4h
+        # 1d = every 24 × 1h bars
+        d1d = _downsample_ohlc(candles_window, 24)
+        if d1d:
+            ohlc["1d"] = d1d
+        return ohlc
+
+    @staticmethod
+    def _static_ohlc(window: list[dict[str, Any]]) -> dict[str, np.ndarray]:
+        if not window:
+            return {}
+        return {
+            "open": np.array([c["open"] for c in window], dtype=np.float64),
+            "high": np.array([c["high"] for c in window], dtype=np.float64),
+            "low": np.array([c["low"] for c in window], dtype=np.float64),
+            "close": np.array([c["close"] for c in window], dtype=np.float64),
+            "volume": np.array([c["volume"] for c in window], dtype=np.float64),
+        }
+
+    @classmethod
+    def _classify_regime(cls, candles_window: list[dict[str, Any]]) -> str:
+        """Classify market regime from a closed-candle window."""
+        if not candles_window:
+            return "RANGE"
+        recent_close = np.asarray([float(item["close"]) for item in candles_window], dtype=float)
+        recent_returns = np.diff(np.log(recent_close)) if len(recent_close) > 1 else np.asarray([], dtype=float)
+        trend_return = recent_close[-1] / recent_close[0] - 1.0 if len(recent_close) > 1 and recent_close[0] > 0 else 0.0
+        volatility = float(np.std(recent_returns)) if len(recent_returns) else 0.0
+        if volatility >= 0.015:
+            return "VOLATILE"
+        if trend_return >= 0.02:
+            return "TREND_UP"
+        if trend_return <= -0.02:
+            return "TREND_DOWN"
+        return "RANGE"
+
     async def _record_prediction(self, market: str, symbol: str, candles: list[dict[str, Any]]) -> None:
         closed = [candle for candle in candles if int(candle["close_time"]) < int(datetime.now(timezone.utc).timestamp() * 1000)]
         if len(closed) < 50:
@@ -561,10 +635,11 @@ class LiveLearningService:
         if self._last_prediction_open.get(key) == open_time:
             return
         series = [item for item in candles if int(item["close_time"]) <= int(candle["close_time"])] [-200:]
-        feature = self.features.build_features(symbol, market, {"1h": self._ohlc(series)})
+        feature = self.features.build_features(symbol, market, self._build_ohlc_dict(series))
         if feature.shape != (36,) or not np.isfinite(feature).all():
             return
         prediction = self.predictor.predict(feature)
+        regime = self._classify_regime(series[-21:])
         created_at = datetime.fromtimestamp((int(candle["close_time"]) + 1) / 1000, timezone.utc)
         prediction_id = f"live:{market}:{symbol}:1h:{open_time}"
         self.repo.save_prediction({
@@ -574,7 +649,7 @@ class LiveLearningService:
             "timeframe": "1h",
             "model_version": str(prediction.get("model_version") or "untrained")[:32],
             "strategy_version": "live_hourly_ensemble",
-            "regime": "UNKNOWN",
+            "regime": regime,
             "horizon_minutes": 60,
             "prob_up": float(prediction["prob_up"]),
             "prob_down": float(prediction["prob_down"]),
@@ -614,6 +689,9 @@ class LiveLearningService:
                 logger.exception("Unable to apply online update for prediction %s", prediction.prediction_id)
         if updates:
             self.river_updates += updates
+            # Apply the updated River model back to the predictor so live
+            # inference uses the online-learned weights
+            self.predictor.river_model = self._river_model
             log_event(
                 logger, logging.INFO, "learning_online_updates_applied",
                 component="learning", operation="learn_resolved_predictions",

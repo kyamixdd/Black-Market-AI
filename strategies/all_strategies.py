@@ -11,11 +11,12 @@ from strategies.base_strategy import BaseStrategy
 
 
 class TrendFollowingStrategy(BaseStrategy):
-    def __init__(self):
+    def __init__(self, timeframe: str = "1h"):
         super().__init__("trend_following")
+        self._timeframe = timeframe
 
     def analyze(self, symbol: str, market: str, ohlc_data: dict[str, dict[str, np.ndarray]]) -> dict[str, Any] | None:
-        tf = "1h"
+        tf = self._timeframe
         if tf not in ohlc_data:
             return None
         data = ohlc_data[tf]
@@ -43,11 +44,12 @@ class TrendFollowingStrategy(BaseStrategy):
 
 
 class MeanReversionStrategy(BaseStrategy):
-    def __init__(self):
+    def __init__(self, timeframe: str = "15m"):
         super().__init__("mean_reversion")
+        self._timeframe = timeframe
 
     def analyze(self, symbol: str, market: str, ohlc_data: dict[str, dict[str, np.ndarray]]) -> dict[str, Any] | None:
-        tf = "15m"
+        tf = self._timeframe
         if tf not in ohlc_data:
             return None
         data = ohlc_data[tf]
@@ -72,11 +74,12 @@ class MeanReversionStrategy(BaseStrategy):
 
 
 class ReversalStrategy(BaseStrategy):
-    def __init__(self):
+    def __init__(self, timeframe: str = "15m"):
         super().__init__("reversal")
+        self._timeframe = timeframe
 
     def analyze(self, symbol: str, market: str, ohlc_data: dict[str, dict[str, np.ndarray]]) -> dict[str, Any] | None:
-        tf = "15m"
+        tf = self._timeframe
         if tf not in ohlc_data:
             return None
         data = ohlc_data[tf]

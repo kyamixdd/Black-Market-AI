@@ -72,11 +72,11 @@ class DatabaseBackupManager:
             # Perform backup using SQLite's backup API
             self._perform_backup(backup_path)
 
-            # Verify integrity
-            if self.config.verify_after_backup:
-                if not self._verify_backup(backup_path):
-                    backup_path.unlink(missing_ok=True)
-                    raise RuntimeError("Backup verification failed")
+            # Verify integrity once
+            verified = self._verify_backup(backup_path)
+            if self.config.verify_after_backup and not verified:
+                backup_path.unlink(missing_ok=True)
+                raise RuntimeError("Backup verification failed")
 
             settings_backup_path = Path(str(backup_path) + ".settings.json")
             settings_metadata = {"settings_backup_file": None, "settings_sha256": None, "settings_size_bytes": None}
@@ -111,10 +111,10 @@ class DatabaseBackupManager:
                 "backup_file": backup_path.name,
                 "backup_size_bytes": backup_path.stat().st_size,
                 "sha256": self._sha256_file(backup_path),
-                "integrity_check": "ok" if self._verify_backup(backup_path) else "not_verified",
+                "integrity_check": "ok" if verified else "not_verified",
                 **settings_metadata,
             }
-            if metadata["integrity_check"] != "ok":
+            if self.config.verify_after_backup and metadata["integrity_check"] != "ok":
                 backup_path.unlink(missing_ok=True)
                 raise RuntimeError("Backup metadata validation failed")
             metadata_tmp = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
@@ -380,7 +380,7 @@ class IdempotentEventProcessor:
 
     def __init__(self, db: Database):
         self.db = db
-        self._processed_cache: set[str] = set()
+        self._processed_cache: dict[str, None] = {}
         self._cache_lock = threading.RLock()
         self._max_cache_size = 100000
         self._load_processed_ids()
@@ -392,25 +392,27 @@ class IdempotentEventProcessor:
         # Load last 100k event IDs
         events = repo.get_system_events(limit=100000)
         with self._cache_lock:
-            self._processed_cache = {e.event_id for e in events}
+            self._processed_cache = {e.event_id: None for e in events}
 
     def is_processed(self, event_id: str) -> bool:
         """Check if event was already processed."""
         with self._cache_lock:
             if event_id in self._processed_cache:
                 return True
-            # Check database for older events
-            from database.repositories import Repository
-            repo = Repository(self.db.session_maker())
-            return repo.event_exists(event_id)
+        # Check database for older events without holding the lock across I/O
+        from database.repositories import Repository
+        repo = Repository(self.db.session_maker())
+        return repo.event_exists(event_id)
 
     def mark_processed(self, event_id: str) -> None:
         """Mark event as processed."""
         with self._cache_lock:
-            self._processed_cache.add(event_id)
-            if len(self._processed_cache) > self._max_cache_size:
-                # Remove oldest entries (simple FIFO)
-                self._processed_cache = set(list(self._processed_cache)[-self._max_cache_size:])
+            if event_id in self._processed_cache:
+                self._processed_cache.pop(event_id, None)
+            self._processed_cache[event_id] = None
+            while len(self._processed_cache) > self._max_cache_size:
+                oldest = next(iter(self._processed_cache))
+                self._processed_cache.pop(oldest, None)
 
     def process_event(self, event_id: str, handler: Callable[[], Any]) -> tuple[bool, Any]:
         """
@@ -450,9 +452,8 @@ class PersistentEventQueue:
     def enqueue(self, event_type: str, payload: dict, priority: int = 0) -> str:
         """Add event to persistent queue."""
         import uuid
-        event_id = str(uuid.uuid4())[:8]
+        event_id = f"q-{uuid.uuid4().hex[:12]}"
         with self._lock:
-            # Store in database
             from database.repositories import Repository
             repo = Repository(self.db.session_maker())
             repo.save_system_event({
@@ -461,22 +462,45 @@ class PersistentEventQueue:
                 "source": "PersistentEventQueue",
                 "symbol": None,
                 "market": None,
-                "payload": json.dumps({
+                "payload": {
                     "queue": self.queue_name,
                     "type": event_type,
                     "payload": payload,
                     "priority": priority,
+                    "status": "PENDING",
                     "enqueued_at": datetime.now(timezone.utc).isoformat(),
-                }),
+                },
             })
         return event_id
 
     def dequeue(self, limit: int = 100) -> list[dict]:
-        """Dequeue events for processing."""
+        """Dequeue pending events for processing ordered by priority desc."""
         with self._lock:
-            # This would need a proper queue table implementation
-            # For now, return empty - full implementation needs queue table
-            return []
+            from database.repositories import Repository
+            repo = Repository(self.db.session_maker())
+            prefix = f"QUEUE_{self.queue_name}_"
+            rows = repo.get_system_events(limit=max(limit * 4, 200))
+            items: list[dict] = []
+            for row in rows:
+                if not str(row.event_type or "").startswith(prefix):
+                    continue
+                try:
+                    raw = json.loads(row.payload) if isinstance(row.payload, str) else row.payload
+                    if isinstance(raw, str):
+                        raw = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(raw, dict) or raw.get("status") == "COMPLETED":
+                    continue
+                items.append({
+                    "event_id": row.event_id,
+                    "type": raw.get("type"),
+                    "payload": raw.get("payload", {}),
+                    "priority": int(raw.get("priority", 0)),
+                    "enqueued_at": raw.get("enqueued_at"),
+                })
+            items.sort(key=lambda item: item["priority"], reverse=True)
+            return items[:max(0, limit)]
 
     def mark_completed(self, event_id: str) -> None:
         """Mark queue event as completed."""
@@ -864,12 +888,23 @@ class RESTResynchronizationManager:
         symbol_registry,
         candle_manager,
         max_symbols_per_sync: int = 100,
+        rate_limiter=None,
+        spot_enabled: Optional[bool] = None,
+        futures_enabled: Optional[bool] = None,
+        timeframes: Optional[list[str]] = None,
     ):
+        from config import SPOT_ENABLED, TIMEFRAMES, USDM_FUTURES_ENABLED
         self.spot_client = spot_client
         self.futures_client = futures_client
         self.symbol_registry = symbol_registry
         self.candle_manager = candle_manager
         self.max_symbols_per_sync = max_symbols_per_sync
+        self.rate_limiter = rate_limiter or getattr(spot_client, "rate_limiter", None)
+        self.spot_enabled = SPOT_ENABLED if spot_enabled is None else spot_enabled
+        self.futures_enabled = USDM_FUTURES_ENABLED if futures_enabled is None else futures_enabled
+        self.timeframes = list(timeframes) if timeframes is not None else [
+            tf for tf in TIMEFRAMES if tf in {"1m", "5m", "15m", "1h", "4h", "1d"}
+        ] or ["1m", "5m", "15m", "1h", "4h", "1d"]
 
     async def resync_all(self) -> dict[str, int]:
         """Perform full resynchronization."""
@@ -879,14 +914,16 @@ class RESTResynchronizationManager:
         from exchange.market_discovery import MarketDiscovery
         from exchange.rate_limiter import RateLimiter
 
-        rate_limiter = RateLimiter()
-        discovery = MarketDiscovery(self.symbol_registry, rate_limiter, True, True)
+        rate_limiter = self.rate_limiter or RateLimiter()
+        discovery = MarketDiscovery(
+            self.symbol_registry, rate_limiter, self.spot_enabled, self.futures_enabled
+        )
         await discovery.discover_all()
         results["symbols"] = len(self.symbol_registry.list_symbols())
 
         # 2. Resync tickers
-        spot_tickers = await self.spot_client.get_all_tickers()
-        futures_tickers = await self.futures_client.get_all_tickers()
+        spot_tickers = await self.spot_client.get_all_tickers() if self.spot_enabled else []
+        futures_tickers = await self.futures_client.get_all_tickers() if self.futures_enabled else []
         results["tickers"] = len(spot_tickers) + len(futures_tickers)
 
         # 3. Resync candles for active symbols
@@ -894,7 +931,9 @@ class RESTResynchronizationManager:
         for sym_info in symbols:
             symbol = sym_info["symbol"]
             market = sym_info["market"]
-            for tf in ["1m", "5m", "15m", "1h", "4h", "1d"]:
+            if (market == "SPOT" and not self.spot_enabled) or (market == "FUTURES" and not self.futures_enabled):
+                continue
+            for tf in self.timeframes:
                 try:
                     client = self.spot_client if market == "SPOT" else self.futures_client
                     klines = await client.get_klines(symbol, tf, limit=200)
@@ -926,7 +965,7 @@ class TelegramRetryManager:
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.max_delay = max_delay
-        self._pending: dict[str, tuple[Callable, int]] = {}
+        self._pending: dict[str, tuple[Callable, tuple, dict, int, float]] = {}
         self._lock = threading.RLock()
 
     async def send_with_retry(self, method: Callable, *args, **kwargs) -> bool:
@@ -949,16 +988,32 @@ class TelegramRetryManager:
     def queue_notification(self, notification_id: str, method: Callable, *args, **kwargs) -> None:
         """Queue notification for later retry."""
         with self._lock:
-            self._pending[notification_id] = (method, args, kwargs, 0)
+            self._pending[notification_id] = (method, args, kwargs, 0, 0.0)
 
     async def process_queue(self) -> None:
-        """Process queued notifications."""
+        """Process due queued notifications in FIFO order without head-of-line blocking."""
         while True:
+            now = time.monotonic()
+            due_item = None
+            next_due_at: float | None = None
             with self._lock:
                 if not self._pending:
                     break
-                notification_id, (method, args, kwargs, attempts) = self._pending.popitem()
+                for notification_id, entry in list(self._pending.items()):
+                    method, args, kwargs, attempts, ready_at = entry
+                    if ready_at <= now:
+                        self._pending.pop(notification_id, None)
+                        due_item = (notification_id, method, args, kwargs, attempts)
+                        break
+                    if next_due_at is None or ready_at < next_due_at:
+                        next_due_at = ready_at
 
+            if due_item is None:
+                sleep_for = max(0.05, min((next_due_at or now) - now, 60.0))
+                await asyncio.sleep(sleep_for)
+                continue
+
+            notification_id, method, args, kwargs, attempts = due_item
             if attempts >= self.max_retries:
                 logger.error(f"Notification {notification_id} failed permanently")
                 continue
@@ -970,11 +1025,13 @@ class TelegramRetryManager:
             except Exception as e:
                 logger.warning(f"Queued notification {notification_id} attempt {attempts + 1} failed: {e}")
 
-            # Re-queue with incremented attempts
+            next_attempts = attempts + 1
+            if next_attempts >= self.max_retries:
+                logger.error(f"Notification {notification_id} failed permanently")
+                continue
+            delay = min(self.base_delay * (2 ** attempts), 60.0)
             with self._lock:
-                self._pending[notification_id] = (method, args, kwargs, attempts + 1)
-
-            await asyncio.sleep(min(self.base_delay * (2 ** attempts), 60.0))
+                self._pending[notification_id] = (method, args, kwargs, next_attempts, time.monotonic() + delay)
 
 
 class WatchdogMonitor:
@@ -1215,8 +1272,20 @@ class DisasterRecoveryOrchestrator:
                     logger.error(f"Auto backup failed: {e}")
 
     def _on_stall(self) -> None:
-        """Log stalls; component restart is not implemented by this handler."""
-        logger.critical("System stall detected; automatic watchdog recovery is not implemented")
+        """Trigger best-effort recovery when the watchdog detects a stall."""
+        logger.critical("System stall detected; initiating recovery callback")
+        if self.persist_state is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.persist_state())
+            except RuntimeError:
+                pass
+        if self.reconnect_callback is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.reconnect_callback())
+            except RuntimeError:
+                pass
 
 
 def create_disaster_recovery_orchestrator(

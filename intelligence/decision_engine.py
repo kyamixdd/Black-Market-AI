@@ -24,6 +24,10 @@ class DecisionEngine:
         is_valid, reason = self.validator.validate(signal)
         if not is_valid:
             logger.debug("Signal %s rejected: %s", signal["signal_id"], reason)
+            await self.event_bus.publish(make_event(
+                EventType.SIGNAL_REJECTED, "decision_engine",
+                reason=reason, **signal
+            ))
             return
         # Evaluate confidence
         confidence = self.confidence_engine.calculate(signal)

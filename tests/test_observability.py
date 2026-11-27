@@ -39,3 +39,15 @@ def test_log_event_does_not_emit_sensitive_fields(caplog):
     assert "paper_order" in caplog.text
     assert "BTCUSDT" in caplog.text
     assert "do-not-log" not in caplog.text
+
+
+def test_log_formatter_preserves_custom_extra_fields():
+    record = logging.LogRecord(
+        "test", logging.INFO, __file__, 1, "custom event", (), None,
+    )
+    record.custom_metric = 42
+    record.custom_secret = "token=abc123"
+    payload = json.loads(JsonLogFormatter().format(record))
+    assert payload["custom_metric"] == 42
+    assert "abc123" not in payload["custom_secret"]
+    assert "[REDACTED]" in payload["custom_secret"]

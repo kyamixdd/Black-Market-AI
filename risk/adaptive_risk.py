@@ -164,6 +164,7 @@ class AdaptiveRiskEngine:
         # History for trend analysis
         self._risk_history: list[RiskAssessment] = []
         self._max_history = 100
+        self.close_riskiest_callback: Any = None
 
     @property
     def effective_risk_per_trade(self) -> float:
@@ -189,11 +190,17 @@ class AdaptiveRiskEngine:
     def effective_max_futures_positions(self) -> int:
         return self._effective_max_futures_positions
 
+    def _sync_cooldown_locked(self) -> None:
+        """Clear expired cooldown and its pause flag (caller must hold self._lock)."""
+        if self._cooldown_until is not None and datetime.now(timezone.utc) >= self._cooldown_until:
+            self._cooldown_until = None
+            self._paused = False
+            logger.info("Cooldown expired; entries unpaused")
+
     @property
     def is_paused(self) -> bool:
         with self._lock:
-            if self._cooldown_until and datetime.now(timezone.utc) < self._cooldown_until:
-                return True
+            self._sync_cooldown_locked()
             return self._paused
 
     @property
@@ -236,6 +243,7 @@ class AdaptiveRiskEngine:
             RiskAssessment with level, factors, and recommended actions
         """
         with self._lock:
+            self._sync_cooldown_locked()
             factors = []
 
             # 1. Current volatility
@@ -828,6 +836,11 @@ class AdaptiveRiskEngine:
 
     def _apply_actions(self, actions: list[RiskAction], assessment: RiskAssessment) -> None:
         """Apply risk mitigation actions (reduce effective limits)."""
+        if assessment.overall_level == RiskLevel.NORMAL and not actions:
+            self._restore_limits()
+            if self._cooldown_until is None:
+                self._paused = False
+            return
         if not actions:
             return
 
@@ -881,9 +894,15 @@ class AdaptiveRiskEngine:
             self._effective_daily_loss = self._admin_max_daily_loss * reduction
             logger.warning(f"Reduced daily loss limit to {self._effective_daily_loss}%")
 
-        # Close riskiest positions - would need integration with simulator
+        # Close riskiest positions via registered simulator callback
         if RiskAction.CLOSE_RISKIEST_POSITIONS in actions:
-            logger.critical("CLOSE_RISKIEST_POSITIONS action triggered - requires simulator integration")
+            if callable(self.close_riskiest_callback):
+                try:
+                    self.close_riskiest_callback()
+                except Exception:
+                    logger.exception("CLOSE_RISKIEST_POSITIONS callback failed")
+            else:
+                logger.critical("CLOSE_RISKIEST_POSITIONS action triggered - no simulator callback registered")
 
     def record_trade_result(self, pnl: float) -> None:
         """Record trade result for consecutive loss tracking."""
@@ -914,6 +933,7 @@ class AdaptiveRiskEngine:
     def get_status(self) -> dict[str, Any]:
         """Get current risk engine status."""
         with self._lock:
+            self._sync_cooldown_locked()
             return {
                 "paused": self._paused,
                 "cooldown_until": self._cooldown_until.isoformat() if self._cooldown_until else None,
@@ -945,6 +965,7 @@ class AdaptiveRiskEngine:
     def can_open_position(self, market: str, current_positions: int) -> tuple[bool, str]:
         """Check if a new position can be opened."""
         with self._lock:
+            self._sync_cooldown_locked()
             if self._paused:
                 if self._cooldown_until:
                     return False, f"Cooldown active until {self._cooldown_until}"

@@ -334,6 +334,7 @@ function App() {
   const [historyExhaustedKey, setHistoryExhaustedKey] = useState('')
   const [historyFailure, setHistoryFailure] = useState<{ key: string; message: string } | null>(null)
   const [socketError, setSocketError] = useState('')
+  const [startupToastDismissed, setStartupToastDismissed] = useState(false)
   const [retryToken, setRetryToken] = useState(0)
   const [connection, setConnection] = useState<Connection>('connecting')
   const [loadedMarketKey, setLoadedMarketKey] = useState('')
@@ -490,7 +491,7 @@ function App() {
               setApiToken(token)
             }
             const authenticatedResponse = await fetch(
-              isTauri ? `${backendBaseUrl()}/system/status` : `${backendBaseUrl()}/system/status`,
+              `${backendBaseUrl()}/system/status`,
               {
                 headers: isTauri ? getApiAuthorization() : undefined,
                 signal: controller.signal,
@@ -1195,7 +1196,7 @@ function App() {
       const fallback = assistantAnswer(trimmed)
       setMessages((current) => current.map((message) =>
         message.id === assistantId
-          ? { ...message, text: `Local assistant unavailable (${String(error)}).\\n\\nFallback summary from currently loaded dashboard data: ${fallback}` }
+          ? { ...message, text: `Local assistant unavailable (${String(error)}).\n\nFallback summary from currently loaded dashboard data: ${fallback}` }
           : message,
       ))
     }
@@ -1313,7 +1314,7 @@ function App() {
 
   return (
     <main className="terminal">
-      {!appReady && (
+      {!appReady && !startupToastDismissed && (
         <aside className={`startup-toast ${startupStatus.state === 'failed' || socketError || currentMarketDataStatus === 'error' ? 'is-error' : 'is-loading'}`} role="status" aria-live="polite">
           <span className="startup-toast-indicator" aria-hidden="true" />
           <span className="startup-toast-copy">
@@ -1324,7 +1325,7 @@ function App() {
           {startupStatus.state === 'failed' && (
             <button type="button" className="startup-toast-action" onClick={() => void retryStartup()}>Retry</button>
           )}
-          <button type="button" className="startup-toast-dismiss" aria-label="Dismiss connection notice" onClick={(event) => event.currentTarget.parentElement?.remove()}>×</button>
+          <button type="button" className="startup-toast-dismiss" aria-label="Dismiss connection notice" onClick={() => setStartupToastDismissed(true)}>×</button>
         </aside>
       )}
       <header className="topbar" data-tauri-drag-region>

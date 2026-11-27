@@ -272,7 +272,10 @@ class StrategyEvolutionEngine:
         # Apply parameter changes to create test configuration
         test_params = self._apply_changes(config.parameter_changes)
 
-        # Create backtest config
+        # Create backtest config with the applied parameter changes
+        # Note: test_params contains strategy-level parameter overrides that affect
+        # strategy internals; BacktestConfig has no field for these (it only has
+        # parameter_grid for sensitivity sweeps), so they are not passed here.
         bt_config = BacktestConfig(
             start_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
             end_date=datetime(2024, 6, 30, tzinfo=timezone.utc),
@@ -465,8 +468,11 @@ class StrategyEvolutionEngine:
         if win_rate_improvement < self._experiments[result.experiment_id].min_win_rate_improvement:
             return False
 
-        # Out-of-sample consistency
-        if result.comparison.get("out_of_sample", {}).get("sharpe", 0) < 0.5:
+        # Out-of-sample consistency — _compare_results writes "test_sharpe" under "out_of_sample".
+        # Fall back to "sharpe" for compatibility with test mocks that use the old key name.
+        oos = result.comparison.get("out_of_sample", {})
+        oos_sharpe = oos.get("test_sharpe") if oos.get("test_sharpe") is not None else oos.get("sharpe", 0)
+        if oos_sharpe < 0.5:
             return False
 
         return True
@@ -547,25 +553,43 @@ class StrategyEvolutionEngine:
 
     def _get_shadow_performance(self, experiment_id: str) -> dict:
         """Get shadow test performance from live paper trading."""
-        # In production, this would query the simulator for trades
-        # using the experiment's parameters
-        return {
-            "total_trades": 25,
-            "total_pnl": 45.20,
-            "win_rate": 0.64,
-            "max_drawdown_pct": 3.2,
-            "sharpe_ratio": 1.45,
-        }
+        if hasattr(self, "_simulator") and self._simulator is not None:
+            try:
+                closed = list(getattr(self._simulator, "closed_trades", []))
+                exp_trades = [t for t in closed if t.get("strategy", "").startswith(experiment_id)]
+                if exp_trades:
+                    total_pnl = sum(float(t.get("pnl", 0)) for t in exp_trades)
+                    wins = sum(1 for t in exp_trades if float(t.get("pnl", 0)) > 0)
+                    win_rate = wins / len(exp_trades) if exp_trades else 0.0
+                    pnls = [float(t.get("pnl", 0)) for t in exp_trades]
+                    max_dd = max((0.0, max((sum(pnls[:i]) - sum(pnls[:j]) for i in range(len(pnls)) for j in range(i + 1, len(pnls) + 1)), default=0.0)))
+                    returns = [p for p in pnls if p != 0]
+                    sharpe = (sum(returns) / len(returns)) / (max(float(__import__("statistics").stdev(returns) if len(returns) > 1 else 0.0), 1e-9)) if returns else 0.0
+                    return {"total_trades": len(exp_trades), "total_pnl": total_pnl, "win_rate": win_rate, "max_drawdown_pct": max_dd, "sharpe_ratio": sharpe}
+            except Exception:
+                logger.exception("Could not read shadow performance from simulator for %s", experiment_id)
+        logger.warning("Shadow performance unavailable for %s — simulator not wired; returning empty", experiment_id)
+        return {"total_trades": 0, "total_pnl": 0.0, "win_rate": 0.0, "max_drawdown_pct": 0.0, "sharpe_ratio": 0.0}
 
     def _get_baseline_shadow_performance(self, days: int) -> dict:
-        """Get baseline shadow performance."""
-        return {
-            "total_trades": 30,
-            "total_pnl": 38.50,
-            "win_rate": 0.60,
-            "max_drawdown_pct": 2.8,
-            "sharpe_ratio": 1.20,
-        }
+        """Get baseline shadow performance from live paper trading."""
+        if hasattr(self, "_simulator") and self._simulator is not None:
+            try:
+                closed = list(getattr(self._simulator, "closed_trades", []))
+                baseline_trades = [t for t in closed if not t.get("strategy", "").startswith("exp_")]
+                if baseline_trades:
+                    total_pnl = sum(float(t.get("pnl", 0)) for t in baseline_trades)
+                    wins = sum(1 for t in baseline_trades if float(t.get("pnl", 0)) > 0)
+                    win_rate = wins / len(baseline_trades) if baseline_trades else 0.0
+                    pnls = [float(t.get("pnl", 0)) for t in baseline_trades]
+                    max_dd = max((0.0, max((sum(pnls[:i]) - sum(pnls[:j]) for i in range(len(pnls)) for j in range(i + 1, len(pnls) + 1)), default=0.0)))
+                    returns = [p for p in pnls if p != 0]
+                    sharpe = (sum(returns) / len(returns)) / (max(float(__import__("statistics").stdev(returns) if len(returns) > 1 else 0.0), 1e-9)) if returns else 0.0
+                    return {"total_trades": len(baseline_trades), "total_pnl": total_pnl, "win_rate": win_rate, "max_drawdown_pct": max_dd, "sharpe_ratio": sharpe}
+            except Exception:
+                logger.exception("Could not read baseline shadow performance from simulator")
+        logger.warning("Baseline shadow performance unavailable — simulator not wired; returning empty")
+        return {"total_trades": 0, "total_pnl": 0.0, "win_rate": 0.0, "max_drawdown_pct": 0.0, "sharpe_ratio": 0.0}
 
     def _compare_shadow_results(self, test: dict, baseline: dict) -> dict:
         """Compare shadow test results."""

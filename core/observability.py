@@ -25,6 +25,14 @@ def redact_sensitive_text(value: str) -> str:
     return result
 
 
+_STANDARD_LOG_RECORD_KEYS = frozenset(
+    logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()
+) | {"message", "asctime"}
+_SENSITIVE_FIELD_NAMES = frozenset(
+    {"token", "password", "secret", "authorization", "api_key", "access_token", "refresh_token", "credential"}
+)
+
+
 class JsonLogFormatter(logging.Formatter):
     """Emit one compact JSON object per log record."""
 
@@ -35,22 +43,12 @@ class JsonLogFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact_sensitive_text(record.getMessage()),
         }
-        for key in (
-            "event", "request_id", "method", "path", "endpoint", "status_code",
-            "duration_ms", "component", "operation", "symbol", "market",
-            "order_type", "reason", "recommendation", "details", "outcome",
-            "phase", "state", "scanner_state", "symbols_selected",
-            "refresh_successes", "refresh_failures", "refresh_skipped",
-            "symbol_count", "eligible_count", "candidate_count", "signal_count",
-            "timeframe_count", "failed_count", "skipped_count", "labeled_count",
-            "online_updates", "handler_count", "error_type",
-            "exception_type", "frontend_event_id", "table", "query_type",
-            "affected_rows", "event_type", "handler", "queue_capacity",
-            "dropped_count",
-        ):
-            value = getattr(record, key, None)
-            if value is not None:
-                payload[key] = redact_sensitive_text(value) if isinstance(value, str) else value
+        for key, value in record.__dict__.items():
+            if key in _STANDARD_LOG_RECORD_KEYS or key.startswith("_"):
+                continue
+            if key.lower() in _SENSITIVE_FIELD_NAMES or value is None:
+                continue
+            payload[key] = redact_sensitive_text(value) if isinstance(value, str) else value
         if record.exc_info:
             payload["exception"] = redact_sensitive_text(self.formatException(record.exc_info))
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)

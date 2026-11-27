@@ -27,7 +27,7 @@ if not exist "%DESKTOP_DIR%\node_modules\.bin\tauri.cmd" goto desktop_executable
 echo No built desktop executable was found. Starting the Tauri development app.
 echo This console remains open to show build and runtime errors.
 pushd "%DESKTOP_DIR%"
-call ".\node_modules\.bin\tauri.cmd" dev
+call ".\node_modules\.bin\tauri.cmd" dev --config src-tauri/tauri.dev.conf.json
 set "LAUNCH_RESULT=%ERRORLEVEL%"
 popd
 if not "%LAUNCH_RESULT%"=="0" (

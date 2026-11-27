@@ -5,7 +5,9 @@ No API keys required - only public market data.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import time
 from typing import Any
 
@@ -28,22 +30,62 @@ class MarketDiscovery:
         self.rate_limiter = rate_limiter
         self.spot_enabled = spot_enabled
         self.futures_enabled = futures_enabled
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+            self._session = None
+
+    @staticmethod
+    def _extract_min_notional(filters: dict[str, dict[str, Any]]) -> float:
+        notional_filter = filters.get("MIN_NOTIONAL") or filters.get("NOTIONAL") or {}
+        raw = notional_filter.get("minNotional")
+        if raw is None:
+            raw = notional_filter.get("notional")
+        try:
+            value = float(raw) if raw is not None else 10.0
+            return value if value > 0 else 10.0
+        except (TypeError, ValueError):
+            return 10.0
 
     async def _fetch(self, url: str) -> dict[str, Any]:
         started = time.perf_counter()
-        await self.rate_limiter.acquire("exchange_info", 1.0, timeout=30.0)
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-        log_event(
-            logger, logging.INFO, "exchange_metadata_retrieved",
-            component="market_discovery", operation="fetch_exchange_info",
-            endpoint=url.removeprefix("https://"), status_code=200,
-            duration_ms=round((time.perf_counter() - started) * 1000, 2),
-            symbol_count=len(data.get("symbols", [])),
-        )
-        return data
+        session = await self._ensure_session()
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            await self.rate_limiter.acquire("exchange_info", 1.0, timeout=30.0)
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status in (418, 429) or 500 <= resp.status <= 599:
+                        if attempt >= max_retries:
+                            resp.raise_for_status()
+                        delay = min(8.0, 0.5 * (2 ** attempt) + random.uniform(0, 0.25))
+                        await asyncio.sleep(delay)
+                        continue
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    log_event(
+                        logger, logging.INFO, "exchange_metadata_retrieved",
+                        component="market_discovery", operation="fetch_exchange_info",
+                        endpoint=url.removeprefix("https://"), status_code=200,
+                        duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                        symbol_count=len(data.get("symbols", [])),
+                    )
+                    return data
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                if attempt >= max_retries:
+                    raise
+                delay = min(8.0, 0.5 * (2 ** attempt) + random.uniform(0, 0.25))
+                await asyncio.sleep(delay)
+        raise RuntimeError(f"Unreachable retry loop for {url}")
 
     async def discover_spot(self) -> int:
         if not self.spot_enabled:
@@ -67,7 +109,6 @@ class MarketDiscovery:
             filters = {f["filterType"]: f for f in s.get("filters", [])}
             lot = filters.get("LOT_SIZE", {})
             price = filters.get("PRICE_FILTER", {})
-            min_notional = filters.get("MIN_NOTIONAL", {})
             info = {
                 "symbol": s["symbol"],
                 "market": "SPOT",
@@ -77,7 +118,7 @@ class MarketDiscovery:
                 "quantity_precision": s.get("quantityPrecision", 4),
                 "tick_size": float(price.get("tickSize", 0.0001)),
                 "step_size": float(lot.get("stepSize", 0.0001)),
-                "min_notional": float(min_notional.get("minNotional", 10.0)),
+                "min_notional": self._extract_min_notional(filters),
                 "status": s.get("status", "TRADING"),
                 "is_eligible": True,
             }
@@ -113,7 +154,6 @@ class MarketDiscovery:
             filters = {f["filterType"]: f for f in s.get("filters", [])}
             lot = filters.get("LOT_SIZE", {})
             price = filters.get("PRICE_FILTER", {})
-            min_notional = filters.get("MIN_NOTIONAL", {})
             info = {
                 "symbol": s["symbol"],
                 "market": "FUTURES",
@@ -123,7 +163,7 @@ class MarketDiscovery:
                 "quantity_precision": s.get("quantityPrecision", 4),
                 "tick_size": float(price.get("tickSize", 0.0001)),
                 "step_size": float(lot.get("stepSize", 0.0001)),
-                "min_notional": float(min_notional.get("minNotional", 10.0)),
+                "min_notional": self._extract_min_notional(filters),
                 "status": s.get("status", "TRADING"),
                 "is_eligible": True,
             }
@@ -145,8 +185,11 @@ class MarketDiscovery:
             phase="public_rest", details="Spot api.binance.com; USD-M Futures fapi.binance.com",
             outcome="STARTED",
         )
-        spot = await self.discover_spot()
-        futures = await self.discover_futures()
+        try:
+            spot = await self.discover_spot()
+            futures = await self.discover_futures()
+        finally:
+            await self.close()
         result = {"spot": spot, "futures": futures}
         log_event(
             logger, logging.INFO, "market_discovery_completed",

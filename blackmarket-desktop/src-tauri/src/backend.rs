@@ -475,27 +475,32 @@ impl BackendSupervisor {
             .ok_or_else(|| "The desktop application data directory is unavailable.".to_owned())?;
         fs::create_dir_all(data_dir).map_err(|error| error.to_string())?;
         let token_path = data_dir.join("api-token");
-        let token = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&token_path)
-        {
-            Ok(mut file) => {
-                let token = Uuid::new_v4().simple().to_string();
-                file.write_all(token.as_bytes())
-                    .and_then(|()| file.sync_all())
-                    .map_err(|error| error.to_string())?;
-                token
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                fs::read_to_string(&token_path).map_err(|error| error.to_string())?
-            }
-            Err(error) => return Err(error.to_string()),
+
+        let is_valid_token = |candidate: &str| -> bool {
+            candidate.len() == 32 && candidate.bytes().all(|byte| byte.is_ascii_hexdigit())
         };
-        let token = token.trim().to_owned();
-        if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err("The stored token file is invalid.".to_owned());
+
+        if let Ok(existing) = fs::read_to_string(&token_path) {
+            let trimmed = existing.trim().to_owned();
+            if is_valid_token(&trimmed) {
+                return Ok(trimmed);
+            }
+            eprintln!(
+                "Warning: stored API token at {} is corrupted; regenerating.",
+                token_path.display()
+            );
         }
+
+        let token = Uuid::new_v4().simple().to_string();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&token_path)
+            .map_err(|error| error.to_string())?;
+        file.write_all(token.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| error.to_string())?;
         Ok(token)
     }
 
@@ -947,9 +952,26 @@ fn find_project_root(resource_dir: Option<&Path>) -> Option<PathBuf> {
             candidates.push(root.to_path_buf());
         }
     }
-    candidates
+    if let Some(root) = candidates
         .into_iter()
         .find(|path| path.join("config.py").is_file() && path.join("src_tauri/backend/main.py").is_file())
+    {
+        return Some(root);
+    }
+    #[cfg(windows)]
+    if !cfg!(debug_assertions) {
+        if let Some(resources) = resource_dir {
+            for candidate in [
+                resources.join("blackmarket_backend").join("backend").join("BlackMarketBackend.exe"),
+                resources.join("backend").join("BlackMarketBackend.exe"),
+            ] {
+                if candidate.is_file() {
+                    return candidate.parent().map(Path::to_path_buf);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn read_log_tail(path: &Path) -> String {

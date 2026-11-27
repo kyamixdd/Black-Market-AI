@@ -78,7 +78,17 @@ class EventBus:
                 continue
             try:
                 if self._persist is not None:
-                    await self._persist(event)
+                    try:
+                        await self._persist(event)
+                    except Exception as exc:
+                        logger.exception("Event persistence failed for event %s", event.event_type)
+                        log_event(
+                            logger, logging.ERROR, "event_persist_failed",
+                            component="event_bus", operation="persist",
+                            outcome="FAILURE", event_type=event.event_type,
+                            exception_type=type(exc).__name__,
+                            recommendation="Inspect database persistence health; event dispatch continues.",
+                        )
                 handlers = list(self._subscribers.get(event.event_type, [])) + \
                     list(self._subscribers.get("*", []))
                 for handler in handlers:
@@ -105,9 +115,14 @@ class EventBus:
         )
 
     async def stop(self) -> None:
+        was_running = self._running
         self._stopping = True
         self._running = False
-        await self._queue.join()
+        if was_running:
+            try:
+                await asyncio.wait_for(self._queue.join(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("EventBus stop timed out with %d queued events", self._queue.qsize())
 
     @property
     def pending(self) -> int:

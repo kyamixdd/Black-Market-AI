@@ -15,7 +15,6 @@ from collections.abc import Awaitable, Callable
 import websockets
 
 from .rate_limiter import RateLimiter
-from market.data_reliability import MarketDataState
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,8 @@ class WebSocketManager:
         self._handlers: list[Callable[[dict], Awaitable[None]]] = []
         self._running = False
         self._tasks: list[asyncio.Task] = []
-        self._subscribed_streams: set[str] = set()
+        self._tasks_by_market: dict[str, list[asyncio.Task]] = {"SPOT": [], "FUTURES": []}
+        self._handler_tasks: set[asyncio.Task] = set()
         self._spot_streams: list[str] = []
         self._futures_streams: list[str] = []
         self._connected_connections = 0
@@ -48,7 +48,21 @@ class WebSocketManager:
         self._lifecycle_lock = asyncio.Lock()
 
     def add_handler(self, handler: Callable[[dict], Awaitable[None]]) -> None:
-        self._handlers.append(handler)
+        if handler not in self._handlers:
+            self._handlers.append(handler)
+
+    def remove_handler(self, handler: Callable[[dict], Awaitable[None]]) -> None:
+        while handler in self._handlers:
+            self._handlers.remove(handler)
+
+    async def _dispatch_handlers(self, handlers: list[Callable[[dict], Awaitable[None]]], data: dict) -> None:
+        for handler in handlers:
+            try:
+                await handler(data)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("WS handler failed")
 
     async def _run_stream(self, base_url: str, streams: list[str]) -> None:
         if not streams:
@@ -78,11 +92,11 @@ class WebSocketManager:
                             self._last_message_ms = message_time
                             self._last_message_by_market[market] = message_time
                             data["_market"] = market
-                            for handler in self._handlers:
-                                try:
-                                    await handler(data)
-                                except Exception:
-                                    logger.exception("WS handler failed")
+                            handlers = list(self._handlers)
+                            if handlers and len(self._handler_tasks) < 1000:
+                                task = asyncio.create_task(self._dispatch_handlers(handlers, data))
+                                self._handler_tasks.add(task)
+                                task.add_done_callback(self._handler_tasks.discard)
                     finally:
                         self._connected_connections = max(0, self._connected_connections - 1)
                         self._connected_by_market[market] = max(
@@ -161,25 +175,53 @@ class WebSocketManager:
 
     async def start(self, spot_streams: list[str], futures_streams: list[str]) -> None:
         async with self._lifecycle_lock:
-            if self._running:
-                if spot_streams == self._spot_streams and futures_streams == self._futures_streams:
-                    return
-                await self._stop_unlocked()
-            self._spot_streams = list(spot_streams)
-            self._futures_streams = list(futures_streams)
-            self._connected_connections = 0
-            self._connected_by_market = {"SPOT": 0, "FUTURES": 0}
-            self._last_message_ms = None
-            self._last_message_by_market = {"SPOT": None, "FUTURES": None}
-            self._running = True
-            for base_url, streams in (
-                (SPOT_WS_URL, self._spot_streams),
-                (FUTURES_WS_URL, self._futures_streams),
-            ):
-                for i in range(0, len(streams), self.max_streams_per_conn):
-                    chunk = streams[i : i + self.max_streams_per_conn]
-                    if chunk:
-                        self._tasks.append(asyncio.create_task(self._run_stream(base_url, chunk)))
+            if not self._running:
+                self._spot_streams = list(spot_streams)
+                self._futures_streams = list(futures_streams)
+                self._connected_connections = 0
+                self._connected_by_market = {"SPOT": 0, "FUTURES": 0}
+                self._last_message_ms = None
+                self._last_message_by_market = {"SPOT": None, "FUTURES": None}
+                self._running = True
+                for market, base_url, streams in (
+                    ("SPOT", SPOT_WS_URL, self._spot_streams),
+                    ("FUTURES", FUTURES_WS_URL, self._futures_streams),
+                ):
+                    self._start_market_tasks(market, base_url, streams)
+                return
+
+            spot_changed = spot_streams != self._spot_streams
+            futures_changed = futures_streams != self._futures_streams
+            if not spot_changed and not futures_changed:
+                return
+            if spot_changed:
+                await self._stop_market_tasks("SPOT")
+                self._spot_streams = list(spot_streams)
+                self._last_message_by_market["SPOT"] = None
+                self._start_market_tasks("SPOT", SPOT_WS_URL, self._spot_streams)
+            if futures_changed:
+                await self._stop_market_tasks("FUTURES")
+                self._futures_streams = list(futures_streams)
+                self._last_message_by_market["FUTURES"] = None
+                self._start_market_tasks("FUTURES", FUTURES_WS_URL, self._futures_streams)
+
+    def _start_market_tasks(self, market: str, base_url: str, streams: list[str]) -> None:
+        for i in range(0, len(streams), self.max_streams_per_conn):
+            chunk = streams[i : i + self.max_streams_per_conn]
+            if chunk:
+                task = asyncio.create_task(self._run_stream(base_url, chunk))
+                self._tasks_by_market[market].append(task)
+                self._tasks.append(task)
+
+    async def _stop_market_tasks(self, market: str) -> None:
+        tasks = self._tasks_by_market.get(market, [])
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._tasks = [t for t in self._tasks if t not in tasks]
+        self._tasks_by_market[market] = []
+        self._connected_by_market[market] = 0
 
     async def restart(self) -> None:
         """Restart active streams without leaving duplicate stream tasks behind."""
@@ -201,3 +243,9 @@ class WebSocketManager:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        self._tasks_by_market = {"SPOT": [], "FUTURES": []}
+        for t in list(self._handler_tasks):
+            t.cancel()
+        if self._handler_tasks:
+            await asyncio.gather(*self._handler_tasks, return_exceptions=True)
+        self._handler_tasks.clear()

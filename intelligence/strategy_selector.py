@@ -30,8 +30,9 @@ class StrategySelector:
         return w
 
     def update_performance(self, strategy: str, win: bool, pnl_pct: float) -> None:
+        current = self.weights.get(strategy, 1.0)  # I-6: guard unknown strategy names
         if win:
-            self.weights[strategy] = min(2.0, self.weights[strategy] * 1.02)
+            self.weights[strategy] = min(2.0, current * 1.02)
         else:
-            self.weights[strategy] = max(0.2, self.weights[strategy] * 0.98)
+            self.weights[strategy] = max(0.2, current * 0.98)
         logger.debug("Strategy %s weight updated to %.3f", strategy, self.weights[strategy])

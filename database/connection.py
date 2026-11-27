@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, event
@@ -19,38 +20,41 @@ class Database:
         self.url = url
         self._engine: Engine | None = None
         self._session_maker = None
+        self._lock = threading.RLock()
 
     @property
     def engine(self) -> Engine:
-        if self._engine is None:
-            if self.url.startswith("sqlite"):
-                db_path = self.url.replace("sqlite:///", "", 1)
-                db_path = db_path.replace("sqlite://", "", 1)
-                path = Path(db_path)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                self._engine = create_engine(
-                    f"sqlite:///{path}",
-                    future=True,
-                    connect_args={"check_same_thread": False, "timeout": 30},
-                    echo=False,
-                )
-                @event.listens_for(self._engine, "connect")
-                def _configure_sqlite_connection(connection, _record):
-                    cursor = connection.cursor()
-                    cursor.execute("PRAGMA foreign_keys=ON")
-                    cursor.execute("PRAGMA busy_timeout=30000")
-                    cursor.execute("PRAGMA journal_mode=WAL")
-                    cursor.execute("PRAGMA synchronous=FULL")
-                    cursor.close()
-            else:
-                self._engine = create_engine(self.url, future=True)
-            instrument_sql_engine(self._engine)
-        return self._engine
+        with self._lock:
+            if self._engine is None:
+                if self.url.startswith("sqlite"):
+                    db_path = self.url.replace("sqlite:///", "", 1)
+                    db_path = db_path.replace("sqlite://", "", 1)
+                    path = Path(db_path)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    self._engine = create_engine(
+                        f"sqlite:///{path}",
+                        future=True,
+                        connect_args={"check_same_thread": False, "timeout": 30},
+                        echo=False,
+                    )
+                    @event.listens_for(self._engine, "connect")
+                    def _configure_sqlite_connection(connection, _record):
+                        cursor = connection.cursor()
+                        cursor.execute("PRAGMA foreign_keys=ON")
+                        cursor.execute("PRAGMA busy_timeout=30000")
+                        cursor.execute("PRAGMA journal_mode=WAL")
+                        cursor.execute("PRAGMA synchronous=FULL")
+                        cursor.close()
+                else:
+                    self._engine = create_engine(self.url, future=True)
+                instrument_sql_engine(self._engine)
+            return self._engine
 
     def session_maker(self):
-        if self._session_maker is None:
-            self._session_maker = sessionmaker(bind=self.engine, expire_on_commit=False)
-        return self._session_maker
+        with self._lock:
+            if self._session_maker is None:
+                self._session_maker = sessionmaker(bind=self.engine, expire_on_commit=False)
+            return self._session_maker
 
     def init_db(self) -> None:
         if self.url.startswith("sqlite"):
@@ -171,21 +175,24 @@ class Database:
 
     def close(self) -> None:
         """Dispose of the engine to release file locks."""
-        if self._engine is not None:
-            self._engine.dispose()
-            self._engine = None
-            self._session_maker = None
+        with self._lock:
+            if self._engine is not None:
+                self._engine.dispose()
+                self._engine = None
+                self._session_maker = None
 
 
 # Module-level session maker for synchronous use in learning modules
 _db_instance = None
+_db_instance_lock = threading.Lock()
 
 
 def get_session_maker():
     """Get or create the database session maker."""
     global _db_instance
-    if _db_instance is None:
-        from config import DATABASE_URL
-        _db_instance = Database(DATABASE_URL)
-        _db_instance.init_db()
-    return _db_instance.session_maker()
+    with _db_instance_lock:
+        if _db_instance is None:
+            from config import DATABASE_URL
+            _db_instance = Database(DATABASE_URL)
+            _db_instance.init_db()
+        return _db_instance.session_maker()

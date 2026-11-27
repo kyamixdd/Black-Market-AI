@@ -16,8 +16,11 @@ class MomentumAnalyzer:
         diff = np.diff(closes)
         gains = np.where(diff > 0, diff, 0.0)
         losses = np.where(diff < 0, -diff, 0.0)
-        avg_gain = np.mean(gains[-period:])
-        avg_loss = np.mean(losses[-period:])
+        avg_gain = float(np.mean(gains[:period]))
+        avg_loss = float(np.mean(losses[:period]))
+        for idx in range(period, len(gains)):
+            avg_gain = (avg_gain * (period - 1) + float(gains[idx])) / period
+            avg_loss = (avg_loss * (period - 1) + float(losses[idx])) / period
         if avg_gain == 0 and avg_loss == 0:
             return 50.0
         if avg_loss == 0:
@@ -64,10 +67,12 @@ class MomentumAnalyzer:
     def ema(closes: np.ndarray, period: int) -> float:
         if len(closes) < period:
             return float(closes[-1]) if len(closes) else 0.0
-        weights = np.exp(np.linspace(-1.0, 0.0, period))
-        weights /= weights.sum()
-        val = np.sum(closes[-period:] * weights)
-        return float(val)
+        values = np.asarray(closes, dtype=float)
+        alpha = 2.0 / (period + 1.0)
+        ema_val = float(np.mean(values[:period]))
+        for price in values[period:]:
+            ema_val = alpha * float(price) + (1.0 - alpha) * ema_val
+        return float(ema_val)
 
     @staticmethod
     def adx(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,

@@ -81,6 +81,9 @@ class MarketSnapshotModel(Base):
 
 class SignalModel(Base):
     __tablename__ = "signals"
+    __table_args__ = (
+        Index("ix_signals_created_at", "created_at"),
+    )
 
     signal_id = Column(String(64), primary_key=True)
     symbol = Column(String(32), nullable=False)
@@ -100,6 +103,9 @@ class SignalModel(Base):
 
 class PredictionModel(Base):
     __tablename__ = "predictions"
+    __table_args__ = (
+        Index("ix_predictions_correct_created", "is_correct", "created_at"),
+    )
 
     prediction_id = Column(String(64), primary_key=True)
     signal_id = Column(String(64), nullable=True)
@@ -128,6 +134,9 @@ class PredictionModel(Base):
 
 class PaperOrderModel(Base):
     __tablename__ = "paper_orders"
+    __table_args__ = (
+        Index("ix_paper_orders_status_market", "status", "market"),
+    )
 
     order_id = Column(String(64), primary_key=True)
     signal_id = Column(String(64), nullable=True)
@@ -150,6 +159,9 @@ class PaperOrderModel(Base):
 
 class PaperPositionModel(Base):
     __tablename__ = "paper_positions"
+    __table_args__ = (
+        Index("ix_paper_positions_status_market", "status", "market"),
+    )
 
     position_id = Column(String(64), primary_key=True)
     symbol = Column(String(32), nullable=False)
@@ -183,6 +195,9 @@ class PaperPositionModel(Base):
 
 class TradeHistoryModel(Base):
     __tablename__ = "trade_history"
+    __table_args__ = (
+        Index("ix_trade_history_position_closed", "position_id", "closed_at"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     position_id = Column(String(64), nullable=False)

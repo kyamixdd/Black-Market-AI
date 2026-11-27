@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, update, func
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -47,20 +48,49 @@ class Repository:
 
     # --- Symbol Repo ---
     def save_symbols(self, symbols: list[dict[str, Any]]) -> int:
+        if not symbols:
+            return 0
+        now = datetime.now(timezone.utc)
+        deduped: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in symbols:
+            key = (str(item["symbol"]), str(item["market"]))
+            deduped[key] = {
+                "symbol": key[0],
+                "market": key[1],
+                "base_asset": item["base_asset"],
+                "quote_asset": item["quote_asset"],
+                "price_precision": item.get("price_precision", 4),
+                "quantity_precision": item.get("quantity_precision", 4),
+                "tick_size": item.get("tick_size", 0.0001),
+                "step_size": item.get("step_size", 0.0001),
+                "min_notional": item.get("min_notional", 10.0),
+                "status": item.get("status", "TRADING"),
+                "is_eligible": item.get("is_eligible", True),
+                "last_updated": item.get("last_updated", now),
+            }
+        rows = list(deduped.values())
         with self._get_session() as session:
-            count = 0
-            for item in symbols:
-                existing = session.get(SymbolModel, (item["symbol"], item["market"]))
-                if existing:
-                    for k, v in item.items():
-                        setattr(existing, k, v)
-                    existing.last_updated = datetime.now(timezone.utc)
-                else:
-                    obj = SymbolModel(**item)
-                    session.add(obj)
-                count += 1
+            for idx in range(0, len(rows), 500):
+                chunk = rows[idx:idx + 500]
+                stmt = sqlite_insert(SymbolModel).values(chunk)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["symbol", "market"],
+                    set_={
+                        "base_asset": stmt.excluded.base_asset,
+                        "quote_asset": stmt.excluded.quote_asset,
+                        "price_precision": stmt.excluded.price_precision,
+                        "quantity_precision": stmt.excluded.quantity_precision,
+                        "tick_size": stmt.excluded.tick_size,
+                        "step_size": stmt.excluded.step_size,
+                        "min_notional": stmt.excluded.min_notional,
+                        "status": stmt.excluded.status,
+                        "is_eligible": stmt.excluded.is_eligible,
+                        "last_updated": stmt.excluded.last_updated,
+                    },
+                )
+                session.execute(stmt)
             session.commit()
-            return count
+        return len(symbols)
 
     def get_eligible_symbols(self, market: str | None = None) -> list[SymbolModel]:
         with self._get_session() as session:
@@ -70,22 +100,6 @@ class Repository:
             return list(session.scalars(stmt).all())
 
     # --- Candle Repo ---
-    def save_candles(self, candles: list[dict[str, Any]]) -> int:
-        if not candles:
-            return 0
-        with self._get_session() as session:
-            saved = 0
-            for c in candles:
-                pk = (c["symbol"], c["market"], c["timeframe"], c["open_time"])
-                existing = session.get(CandleModel, pk)
-                if existing:
-                    for k, v in c.items():
-                        setattr(existing, k, v)
-                else:
-                    session.add(CandleModel(**c))
-                saved += 1
-            session.commit()
-            return saved
 
     def get_candles(self, symbol: str, market: str, timeframe: str, limit: int = 200) -> list[CandleModel]:
         with self._get_session() as session:
@@ -162,26 +176,38 @@ class Repository:
         """Upsert validated OHLC candles used by charting and outcome evaluation."""
         if not candles:
             return 0
+        deduped: dict[int, dict[str, Any]] = {}
+        for candle in candles:
+            open_time = int(candle["open_time"])
+            deduped[open_time] = {
+                "symbol": symbol,
+                "market": market,
+                "timeframe": timeframe,
+                "open_time": open_time,
+                "open": float(candle["open"]),
+                "high": float(candle["high"]),
+                "low": float(candle["low"]),
+                "close": float(candle["close"]),
+                "volume": float(candle.get("volume", 0.0)),
+                "close_time": int(candle["close_time"]),
+            }
+        rows = list(deduped.values())
         with self._get_session() as session:
-            for candle in candles:
-                key = (symbol, market, timeframe, int(candle["open_time"]))
-                row = session.get(CandleModel, key)
-                values = {
-                    "open": float(candle["open"]),
-                    "high": float(candle["high"]),
-                    "low": float(candle["low"]),
-                    "close": float(candle["close"]),
-                    "volume": float(candle.get("volume", 0.0)),
-                    "close_time": int(candle["close_time"]),
-                }
-                if row is None:
-                    session.add(CandleModel(
-                        symbol=symbol, market=market, timeframe=timeframe,
-                        open_time=key[3], **values,
-                    ))
-                else:
-                    for name, value in values.items():
-                        setattr(row, name, value)
+            for idx in range(0, len(rows), 500):
+                chunk = rows[idx:idx + 500]
+                stmt = sqlite_insert(CandleModel).values(chunk)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["symbol", "market", "timeframe", "open_time"],
+                    set_={
+                        "open": stmt.excluded.open,
+                        "high": stmt.excluded.high,
+                        "low": stmt.excluded.low,
+                        "close": stmt.excluded.close,
+                        "volume": stmt.excluded.volume,
+                        "close_time": stmt.excluded.close_time,
+                    },
+                )
+                session.execute(stmt)
             session.commit()
         return len(candles)
 
@@ -580,12 +606,34 @@ class Repository:
             else:
                 stmt = stmt.order_by(PublicStrategyModel.created_at.desc())
             rows = list(session.scalars(stmt.offset(offset).limit(limit)).all())
-            output = []
-            for row in rows:
-                count = session.scalar(select(func.count()).select_from(StrategyFavoriteModel).where(StrategyFavoriteModel.public_id == row.public_id)) or 0
-                fav = bool(owner_key and session.get(StrategyFavoriteModel, (owner_key, row.public_id)))
-                output.append(self._public_strategy_dict(row, favorite_count=count, is_favorite=fav, is_owner=bool(owner_key and owner_key == row.owner_key)))
-            return output
+            public_ids = [row.public_id for row in rows]
+            favorite_counts: dict[str, int] = {}
+            user_favorites: set[str] = set()
+            if public_ids:
+                counts_rows = session.execute(
+                    select(StrategyFavoriteModel.public_id, func.count())
+                    .where(StrategyFavoriteModel.public_id.in_(public_ids))
+                    .group_by(StrategyFavoriteModel.public_id)
+                ).all()
+                favorite_counts = {str(pid): int(cnt) for pid, cnt in counts_rows}
+                if owner_key:
+                    user_favorites = set(
+                        session.scalars(
+                            select(StrategyFavoriteModel.public_id).where(
+                                StrategyFavoriteModel.owner_key == owner_key,
+                                StrategyFavoriteModel.public_id.in_(public_ids),
+                            )
+                        ).all()
+                    )
+            return [
+                self._public_strategy_dict(
+                    row,
+                    favorite_count=favorite_counts.get(row.public_id, 0),
+                    is_favorite=row.public_id in user_favorites,
+                    is_owner=bool(owner_key and owner_key == row.owner_key),
+                )
+                for row in rows
+            ]
 
     def get_public_strategy(self, public_id: str, owner_key: str | None = None) -> dict[str, Any] | None:
         with self._get_session() as session:
@@ -836,17 +884,27 @@ class Repository:
     # --- System Events & Notifications ---
     def save_system_event(self, event_dict: dict[str, Any]) -> str:
         with self._get_session() as session:
-            ev = SystemEventModel(
-                event_id=event_dict["event_id"],
-                event_type=event_dict["event_type"],
-                source=event_dict["source"],
-                symbol=event_dict.get("symbol"),
-                market=event_dict.get("market"),
-                payload=json.dumps(event_dict.get("payload", {})),
-            )
-            session.add(ev)
+            existing = session.get(SystemEventModel, event_dict["event_id"])
+            payload_json = json.dumps(event_dict.get("payload", {}))
+            if existing is None:
+                ev = SystemEventModel(
+                    event_id=event_dict["event_id"],
+                    event_type=event_dict["event_type"],
+                    source=event_dict["source"],
+                    symbol=event_dict.get("symbol"),
+                    market=event_dict.get("market"),
+                    payload=payload_json,
+                )
+                session.add(ev)
+                session.commit()
+                return ev.event_id
+            existing.event_type = event_dict["event_type"]
+            existing.source = event_dict["source"]
+            existing.symbol = event_dict.get("symbol")
+            existing.market = event_dict.get("market")
+            existing.payload = payload_json
             session.commit()
-            return ev.event_id
+            return existing.event_id
 
     def save_notification(self, notif: dict[str, Any]) -> int:
         with self._get_session() as session:

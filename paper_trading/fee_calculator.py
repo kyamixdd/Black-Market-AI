@@ -18,12 +18,13 @@ LIMIT_ORDER_SLIPPAGE_BPS = 0  # No slippage for limit orders (if filled)
 
 class FeeCalculator:
     def calculate(self, market: str, direction: str, amount: float, price: float,
-                  leverage: float = 1.0) -> float:
+                  leverage: float = 1.0, order_type: str = "MARKET") -> float:
         """Calculate trading fee for a position."""
         notional = amount * price
+        is_maker = str(order_type).upper() == "LIMIT"
         if market == "SPOT":
-            return notional * SPOT_TAKER
-        return notional * FUTURES_TAKER
+            return notional * (SPOT_MAKER if is_maker else SPOT_TAKER)
+        return notional * (FUTURES_MAKER if is_maker else FUTURES_TAKER)
 
     def calculate_slippage(self, market: str, order_type: str, amount: float, price: float,
                            leverage: float = 1.0, volume_24h: float = 0.0) -> float:

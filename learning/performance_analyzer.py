@@ -128,8 +128,8 @@ class PerformanceAnalyzer:
 
         patterns = []
 
-        # 1. Low accuracy by strategy
-        by_strat = self._group_by(failures, lambda p: p.strategy_version or "unknown")
+        # 1. Low accuracy by strategy — group ALL preds so accuracy is meaningful
+        by_strat = self._group_by(preds, lambda p: p.strategy_version or "unknown")
         for strat, metrics in by_strat.items():
             if metrics["accuracy"] < 0.4 and metrics["count"] >= 10:
                 patterns.append({
@@ -142,7 +142,7 @@ class PerformanceAnalyzer:
                 })
 
         # 2. Low accuracy by regime
-        by_reg = self._group_by(failures, lambda p: p.regime or "unknown")
+        by_reg = self._group_by(preds, lambda p: p.regime or "unknown")
         for regime, metrics in by_reg.items():
             if metrics["accuracy"] < 0.4 and metrics["count"] >= 10:
                 patterns.append({
@@ -166,7 +166,7 @@ class PerformanceAnalyzer:
             })
 
         # 4. Low accuracy by symbol
-        by_sym = self._group_by(failures, lambda p: p.symbol)
+        by_sym = self._group_by(preds, lambda p: p.symbol)
         for symbol, metrics in by_sym.items():
             if metrics["accuracy"] < 0.3 and metrics["count"] >= 5:
                 patterns.append({

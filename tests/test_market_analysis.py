@@ -38,3 +38,33 @@ def test_regime_detector():
 
     regime = RegimeDetector.detect(closes, highs, lows)
     assert regime == "BULL_TREND"
+
+
+def test_regime_detector_handles_between_100_and_200_candles():
+    closes = np.linspace(100.0, 200.0, 150)
+    highs = closes + 1.0
+    lows = closes - 1.0
+    assert RegimeDetector.detect(closes, highs, lows) == "BULL_TREND"
+    assert RegimeDetector.detect(closes[::-1], highs[::-1], lows[::-1]) == "BEAR_TREND"
+
+
+def test_data_integrity_guardian_recovers_after_fresh_candles():
+    from market.candle_manager import CandleManager
+    from market.data_integrity import DataIntegrityGuardian
+
+    cm = CandleManager()
+    guardian = DataIntegrityGuardian(cm)
+    now_ms = cm.current_time_ms()
+    # Seed stale candles first
+    stale_end = now_ms - 10_000_000
+    for i in range(25):
+        open_t = stale_end - (25 - i) * 3_600_000
+        cm.add_candle("SPOT", "BTCUSDT", "1h", open_t, 100.0, 101.0, 99.0, 100.5, 10.0, open_t + 3_599_999)
+    assert guardian.is_symbol_valid("SPOT", "BTCUSDT") is False
+
+    # Now add fresh continuous candles up to now
+    base = now_ms - 25 * 3_600_000
+    for i in range(25):
+        open_t = base + i * 3_600_000
+        cm.add_candle("SPOT", "BTCUSDT", "1h", open_t, 100.0, 101.0, 99.0, 100.5, 10.0, open_t + 3_599_999)
+    assert guardian.is_symbol_valid("SPOT", "BTCUSDT") is True

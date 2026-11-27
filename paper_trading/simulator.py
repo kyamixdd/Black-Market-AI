@@ -60,6 +60,7 @@ class Simulator:
         self.funding_calc = FundingCalculator()
         self.liquidation = LiquidationEngine()
         self.pnl_calc = PnLCalculator()
+        self.adaptive_risk = None
         self.risk_manager = RiskManager(
             max_risk_pct=RISK_PER_TRADE_PCT,
             max_daily_loss_pct=RISK_MAX_DAILY_LOSS_PCT,
@@ -188,6 +189,21 @@ class Simulator:
             return 0.0
         return value if value > 0 else 0.0
 
+    def _calc_fee(
+        self,
+        market: str,
+        side: str,
+        amount: float,
+        price: float,
+        leverage: float = 1.0,
+        order_type: str = "MARKET",
+    ) -> float:
+        """Call fee_calc.calculate with order_type, falling back for legacy 5-arg test mocks."""
+        try:
+            return float(self.fee_calc.calculate(market, side, amount, price, leverage, order_type=order_type))
+        except TypeError:
+            return float(self.fee_calc.calculate(market, side, amount, price, leverage))
+
     def _calculate_order_quantity(self, signal: dict[str, Any], balance: float) -> tuple[float, float]:
         """Size by stop risk, then cap Spot buys to available cash including fees."""
         entry = float(signal["entry"])
@@ -198,29 +214,40 @@ class Simulator:
 
         market = signal["market"]
         direction = signal["direction"]
+        effective_risk_pct = (
+            self.adaptive_risk.get_effective_risk_per_trade()
+            if self.adaptive_risk is not None
+            else self.risk_manager.max_risk_pct
+        )
         leverage = self.risk_manager.validate_leverage(
             market, float(signal.get("leverage", 1.0))
         )
-        quantity = self.risk_manager.calculate_position_size(balance, risk_distance)
+        if self.adaptive_risk is not None:
+            leverage = self.adaptive_risk.get_effective_leverage(market, leverage)
+        breakdown = self.get_account_equity_breakdown()
+        market_equity = breakdown["spot_equity"] if market == "SPOT" else breakdown["futures_equity"]
+        sizing_base = market_equity if math.isfinite(market_equity) and market_equity > 0 else balance
+        quantity = self.risk_manager.calculate_position_size(sizing_base, risk_distance, max_risk_pct=effective_risk_pct)
         if market != "SPOT":
             return quantity, leverage
         if direction not in ("LONG", "BUY"):
             return 0.0, leverage
 
         volume_24h = self._get_volume_24h(market, signal["symbol"])
+        order_type = signal.get("order_type", "MARKET")
         # Fill price depends on quantity through market-impact slippage. Recalculate
-        # the affordable amount and include the Spot taker fee in the cash ceiling.
+        # the affordable amount and include the Spot fee in the cash ceiling.
         for _ in range(4):
             if quantity <= 0:
                 return 0.0, leverage
             fill_price = self.fee_calc.get_fill_price(
-                market, direction, signal.get("order_type", "MARKET"),
+                market, direction, order_type,
                 entry, quantity, 1.0, volume_24h
             )
             if fill_price <= 0:
                 return 0.0, leverage
-            fee_per_unit = self.fee_calc.calculate(
-                market, direction, 1.0, fill_price, 1.0
+            fee_per_unit = self._calc_fee(
+                market, direction, 1.0, fill_price, 1.0, order_type=order_type
             )
             affordable = balance / (fill_price + fee_per_unit)
             capped = min(quantity, affordable)
@@ -261,7 +288,18 @@ class Simulator:
         occupied = {**positions, **pending}
 
         # Pending limit orders reserve slots and symbol exposure until filled or cancelled.
-        max_positions = self.risk_manager.max_spot_positions if market == "SPOT" else self.risk_manager.max_futures_positions
+        if self.adaptive_risk is not None:
+            open_count = sum(1 for p in occupied.values() if p.get("status", "OPEN") in ("OPEN", "CLOSING"))
+            allowed, adaptive_reason = self.adaptive_risk.can_open_position(market, open_count)
+            if not allowed:
+                return False, adaptive_reason
+            max_positions = (
+                self.adaptive_risk.effective_max_spot_positions
+                if market == "SPOT"
+                else self.adaptive_risk.effective_max_futures_positions
+            )
+        else:
+            max_positions = self.risk_manager.max_spot_positions if market == "SPOT" else self.risk_manager.max_futures_positions
         if not self.risk_manager.check_position_limit(occupied, max_positions):
             return False, f"Max {market} positions reached"
         if not self.risk_manager.check_symbol_exposure(occupied, signal["symbol"]):
@@ -434,7 +472,7 @@ class Simulator:
             return None
 
         # Deduct fees upfront
-        fee = self.fee_calc.calculate(market, signal["direction"], qty, fill_price, leverage)
+        fee = self._calc_fee(market, signal["direction"], qty, fill_price, leverage, order_type=order_type)
         reserved_notional = qty * fill_price if market == "SPOT" else 0.0
         reserved_margin = qty * fill_price / leverage if market == "FUTURES" else 0.0
         pending_collateral = 0.0
@@ -443,9 +481,10 @@ class Simulator:
                 continue
             pending_notional = float(pending["entry_price"]) * float(pending["amount"])
             pending_leverage = max(float(pending.get("leverage", 1.0)), 1.0)
-            pending_fee = self.fee_calc.calculate(
+            pending_fee = self._calc_fee(
                 market, pending["side"], float(pending["amount"]),
-                float(pending["entry_price"]), pending_leverage
+                float(pending["entry_price"]), pending_leverage,
+                order_type=pending.get("order_type", "LIMIT"),
             )
             pending_collateral += (
                 pending_notional if market == "SPOT" else pending_notional / pending_leverage
@@ -601,35 +640,36 @@ class Simulator:
                 funding_rate = None
         price = current
         mark_price = mark
-        positions = self._get_positions(market)
-        # Iterate over a copy to avoid "dictionary changed size during iteration"
-        for pos in list(positions.values()):
-            if pos["symbol"] == symbol and pos["status"] == "OPEN":
-                pos["current_price"] = price
-                pos["unrealized_pnl"] = self.pnl_calc.unrealized(pos, price)
-                entry = float(pos["entry_price"])
-                raw_return = ((price - entry) / entry * 100.0) if pos["side"] in ("LONG", "BUY") else ((entry - price) / entry * 100.0)
-                previous_mfe = float(pos.get("max_favorable_excursion_pct", 0.0))
-                previous_mae = float(pos.get("max_adverse_excursion_pct", 0.0))
-                pos["max_favorable_excursion_pct"] = max(previous_mfe, raw_return)
-                pos["max_adverse_excursion_pct"] = min(previous_mae, raw_return)
-                if callable(self.persist_position_callback) and (
-                    pos["max_favorable_excursion_pct"] != previous_mfe
-                    or pos["max_adverse_excursion_pct"] != previous_mae
-                ):
-                    self.persist_position_callback(pos)
+        async with self._account_lock:
+            positions = self._get_positions(market)
+            # Iterate over a copy to avoid "dictionary changed size during iteration"
+            for pos in list(positions.values()):
+                if pos["symbol"] == symbol and pos["status"] == "OPEN":
+                    pos["current_price"] = price
+                    pos["unrealized_pnl"] = self.pnl_calc.unrealized(pos, price)
+                    entry = float(pos["entry_price"])
+                    raw_return = ((price - entry) / entry * 100.0) if pos["side"] in ("LONG", "BUY") else ((entry - price) / entry * 100.0)
+                    previous_mfe = float(pos.get("max_favorable_excursion_pct", 0.0))
+                    previous_mae = float(pos.get("max_adverse_excursion_pct", 0.0))
+                    pos["max_favorable_excursion_pct"] = max(previous_mfe, raw_return)
+                    pos["max_adverse_excursion_pct"] = min(previous_mae, raw_return)
+                    if callable(self.persist_position_callback) and (
+                        pos["max_favorable_excursion_pct"] != previous_mfe
+                        or pos["max_adverse_excursion_pct"] != previous_mae
+                    ):
+                        self.persist_position_callback(pos)
 
-                # Check liquidation first for futures
-                if market == "FUTURES" and pos["status"] == "OPEN":
-                    await self._check_liquidation(pos, mark_price or price)
+                    # Check liquidation first for futures
+                    if market == "FUTURES" and pos["status"] == "OPEN":
+                        await self._check_liquidation(pos, mark_price or price)
 
-                # Check stop/tp if still open
-                if pos["status"] == "OPEN":
-                    await self._check_exit(pos, price, market)
+                    # Check stop/tp if still open
+                    if pos["status"] == "OPEN":
+                        await self._check_exit(pos, price, market)
 
-                # Apply funding if rate provided
-                if market == "FUTURES" and pos["status"] == "OPEN" and funding_rate is not None:
-                    await self._apply_funding(pos, funding_rate, mark_price or price)
+                    # Apply funding if rate provided
+                    if market == "FUTURES" and pos["status"] == "OPEN" and funding_rate is not None:
+                        await self._apply_funding(pos, funding_rate, mark_price or price)
 
     async def _check_exit(self, position: dict, price: float, market: str) -> None:
         side = position["side"]
@@ -811,7 +851,7 @@ class Simulator:
         if direction in {"SHORT", "SELL"}:
             result_return *= -1
         trade["prediction_correct"] = (predicted == ("UP" if result_return > 0 else "DOWN")) if predicted in {"UP", "DOWN"} and result_return != 0 else None
-        gross_independent = (float(fill_price) - float(position["entry_price"])) * float(position["amount"])
+        gross_independent = (float(fill_price) - float(position["entry_price"])) * float(quantity)
         if direction in {"SHORT", "SELL"}:
             gross_independent *= -1
         independent_net = gross_independent - allocated_entry_fees - fee
@@ -1003,6 +1043,29 @@ class Simulator:
         logger.info("Closed %s %s PnL: %.2f (%s, fill: %.4f)", position["symbol"], position["side"], trade_pnl, reason, fill_price)
         return True
 
+    async def close_riskiest_position(self) -> str | None:
+        """Close the open position closest to liquidation (or worst unrealized loss)."""
+        async with self._account_lock:
+            candidates = [
+                p for p in (*self.futures_positions.values(), *self.spot_positions.values())
+                if p.get("status") == "OPEN"
+            ]
+            if not candidates:
+                return None
+
+            def _risk_score(pos: dict) -> tuple[int, float]:
+                price = float(pos.get("current_price") or pos.get("entry_price") or 0.0)
+                if pos.get("market") == "FUTURES" and price > 0:
+                    return (0, float(self.liquidation.get_margin_ratio(pos, price)))
+                return (1, float(pos.get("unrealized_pnl", 0.0)))
+
+            riskiest = min(candidates, key=_risk_score)
+            exit_price = float(riskiest.get("current_price") or riskiest.get("entry_price") or 0.0)
+            if exit_price <= 0:
+                return None
+            closed = await self._close_position(riskiest, exit_price, "ADAPTIVE_RISK")
+            return riskiest["position_id"] if closed else None
+
     # --- Limit Order Handling ---
     async def place_limit_order(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
         """Serialize risk validation and pending-order reservation."""
@@ -1031,15 +1094,16 @@ class Simulator:
                 continue
             pending_notional = float(pending["entry_price"]) * float(pending["amount"])
             pending_leverage = max(float(pending.get("leverage", 1.0)), 1.0)
-            pending_fee = self.fee_calc.calculate(
+            pending_fee = self._calc_fee(
                 market, pending["side"], float(pending["amount"]),
-                float(pending["entry_price"]), pending_leverage
+                float(pending["entry_price"]), pending_leverage,
+                order_type=pending.get("order_type", "LIMIT"),
             )
             pending_collateral += (
                 pending_notional if market == "SPOT" else pending_notional / pending_leverage
             ) + pending_fee
         notional = float(signal["entry"]) * qty
-        fee = self.fee_calc.calculate(market, signal["direction"], qty, float(signal["entry"]), leverage)
+        fee = self._calc_fee(market, signal["direction"], qty, float(signal["entry"]), leverage, order_type="LIMIT")
         required_collateral = (notional if market == "SPOT" else notional / max(leverage, 1.0)) + fee
         if pending_collateral + required_collateral > balance + 1e-9:
             logger.warning("Limit order %s rejected: pending orders exceed available balance", signal["signal_id"])
@@ -1085,29 +1149,30 @@ class Simulator:
 
     async def cancel_limit_order(self, order_id: str) -> dict | None:
         """Cancel an open simulated limit order exactly once."""
-        order = self.open_orders.get(order_id)
-        if order is None or order.get("status") != "OPEN":
-            return None
+        async with self._account_lock:
+            order = self.open_orders.get(order_id)
+            if order is None or order.get("status") != "OPEN":
+                return None
 
-        order["status"] = "CANCELLED"
-        try:
-            if callable(self.persist_order_callback):
-                self.persist_order_callback(order)
-        except Exception:
-            order["status"] = "OPEN"
-            raise
-        self.open_orders.pop(order_id, None)
-        try:
-            await self.event_bus.publish(make_event(
-                EventType.TRADE_CANCELLED, "simulator",
-                symbol=order["symbol"], market=order["market"], order=order,
-            ))
-        except Exception:
-            if not callable(self.persist_order_callback):
+            order["status"] = "CANCELLED"
+            try:
+                if callable(self.persist_order_callback):
+                    self.persist_order_callback(order)
+            except Exception:
+                order["status"] = "OPEN"
                 raise
-            logger.exception("Limit order %s was cancelled and persisted but its event could not be published", order_id)
-        logger.info("Cancelled limit order %s", order_id)
-        return order
+            self.open_orders.pop(order_id, None)
+            try:
+                await self.event_bus.publish(make_event(
+                    EventType.TRADE_CANCELLED, "simulator",
+                    symbol=order["symbol"], market=order["market"], order=order,
+                ))
+            except Exception:
+                if not callable(self.persist_order_callback):
+                    raise
+                logger.exception("Limit order %s was cancelled and persisted but its event could not be published", order_id)
+            logger.info("Cancelled limit order %s", order_id)
+            return order
 
     async def check_limit_orders(self, market: str, symbol: str, price: float) -> None:
         """Fill eligible limit orders without losing orders rejected at execution time."""
@@ -1118,30 +1183,35 @@ class Simulator:
         if not math.isfinite(current_price) or current_price <= 0:
             return
 
-        for order in list(self.open_orders.values()):
-            if order["market"] != market or order["symbol"] != symbol or order.get("status") != "OPEN":
-                continue
+        async with self._account_lock:
+            candidates = list(self.open_orders.values())
 
-            side = order["side"]
-            limit_price = float(order["entry_price"])
-            hit = (
-                side in ("LONG", "BUY") and current_price <= limit_price
-            ) or (
-                side in ("SHORT", "SELL") and current_price >= limit_price
-            )
-            if not hit:
-                continue
+        for order in candidates:
+            async with self._account_lock:
+                if order["market"] != market or order["symbol"] != symbol or order.get("status") != "OPEN":
+                    continue
 
-            # Claim the order before awaiting execution so concurrent price updates
-            # cannot create duplicate positions from the same pending order.
-            order["status"] = "FILLING"
-            try:
-                if callable(self.persist_order_callback):
-                    self.persist_order_callback(order)
-            except Exception:
-                order["status"] = "OPEN"
-                logger.exception("Could not persist FILLING state for order %s; fill deferred", order["order_id"])
-                continue
+                side = order["side"]
+                limit_price = float(order["entry_price"])
+                hit = (
+                    side in ("LONG", "BUY") and current_price <= limit_price
+                ) or (
+                    side in ("SHORT", "SELL") and current_price >= limit_price
+                )
+                if not hit:
+                    continue
+
+                # Claim the order before awaiting execution so concurrent price updates
+                # cannot create duplicate positions from the same pending order.
+                order["status"] = "FILLING"
+                try:
+                    if callable(self.persist_order_callback):
+                        self.persist_order_callback(order)
+                except Exception:
+                    order["status"] = "OPEN"
+                    logger.exception("Could not persist FILLING state for order %s; fill deferred", order["order_id"])
+                    continue
+
             signal = {
                 "signal_id": order.get("signal_id", "LIMIT-" + order["order_id"]),
                 "order_id": order["order_id"],
@@ -1164,19 +1234,29 @@ class Simulator:
                 # event publication failed. Never retry if this order already
                 # owns an open position or a closed trade.
                 order_id = order["order_id"]
-                already_executed = any(
-                    position.get("order_id") == order_id
-                    for position in (*self.spot_positions.values(), *self.futures_positions.values())
-                ) or any(trade.get("order_id") == order_id for trade in self.closed_trades)
+                async with self._account_lock:
+                    already_executed = any(
+                        position.get("order_id") == order_id
+                        for position in (*self.spot_positions.values(), *self.futures_positions.values())
+                    ) or any(trade.get("order_id") == order_id for trade in self.closed_trades)
+                    if already_executed:
+                        order["status"] = "FILLED"
+                        self.open_orders.pop(order_id, None)
+                        try:
+                            if callable(self.persist_order_callback):
+                                self.persist_order_callback(order)
+                        except Exception:
+                            logger.exception("Could not persist recovered FILLED state for order %s", order_id)
+                        logger.exception("Limit order %s created a position before a later failure; marked filled", order_id)
+                    else:
+                        order["status"] = "OPEN"
+                        try:
+                            if callable(self.persist_order_callback):
+                                self.persist_order_callback(order)
+                        except Exception:
+                            logger.exception("Could not persist retryable OPEN state for order %s", order_id)
+                        logger.exception("Limit order %s fill attempt failed; order remains open", order_id)
                 if already_executed:
-                    order["status"] = "FILLED"
-                    self.open_orders.pop(order_id, None)
-                    try:
-                        if callable(self.persist_order_callback):
-                            self.persist_order_callback(order)
-                    except Exception:
-                        logger.exception("Could not persist recovered FILLED state for order %s", order_id)
-                    logger.exception("Limit order %s created a position before a later failure; marked filled", order_id)
                     try:
                         await self.event_bus.publish(make_event(
                             EventType.ORDER_FILLED, "simulator",
@@ -1186,35 +1266,29 @@ class Simulator:
                         if not callable(self.persist_order_callback):
                             raise
                         logger.exception("Could not publish recovered fill event for order %s", order_id)
-                else:
+                continue
+
+            if not position_id:
+                async with self._account_lock:
                     order["status"] = "OPEN"
                     try:
                         if callable(self.persist_order_callback):
                             self.persist_order_callback(order)
                     except Exception:
-                        logger.exception("Could not persist retryable OPEN state for order %s", order_id)
-                    logger.exception("Limit order %s fill attempt failed; order remains open", order_id)
+                        logger.exception("Could not persist rejected-fill OPEN state for order %s", order["order_id"])
+                logger.info("Limit order %s was not filled because execution validation rejected it", order["order_id"])
                 continue
 
-            if not position_id:
-                order["status"] = "OPEN"
+            async with self._account_lock:
+                order["status"] = "FILLED"
+                self.open_orders.pop(order["order_id"], None)
                 try:
                     if callable(self.persist_order_callback):
                         self.persist_order_callback(order)
                 except Exception:
-                    logger.exception("Could not persist rejected-fill OPEN state for order %s", order["order_id"])
-                logger.info("Limit order %s was not filled because execution validation rejected it", order["order_id"])
-                continue
-
-            order["status"] = "FILLED"
-            self.open_orders.pop(order["order_id"], None)
-            try:
-                if callable(self.persist_order_callback):
-                    self.persist_order_callback(order)
-            except Exception:
-                # Position.order_id was persisted before execution; restart recovery
-                # can safely reconcile a stale FILLING order against that position.
-                logger.exception("Could not persist FILLED state for order %s", order["order_id"])
+                    # Position.order_id was persisted before execution; restart recovery
+                    # can safely reconcile a stale FILLING order against that position.
+                    logger.exception("Could not persist FILLED state for order %s", order["order_id"])
             try:
                 await self.event_bus.publish(make_event(
                     EventType.ORDER_FILLED, "simulator",

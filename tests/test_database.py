@@ -196,3 +196,50 @@ def test_closed_trade_history_is_persisted_without_duplicates(tmp_path):
     assert len(history) == 1
     assert history[0].position_id == trade["position_id"]
     assert history[0].pnl == 0.18
+
+
+def test_save_system_event_upserts_duplicate_event_id(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'test.db'}")
+    db.init_db()
+    repo = Repository(db.session_maker())
+
+    repo.save_system_event({
+        "event_id": "AUTODEC-sig1-BLOCKED",
+        "event_type": "AUTONOMOUS_DECISION",
+        "source": "autonomous_engine",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "payload": {"status": "BLOCKED", "reason": "first"},
+    })
+    repo.save_system_event({
+        "event_id": "AUTODEC-sig1-BLOCKED",
+        "event_type": "AUTONOMOUS_DECISION",
+        "source": "autonomous_engine",
+        "symbol": "BTCUSDT",
+        "market": "SPOT",
+        "payload": {"status": "BLOCKED", "reason": "second"},
+    })
+
+    events = repo.get_system_events(limit=10)
+    assert len(events) == 1
+    assert events[0].event_id == "AUTODEC-sig1-BLOCKED"
+    assert '"second"' in events[0].payload
+
+
+def test_database_indexes_and_concurrent_engine_init(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from sqlalchemy import inspect as sa_inspect
+
+    db = Database(f"sqlite:///{tmp_path / 'concurrent.db'}")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        engines = list(pool.map(lambda _: db.engine, range(16)))
+    assert len({id(e) for e in engines}) == 1
+    db.init_db()
+
+    inspector = sa_inspect(db.engine)
+    assert any(idx["name"] == "ix_signals_created_at" for idx in inspector.get_indexes("signals"))
+    assert any(idx["name"] == "ix_predictions_correct_created" for idx in inspector.get_indexes("predictions"))
+    assert any(idx["name"] == "ix_paper_orders_status_market" for idx in inspector.get_indexes("paper_orders"))
+    assert any(idx["name"] == "ix_paper_positions_status_market" for idx in inspector.get_indexes("paper_positions"))
+    assert any(idx["name"] == "ix_trade_history_position_closed" for idx in inspector.get_indexes("trade_history"))
+    db.close()

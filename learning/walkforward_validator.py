@@ -9,6 +9,8 @@ import xgboost as xgb
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score, precision_recall_fscore_support, precision_score, recall_score
 from sklearn.model_selection import TimeSeriesSplit
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from config import (
     MIN_VALIDATION_ACCURACY,
@@ -44,6 +46,7 @@ class WalkForwardValidator:
         gap: int | None = None, label_horizon: int = 0,
         test_size: int | None = None,
         purge_gap_ms: int = 0,
+        fit_model: bool = True,
     ) -> dict[str, Any]:
         """
         Perform walk-forward validation.
@@ -132,9 +135,10 @@ class WalkForwardValidator:
             X_train, X_test = X[train_idx], X[test_idx]
             y_train, y_test = y[train_idx], y[test_idx]
 
-            # Train model
+            # Train model (unless evaluating a pre-fitted frozen champion)
             model = model_factory()
-            model.fit(X_train, y_train)
+            if fit_model:
+                model.fit(X_train, y_train)
 
             # Predict
             y_pred = model.predict(X_test)
@@ -253,10 +257,16 @@ class WalkForwardValidator:
                                     "random_state": 42, "n_jobs": 1, "eval_metric": "mlogloss"}
 
         def rf_factory():
-            return RandomForestClassifier(**rf_params)
+            return Pipeline([
+                ("scaler", StandardScaler()),
+                ("model", RandomForestClassifier(**rf_params)),
+            ])
 
         def xgb_factory():
-            return xgb.XGBClassifier(**xgb_params)
+            return Pipeline([
+                ("scaler", StandardScaler()),
+                ("model", xgb.XGBClassifier(**xgb_params)),
+            ])
 
         rf_result = self.validate(X, y, rf_factory, "f1", timestamps=timestamps, purge_gap_ms=purge_gap_ms)
         xgb_result = self.validate(X, y, xgb_factory, "f1", timestamps=timestamps, purge_gap_ms=purge_gap_ms)

@@ -416,7 +416,7 @@ type Props = {
   onWorkspaceLoad: (workspace: any) => void
 }
 
-const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']
+const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '1w']
 
 function num(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
@@ -668,7 +668,7 @@ function AnalysisScreen({ symbol, marketType, candles, volumeAnalytics }: { symb
   return (
     <>
       <ScreenHeader title="Market Analysis" description={`${symbol} · ${marketType} · technical readings computed from loaded Binance public candles across configured intervals`} />
-      <div className="workspace-summary"><SummaryCard label="SYMBOL" value={symbol} /><SummaryCard label="MARKET" value={marketType} /><SummaryCard label="TIMEFRAMES" value="9" detail="1m → 1w" /><SummaryCard label="ANALYSIS" value="DESCRIPTIVE" detail="Not a forecast" /></div>
+      <div className="workspace-summary"><SummaryCard label="SYMBOL" value={symbol} /><SummaryCard label="MARKET" value={marketType} /><SummaryCard label="TIMEFRAMES" value={String(TIMEFRAMES.length)} detail="1m → 1w" /><SummaryCard label="ANALYSIS" value="DESCRIPTIVE" detail="Not a forecast" /></div>
       <div className="workspace-summary">
         <SummaryCard label="ROLLING 24H QUOTE VOLUME" value={compact(num(volumeAnalytics?.total_volume))} />
         <SummaryCard label="7D AVG DAILY QUOTE VOL" value={compact(num(volumeAnalytics?.average_daily_quote_volume_7d))} />
@@ -1640,7 +1640,7 @@ function SettingsScreen({
             <fieldset className="settings-group">
               <legend><span>03</span> Risk boundaries</legend>
               <div className="settings-fields">
-                {riskSettings.map(([key, label]) => <label className="settings-card settings-field" key={key}><span><b>{label}</b><small>{key.endsWith('_pct') ? 'Percent limit' : key.includes('positions') ? 'Maximum open positions' : 'Futures multiplier'}</small></span><input className="workspace-search" type="number" min="0.01" step="any" value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))} /></label>)}
+                {riskSettings.map(([key, label]) => <label className="settings-card settings-field" key={key}><span><b>{label}</b><small>{key.endsWith('_pct') ? 'Percent limit' : key.includes('positions') ? 'Maximum open positions' : 'Futures multiplier'}</small></span><input className="workspace-search" type="number" min={key.includes('positions') ? '1' : '0.01'} step={key.includes('positions') ? '1' : 'any'} value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))} /></label>)}
               </div>
             </fieldset>
             <fieldset className="settings-group">

@@ -432,6 +432,8 @@ class Scanner:
 
     async def stop(self) -> None:
         self._running = False
+        if self.websocket_manager is not None and hasattr(self.websocket_manager, "remove_handler"):
+            self.websocket_manager.remove_handler(self._stream_handler)
         for task in self._tasks:
             task.cancel()
         if self._tasks:

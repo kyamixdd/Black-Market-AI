@@ -18,7 +18,10 @@ class VolatilityAnalyzer:
             tr_list.append(tr)
         if len(tr_list) < period:
             return float(np.mean(tr_list)) if tr_list else 0.0
-        return float(np.mean(tr_list[-period:]))
+        atr_val = float(np.mean(tr_list[:period]))
+        for tr in tr_list[period:]:
+            atr_val = (atr_val * (period - 1) + float(tr)) / period
+        return float(atr_val)
 
     @staticmethod
     def bollinger_bands(closes: np.ndarray, period: int = 20, std_devs: float = 2.0) -> dict[str, float]:

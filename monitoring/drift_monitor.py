@@ -7,17 +7,13 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from enum import Enum
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
-from config import (
-    MIN_VALIDATION_ACCURACY,
-    MIN_VALIDATION_F1,
-    PREDICTION_HORIZON_MINUTES,
-)
-from database.repositories import Repository
-from risk.adaptive_risk import AdaptiveRiskEngine
+if TYPE_CHECKING:
+    from database.repositories import Repository
+    from risk.adaptive_risk import AdaptiveRiskEngine
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +184,7 @@ class DriftMonitor:
         self._regime_history: deque = deque(maxlen=1000)
         self._last_regime = "UNKNOWN"
         self._regime_stability_days = 0
+        self._regime_start_time: Optional[datetime] = None
 
         # State
         self._last_check = datetime.now(timezone.utc)
@@ -259,12 +256,11 @@ class DriftMonitor:
                     new_alerts.append(alert)
 
             # 7. System resource exhaustion
-            if system_cpu_pct is not None:
-                alert = self._check_system_resources(
+            if system_cpu_pct is not None or system_memory_pct is not None or system_disk_pct is not None:
+                alerts = self._check_system_resources(
                     system_cpu_pct, system_memory_pct, system_disk_pct
                 )
-                if alert:
-                    new_alerts.append(alert)
+                new_alerts.extend(alerts)
 
             # Store alerts
             for alert in new_alerts:
@@ -531,15 +527,19 @@ class DriftMonitor:
 
     def _check_regime_shift(self, current_regime: str) -> Optional[DriftAlert]:
         """Check for unexpected market regime changes."""
+        now = datetime.now(timezone.utc)
         self._regime_history.append({
             "regime": current_regime,
-            "timestamp": datetime.now(timezone.utc)
+            "timestamp": now,
         })
 
-        if self._last_regime != "UNKNOWN" and current_regime != self._last_regime:
-            self._regime_stability_days = 0
-        else:
-            self._regime_stability_days += 1
+        if self._last_regime == "UNKNOWN" or current_regime != self._last_regime:
+            if self._last_regime != "UNKNOWN" and current_regime != self._last_regime:
+                self._regime_stability_days = 0
+            self._regime_start_time = now
+        elif self._regime_start_time is not None:
+            elapsed_days = int((now - self._regime_start_time).total_seconds() // 86400)
+            self._regime_stability_days = max(self._regime_stability_days, elapsed_days)
 
         self._last_regime = current_regime
 
@@ -627,84 +627,113 @@ class DriftMonitor:
 
     def _check_system_resources(
         self,
-        cpu_pct: float,
-        memory_pct: Optional[float],
-        disk_pct: Optional[float]
-    ) -> Optional[DriftAlert]:
-        """Check system resource exhaustion."""
-        self._system_resources["cpu"].add(cpu_pct)
+        cpu_pct: Optional[float] = None,
+        memory_pct: Optional[float] = None,
+        disk_pct: Optional[float] = None,
+    ) -> list[DriftAlert]:
+        """Check system resource exhaustion across CPU, memory, and disk."""
+        alerts: list[DriftAlert] = []
+
+        if cpu_pct is not None:
+            self._system_resources["cpu"].add(cpu_pct)
+            if cpu_pct >= self.thresholds.cpu_critical_pct:
+                alerts.append(DriftAlert(
+                    drift_type=DriftType.SYSTEM_RESOURCES,
+                    severity=AlertSeverity.CRITICAL,
+                    message=f"CPU usage critical: {cpu_pct:.1f}%",
+                    metric_name="cpu_usage",
+                    current_value=cpu_pct,
+                    baseline_value=0.0,
+                    threshold=self.thresholds.cpu_critical_pct,
+                    recovery_recommendations=[
+                        "Reduce scanning frequency",
+                        "Limit concurrent WebSocket connections",
+                        "Disable non-critical ML inference",
+                        "Consider restarting to clear memory leaks",
+                    ],
+                ))
+            elif cpu_pct >= self.thresholds.cpu_warning_pct:
+                alerts.append(DriftAlert(
+                    drift_type=DriftType.SYSTEM_RESOURCES,
+                    severity=AlertSeverity.WARNING,
+                    message=f"CPU usage elevated: {cpu_pct:.1f}%",
+                    metric_name="cpu_usage",
+                    current_value=cpu_pct,
+                    baseline_value=0.0,
+                    threshold=self.thresholds.cpu_warning_pct,
+                    recovery_recommendations=[
+                        "Monitor CPU trends",
+                        "Optimize indicator calculations",
+                    ],
+                ))
+
         if memory_pct is not None:
             self._system_resources["memory"].add(memory_pct)
+            if memory_pct >= self.thresholds.memory_critical_pct:
+                alerts.append(DriftAlert(
+                    drift_type=DriftType.SYSTEM_RESOURCES,
+                    severity=AlertSeverity.CRITICAL,
+                    message=f"Memory usage critical: {memory_pct:.1f}%",
+                    metric_name="memory_usage",
+                    current_value=memory_pct,
+                    baseline_value=0.0,
+                    threshold=self.thresholds.memory_critical_pct,
+                    recovery_recommendations=[
+                        "Clear old candle data",
+                        "Reduce cache sizes",
+                        "Check for memory leaks",
+                        "Restart if necessary",
+                    ],
+                ))
+            elif memory_pct >= self.thresholds.memory_warning_pct:
+                alerts.append(DriftAlert(
+                    drift_type=DriftType.SYSTEM_RESOURCES,
+                    severity=AlertSeverity.WARNING,
+                    message=f"Memory usage elevated: {memory_pct:.1f}%",
+                    metric_name="memory_usage",
+                    current_value=memory_pct,
+                    baseline_value=0.0,
+                    threshold=self.thresholds.memory_warning_pct,
+                    recovery_recommendations=[
+                        "Monitor memory growth",
+                        "Trim old cached candles",
+                    ],
+                ))
+
         if disk_pct is not None:
             self._system_resources["disk"].add(disk_pct)
+            if disk_pct >= self.thresholds.disk_critical_pct:
+                alerts.append(DriftAlert(
+                    drift_type=DriftType.SYSTEM_RESOURCES,
+                    severity=AlertSeverity.CRITICAL,
+                    message=f"Disk usage critical: {disk_pct:.1f}%",
+                    metric_name="disk_usage",
+                    current_value=disk_pct,
+                    baseline_value=0.0,
+                    threshold=self.thresholds.disk_critical_pct,
+                    recovery_recommendations=[
+                        "Archive old data to backup",
+                        "Clean log files",
+                        "Remove old model checkpoints",
+                        "Run database vacuum",
+                    ],
+                ))
+            elif disk_pct >= self.thresholds.disk_warning_pct:
+                alerts.append(DriftAlert(
+                    drift_type=DriftType.SYSTEM_RESOURCES,
+                    severity=AlertSeverity.WARNING,
+                    message=f"Disk usage elevated: {disk_pct:.1f}%",
+                    metric_name="disk_usage",
+                    current_value=disk_pct,
+                    baseline_value=0.0,
+                    threshold=self.thresholds.disk_warning_pct,
+                    recovery_recommendations=[
+                        "Monitor disk usage",
+                        "Clean old log files or checkpoints",
+                    ],
+                ))
 
-        # Check critical thresholds
-        if cpu_pct >= self.thresholds.cpu_critical_pct:
-            return DriftAlert(
-                drift_type=DriftType.SYSTEM_RESOURCES,
-                severity=AlertSeverity.CRITICAL,
-                message=f"CPU usage critical: {cpu_pct:.1f}%",
-                metric_name="cpu_usage",
-                current_value=cpu_pct,
-                baseline_value=0.0,
-                threshold=self.thresholds.cpu_critical_pct,
-                recovery_recommendations=[
-                    "Reduce scanning frequency",
-                    "Limit concurrent WebSocket connections",
-                    "Disable non-critical ML inference",
-                    "Consider restarting to clear memory leaks",
-                ],
-            )
-        elif cpu_pct >= self.thresholds.cpu_warning_pct:
-            return DriftAlert(
-                drift_type=DriftType.SYSTEM_RESOURCES,
-                severity=AlertSeverity.WARNING,
-                message=f"CPU usage elevated: {cpu_pct:.1f}%",
-                metric_name="cpu_usage",
-                current_value=cpu_pct,
-                baseline_value=0.0,
-                threshold=self.thresholds.cpu_warning_pct,
-                recovery_recommendations=[
-                    "Monitor CPU trends",
-                    "Optimize indicator calculations",
-                ],
-            )
-
-        if memory_pct is not None and memory_pct >= self.thresholds.memory_critical_pct:
-            return DriftAlert(
-                drift_type=DriftType.SYSTEM_RESOURCES,
-                severity=AlertSeverity.CRITICAL,
-                message=f"Memory usage critical: {memory_pct:.1f}%",
-                metric_name="memory_usage",
-                current_value=memory_pct,
-                baseline_value=0.0,
-                threshold=self.thresholds.memory_critical_pct,
-                recovery_recommendations=[
-                    "Clear old candle data",
-                    "Reduce cache sizes",
-                    "Check for memory leaks",
-                    "Restart if necessary",
-                ],
-            )
-
-        if disk_pct is not None and disk_pct >= self.thresholds.disk_critical_pct:
-            return DriftAlert(
-                drift_type=DriftType.SYSTEM_RESOURCES,
-                severity=AlertSeverity.CRITICAL,
-                message=f"Disk usage critical: {disk_pct:.1f}%",
-                metric_name="disk_usage",
-                current_value=disk_pct,
-                baseline_value=0.0,
-                threshold=self.thresholds.disk_critical_pct,
-                recovery_recommendations=[
-                    "Archive old data to backup",
-                    "Clean log files",
-                    "Remove old model checkpoints",
-                    "Run database vacuum",
-                ],
-            )
-
-        return None
+        return alerts
 
     def get_recent_alerts(
         self,

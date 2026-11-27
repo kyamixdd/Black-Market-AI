@@ -6,6 +6,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 from learning.model_lifecycle import sha256_file, verify_model_artifact
 
@@ -181,18 +182,39 @@ class ModelManager:
             self._store_evaluation(challenger, result)
             return result
 
-        def model_factory():
+        def model_factory(path=challenger.file_path, kind=challenger.model_type):
             import joblib
-            return joblib.load(challenger.file_path)
+            if kind == "xgboost":
+                import xgboost as xgb
+                m = xgb.XGBClassifier()
+                m.load_model(str(path))
+            else:
+                m = joblib.load(path)
+            from sklearn.pipeline import Pipeline as SKPipeline
+            from sklearn.preprocessing import StandardScaler as SKScaler
+            scaler_path = str(Path(path).parent / f"scaler_{challenger.version}.pkl")
+            if Path(scaler_path).is_file():
+                return SKPipeline([("scaler", joblib.load(scaler_path)), ("model", m)])
+            return m
 
         wf_result = self.validator.validate(X, y, model_factory, metric="f1", timestamps=timestamps, purge_gap_ms=60 * 60 * 1000)
         champion = self.get_champion(challenger.model_type)
         champion_result: dict[str, Any] = {}
         if champion and champion.file_path:
-            def champion_factory():
+            def champion_factory(path=champion.file_path, kind=champion.model_type, champ=champion):
                 import joblib
-                return joblib.load(champion.file_path)
-            champion_result = self.validator.validate(X, y, champion_factory, metric="f1", timestamps=timestamps, purge_gap_ms=60 * 60 * 1000)
+                if kind == "xgboost":
+                    import xgboost as xgb
+                    m = xgb.XGBClassifier()
+                    m.load_model(str(path))
+                else:
+                    m = joblib.load(path)
+                from sklearn.pipeline import Pipeline as SKPipeline
+                scaler_path = str(Path(path).parent / f"scaler_{champ.version}.pkl")
+                if Path(scaler_path).is_file():
+                    return SKPipeline([("scaler", joblib.load(scaler_path)), ("model", m)])
+                return m
+            champion_result = self.validator.validate(X, y, champion_factory, metric="f1", timestamps=timestamps, purge_gap_ms=60 * 60 * 1000, fit_model=False)
 
         # The shared gate's RF/XGB slots represent this single model family
         # here; both entries use the identical folds and evidence.
@@ -295,8 +317,14 @@ class ModelManager:
             and models.get("xgb", {}).get("passes") is True
             and economics.get("rf", {}).get("status") == "ok"
             and economics.get("xgb", {}).get("status") == "ok"
-            and champions.get("rf", {}).get("status") == "ok"
-            and champions.get("xgb", {}).get("status") == "ok"
+            # champion_evidence is absent for the first-ever promotion; allow it
+            and (
+                not champions
+                or (
+                    champions.get("rf", {}).get("status") in ("ok", "not_applicable_no_active_champion")
+                    and champions.get("xgb", {}).get("status") in ("ok", "not_applicable_no_active_champion")
+                )
+            )
         )
         if (not evaluation.passes_criteria
                 or evaluation.model_version != challenger_version
@@ -327,10 +355,12 @@ class ModelManager:
                 # Would need X, y for comparison - skip for now
                 pass
 
-            # Demote current champion
+            # Demote current champion — re-fetch inside same session so mutation persists
             if champ:
-                champ.is_champion = False
-                champ.status = "ROLLED_BACK"
+                stale_champ = session.get(type(champ), champ.version)
+                if stale_champ:
+                    stale_champ.is_champion = False
+                    stale_champ.status = "ROLLED_BACK"
 
             # Promote challenger
             challenger.is_champion = True

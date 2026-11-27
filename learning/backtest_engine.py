@@ -270,7 +270,7 @@ class HistoricalBacktester:
                     if signal and self._should_take_signal(signal, config):
                         trade = self._execute_trade(signal, current_time, config, current_balance)
                         if trade:
-                            trades.append(trade)
+                            # Only added to open_positions here; appended to trades when closed
                             open_positions[trade.trade_id] = trade
 
             # Update open positions
@@ -417,13 +417,15 @@ class HistoricalBacktester:
         return trade
 
     def _check_exit(self, trade: BacktestTrade, current_time: datetime, config: BacktestConfig) -> Optional[tuple[float, str]]:
-        """Check if position should be closed."""
-        # Get current price from candles
-        series = self.candles.get_series(trade.market, trade.symbol, "1m", limit=1)
-        if not series:
+        """Check if position should be closed using historical candles up to current_time only."""
+        current_ms = int(current_time.timestamp() * 1000)
+        tf = "1m" if "1m" in config.timeframes else min(config.timeframes, key=lambda item: self._tf_to_seconds(item))
+        series = self.candles.get_series(trade.market, trade.symbol, tf, limit=1000)
+        historical = [c for c in series if int(c["open_time"]) <= current_ms]
+        if not historical:
             return None
 
-        current_price = series[-1]["close"]
+        current_price = historical[-1]["close"]
 
         # Check stop loss
         if trade.side in ("LONG", "BUY"):
@@ -463,11 +465,11 @@ class HistoricalBacktester:
         )
         trade.fees += exit_fee
 
-        # Exit slippage
+        # Exit slippage — calculate_slippage already returns a dollar cost
         exit_slippage = self.fee_calc.calculate_slippage(
             trade.market, "MARKET", trade.amount, exit_price, trade.leverage, 1000000.0
         )
-        trade.slippage += abs(exit_slippage - exit_price) * trade.amount
+        trade.slippage += abs(exit_slippage)
 
         # Funding (if futures)
         if trade.market == "FUTURES" and trade.exit_time and trade.entry_time:

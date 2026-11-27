@@ -318,6 +318,7 @@ export class WebSocketService {
       return
     }
     if (message.type === 'event' && message.channel) {
+      this.subscriptions.get(message.channel)?.forEach((callback) => callback(message.event))
       this.emit(message.channel, message.event)
       this.emit('event', message.event)
     } else if (message.type === 'error') {

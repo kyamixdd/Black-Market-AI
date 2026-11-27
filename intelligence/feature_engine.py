@@ -23,7 +23,7 @@ class FeatureEngine:
             highs = data["high"]
             lows = data["low"]
             volumes = data["volume"]
-            if len(closes) < 20:
+            if len(closes) < 50:  # I-8: sma(closes, 50) needs at least 50 candles
                 features.extend([0.0] * 9)
                 continue
             price = closes[-1]

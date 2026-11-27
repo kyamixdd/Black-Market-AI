@@ -43,6 +43,19 @@ def test_asks_for_missing_reference_context():
     assert parsed.clarification_required
     assert parsed.clarification_question == "Which asset are you referring to?"
     assert parsed.confidence == ConfidenceLevel.LOW
+    assert parsed.intents == ()
+    assert not parsed.unsupported
+
+
+def test_disambiguates_compound_intent_phrases():
+    scanner = parse_assistant_request("Check the market scanner")
+    assert [intent.tool for intent in scanner.intents] == ["scanner_status"]
+
+    trades = parse_assistant_request("Show recent trade history")
+    assert [intent.tool for intent in trades.intents] == ["trade_history"]
+
+    risk = parse_assistant_request("What is my portfolio risk exposure")
+    assert [intent.tool for intent in risk.intents] == ["risk_status"]
 
 
 def test_unsupported_request_is_not_routed_to_snapshot():

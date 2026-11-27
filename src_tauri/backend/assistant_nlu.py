@@ -83,7 +83,33 @@ def _find_intents(text: str) -> list[ParsedIntent]:
             found.append((min(text.find(term) for term in matches), ParsedIntent(name, tool, matches)))
     found.sort(key=lambda item: item[0])
     # One intent category may have several trigger words; keep one record per category.
-    return [item[1] for item in found]
+    intents = [item[1] for item in found]
+    matched_tools = {intent.tool for intent in intents}
+    filtered: list[ParsedIntent] = []
+    for intent in intents:
+        if (
+            intent.tool == "market_snapshot"
+            and "scanner_status" in matched_tools
+            and intent.evidence_terms == ("market",)
+            and not re.search(r"\bmarket\b(?!\s+scanner\b)", text)
+        ):
+            continue
+        if (
+            intent.tool == "historical_candles"
+            and "trade_history" in matched_tools
+            and intent.evidence_terms == ("history",)
+            and not re.search(r"(?<!\btrade\s)\bhistory\b", text)
+        ):
+            continue
+        if (
+            intent.tool == "paper_account"
+            and "risk_status" in matched_tools
+            and intent.evidence_terms == ("portfolio",)
+            and not re.search(r"\bportfolio\b(?!\s+(?:risk|exposure)\b)", text)
+        ):
+            continue
+        filtered.append(intent)
+    return filtered
 
 
 def _extract_assets(text: str) -> list[str]:
@@ -150,12 +176,15 @@ def parse_assistant_request(
     constraints = tuple(phrase for phrase in constraint_phrases if phrase in normalized)
 
     clarification = None
+    unresolved_reference = False
     if not intents:
         clarification = "What market or application information should I retrieve?"
     elif references and not assets and not context.symbol:
         clarification = "Which asset are you referring to?"
+        unresolved_reference = True
     elif "same timeframe" in references and not explicit_timeframe and not context.timeframe:
         clarification = "Which timeframe should I reuse?"
+        unresolved_reference = True
     elif len(assets) > 1 and "compare" not in normalized and "versus" not in normalized and " vs " not in normalized:
         clarification = "Which asset should I analyze first?"
     needs_clarification = clarification is not None
@@ -175,11 +204,12 @@ def parse_assistant_request(
         reasons.append("Asset falls back to the validated request parameter or context.")
 
     unsupported = not intents
+    resolved_intents = () if unresolved_reference else tuple(intents)
     return StructuredAssistantRequest(
         request_id=request_id or uuid4().hex,
         original_text=original,
         normalized_text=normalized,
-        intents=tuple(intents),
+        intents=resolved_intents,
         entities={
             "assets": assets,
             "symbol": resolved_symbol,

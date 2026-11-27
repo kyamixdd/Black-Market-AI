@@ -102,3 +102,35 @@ async def test_scheduler():
     await sc.stop()
 
     assert count >= 2
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_telegram_notifications_do_not_block_event_bus(tmp_path):
+    import asyncio
+    import time
+    from core.event_models import EventType, make_event
+    from core.orchestrator import Orchestrator
+    from database.connection import Database
+
+    db = Database(f"sqlite:///{tmp_path / 'test.db'}")
+    db.init_db()
+    orch = Orchestrator(db)
+
+    sent = []
+
+    class SlowTelegram:
+        async def send_signal_update(self, signal, status):
+            await asyncio.sleep(0.25)
+            sent.append((signal.get("symbol"), status))
+
+    orch.telegram = SlowTelegram()
+    start = time.perf_counter()
+    await orch._on_signal_rejected(
+        make_event(EventType.SIGNAL_REJECTED, "test", symbol="BTCUSDT", market="SPOT", reason="low_conf")
+    )
+    elapsed = time.perf_counter() - start
+    assert elapsed < 0.1
+    await asyncio.sleep(0.35)
+    assert sent == [("BTCUSDT", "rejected")]
+    await orch.stop()
+    db.close()

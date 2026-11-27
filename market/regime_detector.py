@@ -14,16 +14,23 @@ class RegimeDetector:
             return "UNKNOWN"
         # ADX would be better, but simple slope + volatility works for baseline
         sma50 = MomentumAnalyzer.sma(closes, 50)
-        sma200 = MomentumAnalyzer.sma(closes, 200)
         price = closes[-1]
         bb = VolatilityAnalyzer.bollinger_bands(closes, 20, 2.0)
         bw = bb["bandwidth"]
         if bw < 0.01:
             return "CONSOLIDATING"
-        if price > sma50 > sma200:
-            return "BULL_TREND"
-        if price < sma50 < sma200:
-            return "BEAR_TREND"
+        if len(closes) >= 200:
+            sma200 = MomentumAnalyzer.sma(closes, 200)
+            if price > sma50 > sma200:
+                return "BULL_TREND"
+            if price < sma50 < sma200:
+                return "BEAR_TREND"
+        else:
+            sma50_prior = MomentumAnalyzer.sma(closes[:-10], 50)
+            if price > sma50 > sma50_prior:
+                return "BULL_TREND"
+            if price < sma50 < sma50_prior:
+                return "BEAR_TREND"
         if bw > 0.05:
             return "VOLATILE"
         return "SIDEWAYS"

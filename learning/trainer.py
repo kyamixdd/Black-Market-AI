@@ -129,16 +129,23 @@ class ModelTrainer:
             if not file_path or not Path(file_path).is_file():
                 logger.warning("Promotion blocked: champion model file unavailable for %s", model_type)
                 continue
-            def champion_factory(path=file_path, kind=model_type):
+            def champion_factory(path=file_path, kind=model_type, champ=champion):
                 if kind == "xgboost":
                     model = xgb.XGBClassifier()
                     model.load_model(str(path))
-                    return model
-                return joblib.load(path)
+                else:
+                    model = joblib.load(path)
+                scaler_file = getattr(champ, "scaler_path", None) or str(
+                    Path(path).parent / f"scaler_{getattr(champ, 'version', '')}.pkl"
+                )
+                if scaler_file and Path(scaler_file).is_file():
+                    from sklearn.pipeline import Pipeline
+                    return Pipeline([("scaler", joblib.load(scaler_file)), ("model", model)])
+                return model
             try:
                 results[gate_name] = self.validator.validate(
                     X, y, champion_factory, metric="f1", timestamps=timestamps,
-                    purge_gap_ms=60 * 60 * 1000,
+                    purge_gap_ms=60 * 60 * 1000, fit_model=False,
                 )
             except Exception:
                 logger.exception("Champion comparison validation failed for %s", model_type)
