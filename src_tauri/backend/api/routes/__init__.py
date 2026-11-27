@@ -18,6 +18,7 @@ from . import (
     community,
     evolution,
     autonomous,
+    diagnostics,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "community",
     "evolution",
     "autonomous",
+    "diagnostics",
 ]

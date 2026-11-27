@@ -2,8 +2,10 @@
 import asyncio
 
 import pytest
+from sqlalchemy import create_engine
 
 from core.health_monitor import HealthMonitor
+from core.observability import JsonLogFormatter, instrument_sql_engine
 from core.scheduler import Scheduler
 
 
@@ -18,6 +20,28 @@ def test_health_monitor():
 
     hm.check_component("DB", True)
     assert hm.get_status()["status"] == "OK"
+    assert hm.get_status()["components"]["DB"]["last_check"]
+
+
+def test_sql_write_diagnostics_report_mutations_without_bound_values(caplog):
+    import logging
+
+    engine = create_engine("sqlite://")
+    observer = instrument_sql_engine(engine)
+    caplog.set_level(logging.INFO, logger="database.write")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE diagnostics_test (id INTEGER PRIMARY KEY, value TEXT)")
+        connection.exec_driver_sql("INSERT INTO diagnostics_test (id, value) VALUES (?, ?)", (1, "private-value"))
+    with pytest.raises(Exception):
+        with engine.begin() as connection:
+            connection.exec_driver_sql("INSERT INTO diagnostics_test (id, value) VALUES (?, ?)", (1, "private-value"))
+
+    observer.flush(force=True)
+    messages = [JsonLogFormatter().format(record) for record in caplog.records]
+    assert any('"event":"database_write_batch_summary"' in message and "INSERT diagnostics_test" in message for message in messages)
+    assert any('"event":"database_write_failed"' in message for message in messages)
+    assert all("private-value" not in message for message in messages)
+    engine.dispose()
 
 
 def test_orchestrator_health_snapshot_exposes_runtime_readiness():

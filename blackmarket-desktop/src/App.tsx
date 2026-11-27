@@ -32,6 +32,13 @@ import { DashboardScreen } from './screens/DashboardScreens'
 import { getApiAuthorization, setApiToken } from './services/localAuth'
 import { backendBaseUrl, getBackendRequestMetrics, mutateJson, requestJson } from './services/backendClient'
 import {
+  acknowledgeFrontendDiagnostics,
+  getFrontendDiagnostics,
+  getPendingFrontendDiagnostics,
+  recordFrontendDiagnostic,
+  traceFrontendOperation,
+} from './services/frontendDiagnostics'
+import {
   assessMarketData,
   marketChartKey,
   mergeMarketCandles,
@@ -316,6 +323,7 @@ function App() {
   const [activityLoadState, setActivityLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [backendLogs, setBackendLogs] = useState<string[]>([])
   const [backendLogState, setBackendLogState] = useState<'loading' | 'ready' | 'error' | 'unavailable'>('loading')
+  const [frontendEvents, setFrontendEvents] = useState(getFrontendDiagnostics)
   const [requestMetrics, setRequestMetrics] = useState(getBackendRequestMetrics)
   const [intelligenceLoadState, setIntelligenceLoadState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [websocketConnected, setWebsocketConnected] = useState(false)
@@ -363,6 +371,77 @@ function App() {
   const loadedMarketKeyRef = useRef('')
   const apiReadyRef = useRef(false)
   const startupProbeFailuresRef = useRef(0)
+
+  useEffect(() => {
+    recordFrontendDiagnostic({
+      level: 'INFO',
+      event: 'frontend_screen_opened',
+      operation: `ui.screen.${activeScreen}`,
+      status: 'SUCCESS',
+      detail: `market=${marketType}; symbol=${symbol}`,
+    })
+  }, [activeScreen, marketType, symbol])
+
+  useEffect(() => {
+    if (!apiReady) return
+    let active = true
+    let uploading = false
+    let uploadFailureRecorded = false
+    const uploadDiagnostics = async () => {
+      if (uploading) return
+      const batch = getPendingFrontendDiagnostics(50)
+      if (!batch.length) return
+      uploading = true
+      try {
+        const response = await fetch(`${backendBaseUrl()}/diagnostics/frontend`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(getApiAuthorization() ?? {}),
+          },
+          body: JSON.stringify({ events: batch }),
+          cache: 'no-store',
+        })
+        if (!response.ok) {
+          if (!uploadFailureRecorded) {
+            uploadFailureRecorded = true
+            recordFrontendDiagnostic({
+              level: 'WARNING',
+              event: 'frontend_diagnostic_upload_failed',
+              operation: 'diagnostics.upload_frontend_events',
+              status: 'FAILURE',
+              status_code: response.status,
+              recommendation: 'Keep the local frontend trace buffer; check API authentication and backend diagnostics endpoint availability.',
+            })
+          }
+          return
+        }
+        acknowledgeFrontendDiagnostics(batch.map((event) => event.id))
+        uploadFailureRecorded = false
+      } catch {
+        if (!uploadFailureRecorded) {
+          uploadFailureRecorded = true
+          recordFrontendDiagnostic({
+            level: 'WARNING',
+            event: 'frontend_diagnostic_upload_failed',
+            operation: 'diagnostics.upload_frontend_events',
+            status: 'FAILURE',
+            recommendation: 'Frontend traces remain available locally; restore the backend connection to include them in process logs.',
+          })
+        }
+      } finally {
+        uploading = false
+      }
+    }
+    void uploadDiagnostics()
+    const timer = window.setInterval(() => {
+      if (active) void uploadDiagnostics()
+    }, 5000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [apiReady])
 
   useEffect(() => {
     let active = true
@@ -447,6 +526,13 @@ function App() {
             state: 'ready',
             message: `The ${apiContext} backend API and database are ready.`,
           })
+          recordFrontendDiagnostic({
+            level: 'INFO',
+            event: 'frontend_backend_startup_check',
+            operation: 'startup.verify_backend_and_database',
+            status: 'SUCCESS',
+            duration_ms: Date.now() - startedAt,
+          })
         } else {
           startupProbeFailuresRef.current += 1
           const retainReadyState = apiReadyRef.current && !authenticationFailed && startupProbeFailuresRef.current < 3
@@ -456,6 +542,15 @@ function App() {
             return
           }
           apiReadyRef.current = false
+          recordFrontendDiagnostic({
+            level: startupProbeFailuresRef.current >= 3 ? 'ERROR' : 'WARNING',
+            event: 'frontend_backend_startup_check',
+            operation: 'startup.verify_backend_and_database',
+            status: startupProbeFailuresRef.current >= 3 ? 'FAILURE' : 'WARNING',
+            duration_ms: Date.now() - startedAt,
+            detail: healthError,
+            recommendation: 'Check the backend supervisor log and /health response; confirm database readiness and API token initialization.',
+          })
           setApiReady(false)
           setMarketDataStatus('disconnected')
           setMarketDataStatusKey('')
@@ -591,10 +686,18 @@ function App() {
           requestJson<MarketSnapshot>(`/markets/${encodeURIComponent(symbol)}${marketQuery}`),
           requestJson<unknown>(`/markets/${encodeURIComponent(symbol)}/candles${candleQuery}`),
         ])
-      } catch {
+      } catch (error) {
         // Network/API failures must not leave the chart looking live with old
         // data. Ignore failures from stale refreshes and report only the latest.
         if (!active || requestGeneration !== marketRequestGeneration) return
+        recordFrontendDiagnostic({
+          level: 'ERROR',
+          event: 'dashboard_market_refresh_failed',
+          operation: 'dashboard.market.refresh_snapshot_and_candles',
+          status: 'FAILURE',
+          detail: error instanceof Error ? error.message : 'Market refresh failed.',
+          recommendation: 'Inspect the correlated market snapshot and candle API request traces; verify current data freshness before using signals.',
+        })
         setData((current) => ({ ...current, market: null, candles: [] }))
         setMarketDataStatus('error')
         setMarketDataStatusKey(marketKey)
@@ -618,6 +721,16 @@ function App() {
       }
       const assessment = assessMarketData(snapshotPayload, candlePayload, symbol, marketType)
       const marketDataIsUsable = assessment.dataLoaded
+      recordFrontendDiagnostic({
+        level: assessment.state === 'ready' ? 'INFO' : assessment.state === 'degraded' ? 'WARNING' : 'ERROR',
+        event: 'dashboard_market_data_update',
+        operation: 'dashboard.market.apply_snapshot_and_candles',
+        status: assessment.state === 'ready' ? 'SUCCESS' : assessment.state === 'degraded' ? 'WARNING' : 'FAILURE',
+        detail: `symbol=${symbol}; market=${marketType}; freshness=${assessment.state}; candles=${assessment.candles.length}`,
+        recommendation: assessment.state === 'ready'
+          ? undefined
+          : 'Check quote and candle request traces, symbol/market matching, exchange timestamps, and closed-candle availability.',
+      })
       setData((current) => {
         const olderHistory = marketDataIsUsable
           && loadedMarketKeyRef.current === marketKey
@@ -681,22 +794,33 @@ function App() {
         health,
         riskAlerts: (activityPayload?.events ?? []).filter((event) => event.event_type === 'RISK_ALERT'),
       }))
+      const analyticsReady = Boolean(portfolio && risk && signalPayload && learning && health)
+      recordFrontendDiagnostic({
+        level: analyticsReady ? 'INFO' : 'WARNING',
+        event: 'dashboard_analytics_update',
+        operation: 'dashboard.analytics.apply_data',
+        status: analyticsReady ? 'SUCCESS' : 'WARNING',
+        detail: `portfolio=${Boolean(portfolio)}; risk=${Boolean(risk)}; signals=${Boolean(signalPayload)}; learning=${Boolean(learning)}; health=${Boolean(health)}`,
+        recommendation: analyticsReady ? undefined : 'Inspect failed endpoint traces; unavailable panels are intentionally kept empty instead of displaying invented data.',
+      })
       setActivityLoadState(activityPayload && Array.isArray(activityPayload.events) ? 'ready' : 'error')
       setLoadedAnalyticsKey(analyticsKey)
     }
 
-    refreshMarketRef.current = () => { void refreshMarket() }
-    refreshAnalyticsRef.current = () => { void refreshAnalytics() }
+    const traceMarketRefresh = () => traceFrontendOperation('dashboard.refresh_market', refreshMarket)
+    const traceAnalyticsRefresh = () => traceFrontendOperation('dashboard.refresh_analytics', refreshAnalytics)
+    refreshMarketRef.current = () => { void traceMarketRefresh() }
+    refreshAnalyticsRef.current = () => { void traceAnalyticsRefresh() }
     if (!apiReady) {
       return () => {
         active = false
       }
     }
 
-    void refreshMarket()
-    void refreshAnalytics()
-    const marketTimer = window.setInterval(() => void refreshMarket(), 10_000)
-    const analyticsTimer = window.setInterval(() => void refreshAnalytics(), 30_000)
+    void traceMarketRefresh()
+    void traceAnalyticsRefresh()
+    const marketTimer = window.setInterval(() => void traceMarketRefresh(), 10_000)
+    const analyticsTimer = window.setInterval(() => void traceAnalyticsRefresh(), 30_000)
     return () => {
       active = false
       window.clearInterval(marketTimer)
@@ -717,10 +841,21 @@ function App() {
           : fetch('/api/health', { cache: 'no-store' }).then(async (response) => response.ok
             ? await response.json() as Record<string, unknown>
             : null).catch(() => null)
-        const health = await healthRequest
+        const [health, systemStatus] = await Promise.all([
+          healthRequest,
+          requestJson<Record<string, unknown>>('/system/status'),
+        ])
         if (!active) return
         setRequestMetrics(getBackendRequestMetrics())
-        setData((current) => ({ ...current, health }))
+        setFrontendEvents(getFrontendDiagnostics())
+        setData((current) => ({
+          ...current,
+          health: {
+            ...(health ?? {}),
+            ...(systemStatus ?? {}),
+            ...(health ? { apiHealth: health } : {}),
+          },
+        }))
       } finally {
         loadingData = false
       }
@@ -738,8 +873,19 @@ function App() {
           setBackendLogs((current) => current.length === lines.length && current.every((line, index) => line === lines[index]) ? current : lines)
           setBackendLogState('ready')
         }
-      } catch {
-        if (active) setBackendLogState('error')
+      } catch (error) {
+        if (active) {
+          setBackendLogState('error')
+          recordFrontendDiagnostic({
+            level: 'ERROR',
+            event: 'backend_log_tail_read_failed',
+            operation: 'diagnostics.read_backend_process_log',
+            status: 'FAILURE',
+            detail: error instanceof Error ? error.message : 'Backend log tail could not be read.',
+            recommendation: 'Check the Tauri backend supervisor log path and file permissions.',
+          })
+          setFrontendEvents(getFrontendDiagnostics())
+        }
       } finally {
         loadingLogs = false
       }
@@ -747,7 +893,7 @@ function App() {
 
     void refreshDiagnosticsData()
     void refreshBackendLogs()
-    const dataTimer = window.setInterval(() => void refreshDiagnosticsData(), 10_000)
+    const dataTimer = window.setInterval(() => void refreshDiagnosticsData(), 3000)
     const logsTimer = window.setInterval(() => void refreshBackendLogs(), 2_000)
     return () => {
       active = false
@@ -864,15 +1010,16 @@ function App() {
       }
     }
 
-    refreshScreenDataRef.current = () => { void refreshScreenData() }
+    const traceScreenRefresh = () => traceFrontendOperation(`dashboard.refresh_screen.${activeScreen}`, refreshScreenData)
+    refreshScreenDataRef.current = () => { void traceScreenRefresh() }
     if (!apiReady) {
       return () => {
         active = false
       }
     }
 
-    void refreshScreenData()
-    const timer = window.setInterval(() => void refreshScreenData(), 30_000)
+    void traceScreenRefresh()
+    const timer = window.setInterval(() => void traceScreenRefresh(), 30_000)
     return () => {
       active = false
       window.clearInterval(timer)
@@ -1535,6 +1682,7 @@ function App() {
             health: data.health,
             logs: backendLogs,
             logState: backendLogState,
+            frontendEvents,
             requestMetrics,
           }}
           intelligenceLoadState={intelligenceLoadState}

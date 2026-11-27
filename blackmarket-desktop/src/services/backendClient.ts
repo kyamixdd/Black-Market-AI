@@ -28,6 +28,15 @@ export class BackendRequestError extends Error {
   }
 }
 
+function safeEndpoint(path: string): string {
+  try {
+    const parsed = new URL(path, 'http://blackmarket.local')
+    return parsed.pathname.slice(0, 200) || '/'
+  } catch {
+    return path.split(/[?#]/, 1)[0].slice(0, 200)
+  }
+}
+
 const RETRYABLE_STATUS = new Set([502, 503, 504])
 const RETRY_DELAY_MS = 250
 
@@ -56,17 +65,53 @@ export function createBackendClient(options: BackendClientOptions) {
   async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const startedAt = Date.now()
     let succeeded = false
+    let statusCode: number | undefined
     try {
-      const result = await performRequest<T>(path, init)
+      const result = await performRequest<T>(path, init, (status) => { statusCode = status })
       succeeded = true
       return result
+    } catch (error) {
+      const code = error instanceof BackendRequestError ? error.code : 'network'
+      const status = error instanceof BackendRequestError ? error.status : statusCode
+      recordFrontendDiagnostic({
+        level: 'ERROR',
+        event: 'frontend_api_request_failed',
+        operation: `${(init.method ?? 'GET').toUpperCase()} ${safeEndpoint(path)}`,
+        status: 'FAILURE',
+        duration_ms: Date.now() - startedAt,
+        endpoint: safeEndpoint(path),
+        status_code: status,
+        detail: error instanceof Error ? error.message : 'Unexpected API request failure.',
+        recommendation: code === 'timeout'
+          ? 'Check backend responsiveness and reduce concurrent refresh load.'
+          : status === 401
+            ? 'Re-establish the desktop API session and verify its per-launch token.'
+            : status === 403
+              ? 'Check local API access policy and request origin.'
+              : status && status >= 500
+                ? 'Inspect backend process logs around this timestamp and endpoint for the server-side exception.'
+                : 'Check backend availability, endpoint status, and network connectivity.',
+      })
+      throw error
     } finally {
-      requestSamples.push({ completedAt: Date.now(), durationMs: Date.now() - startedAt, succeeded })
+      const durationMs = Date.now() - startedAt
+      requestSamples.push({ completedAt: Date.now(), durationMs, succeeded })
       if (requestSamples.length > 600) requestSamples.splice(0, requestSamples.length - 600)
+      if (succeeded) {
+        recordFrontendDiagnostic({
+          level: 'INFO',
+          event: 'frontend_api_request_completed',
+          operation: `${(init.method ?? 'GET').toUpperCase()} ${safeEndpoint(path)}`,
+          status: 'SUCCESS',
+          duration_ms: durationMs,
+          endpoint: safeEndpoint(path),
+          status_code: statusCode,
+        })
+      }
     }
   }
 
-  async function performRequest<T>(path: string, init: RequestInit): Promise<T> {
+  async function performRequest<T>(path: string, init: RequestInit, onStatus: (status: number) => void): Promise<T> {
     const url = path.startsWith('http://') || path.startsWith('https://') ? path : `${options.baseUrl}${path}`
     const method = (init.method ?? 'GET').toUpperCase()
     const safeToRetry = method === 'GET' || method === 'HEAD'
@@ -92,6 +137,7 @@ export function createBackendClient(options: BackendClientOptions) {
           },
           cache: 'no-store',
         })
+        onStatus(response.status)
         const payload = await response.json().catch(() => ({}))
         if (!response.ok) {
           const detail = typeof payload.detail === 'string'
@@ -158,6 +204,7 @@ export const backendWebSocketUrl = () => {
 }
 
 import { getApiAuthorization } from './localAuth.js'
+import { recordFrontendDiagnostic } from './frontendDiagnostics.ts'
 
 function localCommunityOwner() {
   try {

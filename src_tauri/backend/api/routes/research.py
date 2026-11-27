@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
+from config import TIMEFRAME_PATTERN
 from database.connection import get_session_maker
 from database.repositories import Repository
 
@@ -69,7 +70,7 @@ class ReportRequest(BaseModel):
     strategy_name: str = Field(min_length=1, max_length=120)
     symbol: str = Field(min_length=3, max_length=20, pattern=r"^[A-Z0-9]+$")
     market: str = Field(pattern=r"^(SPOT|FUTURES)$")
-    timeframe: str = Field(pattern=r"^(1m|3m|5m|15m|30m|1h|4h|1d|1w)$")
+    timeframe: str = Field(pattern=TIMEFRAME_PATTERN)
     status: str = Field(default="saved", max_length=32)
     config: dict[str, Any] = Field(default_factory=dict)
     report: dict[str, Any] = Field(default_factory=dict)
@@ -119,6 +120,8 @@ def update_saved_strategy(strategy_id: str, request: StrategyRequest):
 
 @router.delete("/strategies/{strategy_id}")
 def delete_saved_strategy(strategy_id: str):
+    if not re.fullmatch(r"[a-fA-F0-9-]{8,64}", strategy_id):
+        raise HTTPException(status_code=422, detail="Invalid strategy identifier")
     if not _repo().delete_strategy_definition(strategy_id):
         raise HTTPException(status_code=404, detail="Saved strategy not found")
     return {"status": "deleted", "strategy_id": strategy_id}
@@ -148,6 +151,8 @@ def get_backtest_report(report_id: str):
 
 @router.delete("/reports/{report_id}")
 def delete_backtest_report(report_id: str):
+    if not re.fullmatch(r"[a-fA-F0-9-]{8,64}", report_id):
+        raise HTTPException(status_code=422, detail="Invalid report identifier")
     if not _repo().delete_backtest_report(report_id):
         raise HTTPException(status_code=404, detail="Backtest report not found")
     return {"status": "deleted", "report_id": report_id}
@@ -192,6 +197,8 @@ def update_workspace(workspace_id: str, request: WorkspaceRequest):
 
 @router.delete("/workspaces/{workspace_id}")
 def delete_workspace(workspace_id: str):
+    if not re.fullmatch(r"[a-fA-F0-9-]{8,64}", workspace_id):
+        raise HTTPException(status_code=422, detail="Invalid workspace identifier")
     if not _repo().delete_workspace(workspace_id, _OWNER_KEY):
         raise HTTPException(status_code=404, detail="Workspace not found")
     return {"status": "deleted", "workspace_id": workspace_id}

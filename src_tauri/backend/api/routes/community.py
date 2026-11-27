@@ -2,19 +2,22 @@
 from __future__ import annotations
 
 import json
+import hmac
+import hashlib
 import re
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from database.repositories import Repository
 from database.connection import get_session_maker
+from config import SUPPORTED_TIMEFRAMES
 
 router = APIRouter(prefix="/community", tags=["community"])
 SUPPORTED = {"momentum", "breakout", "trend_following", "mean_reversion", "reversal"}
-TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
+TIMEFRAMES = set(SUPPORTED_TIMEFRAMES)
 OWNER_PATTERN = re.compile(r"^[a-fA-F0-9-]{36}$")
 
 
@@ -22,10 +25,24 @@ def _repo() -> Repository:
     return Repository(get_session_maker())
 
 
-def _owner(value: str | None) -> str:
+def _owner(request: Request, value: str | None) -> str:
     if not value or not OWNER_PATTERN.fullmatch(value):
         raise HTTPException(status_code=401, detail="Community identity is unavailable. Sign in again.")
-    return value
+    principal = getattr(request.state, "authenticated_principal", None)
+    if not isinstance(principal, str) or not principal:
+        raise HTTPException(status_code=401, detail="Authenticated community identity is unavailable.")
+    authenticated_owner = hmac.new(
+        principal.encode("ascii"), value.lower().encode("ascii"), hashlib.sha256,
+    ).hexdigest()
+    _repo().bind_community_owner(value, authenticated_owner)
+    return authenticated_owner
+
+
+def _validate_public_id(public_id: str) -> str:
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", public_id):
+        raise HTTPException(status_code=422, detail="Invalid strategy identifier")
+    return public_id
+
 
 def _reject_private_fields(value: Any, path: str = "rules") -> Any:
     forbidden_fragments = ("apikey", "secret", "credential", "private", "tradehistory",
@@ -174,6 +191,7 @@ class ReportFlagRequest(BaseModel):
 
 @router.get("/strategies")
 def search_public_strategies(
+    request: Request,
     q: str = Query(default="", max_length=120),
     strategy_key: str = Query(default="", max_length=64),
     asset: str = Query(default="", max_length=20),
@@ -183,23 +201,27 @@ def search_public_strategies(
     offset: int = Query(default=0, ge=0, le=10000),
     x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner"),
 ):
-    owner = x_bm_community_owner if OWNER_PATTERN.fullmatch(x_bm_community_owner or "") else None
+    owner = (
+        _owner(request, x_bm_community_owner)
+        if OWNER_PATTERN.fullmatch(x_bm_community_owner or "")
+        else None
+    )
     return {"strategies": _repo().list_public_strategies(query=q, strategy_key=strategy_key.lower(),
         asset=asset.upper(), timeframe=timeframe, sort=sort, owner_key=owner, limit=limit, offset=offset)}
 
 
 @router.get("/favorites")
-def favorites(x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner")):
-    return {"strategies": _repo().list_strategy_favorites(_owner(x_bm_community_owner))}
+def favorites(request: Request, x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner")):
+    return {"strategies": _repo().list_strategy_favorites(_owner(request, x_bm_community_owner))}
 
 
 @router.post("/strategies")
-def publish_strategy(request: PublishRequest,
+def publish_strategy(http_request: Request, payload: PublishRequest,
                      x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner")):
-    owner = _owner(x_bm_community_owner)
-    record = request.model_dump()
+    owner = _owner(http_request, x_bm_community_owner)
+    record = payload.model_dump()
     record["public_id"] = uuid.uuid4().hex
-    record["backtest_report"], record["report_provenance"], record["source_report_id"] = _report_for_publication(request)
+    record["backtest_report"], record["report_provenance"], record["source_report_id"] = _report_for_publication(payload)
     try:
         return _repo().publish_public_strategy(record, owner)
     except PermissionError as exc:
@@ -207,26 +229,31 @@ def publish_strategy(request: PublishRequest,
 
 
 @router.get("/strategies/{public_id}")
-def strategy_details(public_id: str,
+def strategy_details(public_id: str, request: Request,
                      x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner")):
-    if not re.fullmatch(r"[a-fA-F0-9]{32}", public_id):
-        raise HTTPException(status_code=422, detail="Invalid strategy identifier")
-    result = _repo().get_public_strategy(public_id, x_bm_community_owner)
+    _validate_public_id(public_id)
+    owner = (
+        _owner(request, x_bm_community_owner)
+        if OWNER_PATTERN.fullmatch(x_bm_community_owner or "")
+        else None
+    )
+    result = _repo().get_public_strategy(public_id, owner)
     if result is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
     return result
 
 
 @router.put("/strategies/{public_id}")
-def update_strategy(public_id: str, request: PublishRequest,
+def update_strategy(public_id: str, http_request: Request, payload: PublishRequest,
                     x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner")):
-    owner = _owner(x_bm_community_owner)
+    _validate_public_id(public_id)
+    owner = _owner(http_request, x_bm_community_owner)
     existing = _repo().get_public_strategy(public_id, owner)
     if existing is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    record = request.model_dump()
+    record = payload.model_dump()
     record["public_id"] = public_id
-    record["backtest_report"], record["report_provenance"], record["source_report_id"] = _report_for_publication(request)
+    record["backtest_report"], record["report_provenance"], record["source_report_id"] = _report_for_publication(payload)
     try:
         return _repo().publish_public_strategy(record, owner)
     except PermissionError as exc:
@@ -234,24 +261,27 @@ def update_strategy(public_id: str, request: PublishRequest,
 
 
 @router.delete("/strategies/{public_id}")
-def unpublish_strategy(public_id: str,
+def unpublish_strategy(public_id: str, request: Request,
                        x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner")):
-    if not _repo().hide_public_strategy(public_id, _owner(x_bm_community_owner)):
+    _validate_public_id(public_id)
+    if not _repo().hide_public_strategy(public_id, _owner(request, x_bm_community_owner)):
         raise HTTPException(status_code=404, detail="Strategy not found")
     return {"status": "unpublished"}
 
 
 @router.post("/strategies/{public_id}/favorite")
-def favorite_strategy(public_id: str, request: FavoriteRequest,
+def favorite_strategy(public_id: str, http_request: Request, payload: FavoriteRequest,
                      x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner")):
-    if not _repo().set_strategy_favorite(public_id, _owner(x_bm_community_owner), request.favorite):
+    _validate_public_id(public_id)
+    if not _repo().set_strategy_favorite(public_id, _owner(http_request, x_bm_community_owner), payload.favorite):
         raise HTTPException(status_code=404, detail="Strategy not found")
-    return {"status": "updated", "favorite": request.favorite}
+    return {"status": "updated", "favorite": payload.favorite}
 
 
 @router.post("/strategies/{public_id}/report")
-def report_strategy(public_id: str, request: ReportFlagRequest,
+def report_strategy(public_id: str, http_request: Request, payload: ReportFlagRequest,
                    x_bm_community_owner: str | None = Header(default=None, alias="X-BM-Community-Owner")):
-    if not _repo().flag_public_strategy(public_id, _owner(x_bm_community_owner), request.reason, request.details):
+    _validate_public_id(public_id)
+    if not _repo().flag_public_strategy(public_id, _owner(http_request, x_bm_community_owner), payload.reason, payload.details):
         raise HTTPException(status_code=404, detail="Strategy not found")
     return {"status": "submitted"}

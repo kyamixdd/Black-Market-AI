@@ -10,6 +10,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from .event_models import Event
+from .observability import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,13 @@ class EventBus:
             self._dropped += 1
             logger.warning("Event bus full, dropping event %s (total dropped %d)",
                            event.event_type, self._dropped)
+            log_event(
+                logger, logging.ERROR, "event_bus_queue_overflow",
+                component="event_bus", operation="publish",
+                outcome="DROPPED", event_type=event.event_type,
+                failed_count=self._dropped,
+                recommendation="Inspect slow event subscribers and database persistence latency; increase queue capacity only after identifying the bottleneck.",
+            )
 
     async def publish_many(self, events: list[Event]) -> None:
         for ev in events:
@@ -56,6 +64,11 @@ class EventBus:
         if self._running:
             return
         self._running = True
+        log_event(
+            logger, logging.INFO, "event_bus_started",
+            component="event_bus", operation="run",
+            outcome="SUCCESS", queue_capacity=self._queue.maxsize,
+        )
         while True:
             if self._stopping and self._queue.empty():
                 break
@@ -71,12 +84,25 @@ class EventBus:
                 for handler in handlers:
                     try:
                         await handler(event)
-                    except Exception:
+                    except Exception as exc:
                         logger.exception("Handler %s failed for event %s",
                                          getattr(handler, "__name__", handler), event.event_type)
+                        log_event(
+                            logger, logging.ERROR, "event_handler_failed",
+                            component="event_bus", operation="dispatch",
+                            outcome="FAILURE", event_type=event.event_type,
+                            handler=getattr(handler, "__name__", type(handler).__name__),
+                            exception_type=type(exc).__name__,
+                            recommendation="Inspect the handler traceback and affected component; event processing continues for other events.",
+                        )
             finally:
                 self._queue.task_done()
         self._running = False
+        log_event(
+            logger, logging.INFO, "event_bus_stopped",
+            component="event_bus", operation="stop",
+            outcome="SUCCESS", dropped_count=self._dropped,
+        )
 
     async def stop(self) -> None:
         self._stopping = True

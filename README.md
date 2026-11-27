@@ -27,7 +27,7 @@ BlackMarket AI combines public Binance market data, technical analysis, strategy
 - Trade review, saved workspaces, shareable analysis and community strategy library.
 - SQLite persistence, integrity checks, backup/restore and model artifacts.
 - Optional Telegram notifications and a deterministic market-intelligence assistant.
-- Live desktop diagnostics for service state, persisted activity, bounded backend logs and rolling API latency/failure metrics.
+- Live desktop diagnostics for subsystem health, persisted activity, bounded backend logs, frontend API/render traces, database-write summaries, and actionable error guidance.
 - Textual terminal interface and Tauri desktop interface.
 
 Feature availability depends on configured runtime mode and the data available for the selected asset/timeframe. The application reports unavailable or insufficient data rather than treating it as a valid measurement.

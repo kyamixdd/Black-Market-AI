@@ -48,7 +48,9 @@ The score is an engineering-readiness assessment, not a financial-performance ra
 - Market intelligence, assistant, research, strategy evolution, drift monitoring, trade review, workspaces, public strategy library, and shareable analysis.
 - SQLite persistence, integrity checks, backups, restore, event persistence, and recovery routines.
 - Tauri desktop with its React/TypeScript UI, and Textual terminal interface.
-- A Diagnostics screen with supervisor/API/database/WebSocket/scanner/learning/paper-trading status, persisted activity, bounded/redacted backend process logs, and rolling frontend HTTP request metrics.
+- A Diagnostics screen with detailed component/subsystem health, scanner/learning/paper-trading metrics, persisted activity, bounded/redacted backend logs, frontend API and React render traces, actionable failure recommendations, and database-write counts grouped by table. Desktop backend logs rotate at 10 MiB with three retained backups. Frontend traces are retained in a bounded in-memory buffer and uploaded in small authenticated batches; SQL values and request query strings are not logged. High-frequency successful SQL mutations are summarized in 10-second windows, while write failures are logged immediately. Repeated candle collection failures are coalesced by symbol/timeframe and their recovery is recorded.
+
+The diagnostics system traces operational boundaries and meaningful workflow stages; it does not instrument every private/helper function or log every market tick, DOM mutation, SQL value, or API payload. This bounded approach is intended to expose real defects without leaking credentials, overwhelming the UI, or degrading runtime performance.
 
 Presence of a module or screen does not establish that it is enabled in a production configuration, operational against a live service, validated for financial use, or safe for multiple hosted users.
 

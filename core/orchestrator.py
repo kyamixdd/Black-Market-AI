@@ -45,6 +45,7 @@ from market.scanner import Scanner
 from notifications.telegram_client import TelegramClient
 from paper_trading.simulator import Simulator
 from core.health_monitor import HealthMonitor
+from core.observability import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -234,12 +235,24 @@ class Orchestrator:
 
         self._runtime_settings = next_settings
         self._autonomous_enabled = bool(next_settings.get("autonomous_enabled", AUTO_PAPER_TRADING_ENABLED))
+        log_event(
+            logger, logging.INFO, "runtime_settings_applied",
+            component="orchestrator", operation="apply_runtime_settings",
+            outcome="SUCCESS",
+            details=f"spot={self._discovery.spot_enabled}; futures={self._discovery.futures_enabled}; autonomous_paper={self._autonomous_enabled}",
+        )
 
 
 
     async def initialize(self) -> None:
-        logger.info("Initializing BlackMarket AI...")
+        initialization_started = time.perf_counter()
+        log_event(
+            logger, logging.INFO, "orchestrator_initialization_started",
+            component="orchestrator", operation="initialize",
+            outcome="STARTED",
+        )
         # Load symbols from DB
+        phase_started = time.perf_counter()
         saved = self.repo.get_eligible_symbols()
         for s in saved:
             self.registry.register(s.symbol, s.market, {
@@ -249,19 +262,58 @@ class Orchestrator:
                 "min_notional": s.min_notional, "status": s.status,
                 "is_eligible": s.is_eligible,
             })
-        logger.info("Loaded %d symbols from DB", len(saved))
+        log_event(
+            logger, logging.INFO, "database_symbols_loaded",
+            component="orchestrator", operation="load_eligible_symbols",
+            outcome="SUCCESS", eligible_count=len(saved),
+            duration_ms=round((time.perf_counter() - phase_started) * 1000, 2),
+        )
         # Discover fresh market universe
+        phase_started = time.perf_counter()
         result = await self._discovery.discover_all()
-        logger.info("Discovered: spot=%d, futures=%d", result["spot"], result["futures"])
+        log_event(
+            logger, logging.INFO, "exchange_symbol_discovery_result",
+            component="orchestrator", operation="discover_market_universe",
+            outcome="SUCCESS" if result["spot"] or result["futures"] else "FAILURE",
+            details=f"spot={result['spot']}; futures={result['futures']}",
+            eligible_count=result["spot"] + result["futures"],
+            duration_ms=round((time.perf_counter() - phase_started) * 1000, 2),
+            recommendation=None if result["spot"] or result["futures"] else "Verify exchange connectivity and enabled market configuration.",
+        )
         # Persist symbols
+        phase_started = time.perf_counter()
         self.repo.save_symbols(self.registry.to_dicts())
+        log_event(
+            logger, logging.INFO, "database_symbol_registry_persisted",
+            component="orchestrator", operation="persist_symbol_registry",
+            outcome="SUCCESS", eligible_count=self.registry.count("SPOT") + self.registry.count("FUTURES"),
+            duration_ms=round((time.perf_counter() - phase_started) * 1000, 2),
+        )
         # Setup event persistence (critical events to SQLite for recovery)
         self.event_bus.set_persist(self._persist_event)
         # Setup event subscriptions
         self._setup_subscriptions()
+        log_event(
+            logger, logging.INFO, "event_handlers_registered",
+            component="orchestrator", operation="register_event_handlers",
+            outcome="SUCCESS",
+            handler_count=sum(len(handlers) for handlers in self.event_bus._subscribers.values()),
+        )
         # Recover positions once, then start backups, watchdog, and reconnect management.
+        phase_started = time.perf_counter()
         await self.disaster_recovery.start()
-        logger.info("Initialization complete")
+        log_event(
+            logger, logging.INFO, "recovery_initialized",
+            component="orchestrator", operation="start_disaster_recovery",
+            outcome="SUCCESS",
+            duration_ms=round((time.perf_counter() - phase_started) * 1000, 2),
+        )
+        log_event(
+            logger, logging.INFO, "orchestrator_initialization_completed",
+            component="orchestrator", operation="initialize",
+            outcome="SUCCESS",
+            duration_ms=round((time.perf_counter() - initialization_started) * 1000, 2),
+        )
 
     def refresh_health_status(self) -> dict[str, Any]:
         """Publish current runtime readiness for diagnostics and dashboards."""
@@ -352,6 +404,9 @@ class Orchestrator:
                 "enabled": PAPER_TRADING_ENABLED,
                 "autonomous_entries_enabled": self._autonomous_enabled,
             },
+            "database_writes": self.db.write_diagnostics()
+            if callable(getattr(self.db, "write_diagnostics", None))
+            else {},
         })
         return self.health_monitor.get_status()
 
@@ -520,8 +575,14 @@ class Orchestrator:
             logger.exception("Live paper confidence gate failed closed for %s", signal.get("signal_id"))
             return False, "confidence_gate_error"
 
+    def _update_current_regime(self, signal: dict[str, Any]) -> None:
+        regime = signal.get("regime")
+        if isinstance(regime, str) and regime:
+            self._current_regime = regime
+
     async def _on_signal_validated(self, event) -> None:
         signal = self._signal_payload(event)
+        self._update_current_regime(signal)
         if not PAPER_TRADING_ENABLED:
             self._record_autonomous_decision(signal, "BLOCKED", "paper_trading_disabled")
             return
@@ -561,6 +622,7 @@ class Orchestrator:
 
     async def _on_signal_rejected(self, event) -> None:
         signal = self._signal_payload(event)
+        self._update_current_regime(signal)
         self._record_autonomous_decision(signal, "SIGNAL_REJECTED", signal.get("reason", "strategy_signal_rejected"))
         if self.telegram and self._telegram_preference("decisions"):
             await self.telegram.send_signal_update(signal, "rejected")
@@ -614,6 +676,24 @@ class Orchestrator:
             "position_id": position_id,
         }
         self.last_autonomous_decision = decision
+        log_event(
+            logger,
+            logging.INFO if status in {"EXECUTED", "PAUSED"} else logging.WARNING,
+            "paper_trading_decision",
+            component="autonomous_engine",
+            operation="evaluate_validated_signal",
+            outcome=status,
+            reason=reason,
+            symbol=decision["symbol"],
+            market=decision["market"],
+            order_type="PAPER_ONLY",
+            details=f"signal_id={decision['signal_id']}; position_id={position_id or 'none'}",
+            recommendation=(
+                "No action required; paper execution was simulated."
+                if status == "EXECUTED"
+                else "Inspect the recorded reason; risk controls and model-validation gates are intentionally fail-closed."
+            ),
+        )
         try:
             self.repo.save_system_event({
                 "event_id": f"AUTODEC-{signal.get('signal_id') or uuid.uuid4().hex}-{status}"[:64],
@@ -917,8 +997,16 @@ class Orchestrator:
             self.repo.save_system_event(event_dict)
         except Exception as exc:
             logger.error("Failed to persist event %s: %s", event.event_id, exc)
+            log_event(
+                logger, logging.ERROR, "system_event_persistence_failed",
+                component="database", operation="persist_system_event",
+                outcome="FAILURE", event_type=event.event_type,
+                exception_type=type(exc).__name__,
+                recommendation="Inspect the associated database_write_failed event and SQLite availability; recovery-critical event persistence failed.",
+            )
 
     async def run(self) -> None:
+        started = time.perf_counter()
         self._running = True
         await self.scanner.start()
         self.refresh_health_status()
@@ -929,6 +1017,11 @@ class Orchestrator:
         else:
             self.learning_service.state = "disabled"
             self.learning_service.last_cycle_status = "AUTO_MODEL_TRAINING is disabled"
+            log_event(
+                logger, logging.INFO, "learning_service_disabled",
+                component="orchestrator", operation="schedule_learning_service",
+                outcome="SKIPPED", recommendation="Enable AUTO_MODEL_TRAINING only when model training is intended.",
+            )
         async def telegram_loop():
             while self._running:
                 client = self.telegram
@@ -938,6 +1031,13 @@ class Orchestrator:
                     await asyncio.sleep(2)
         self._tasks.append(asyncio.create_task(telegram_loop(), name="blackmarket-telegram-commands"))
         logger.info("BlackMarket AI running")
+        log_event(
+            logger, logging.INFO, "orchestrator_runtime_started",
+            component="orchestrator", operation="run",
+            outcome="SUCCESS", handler_count=len(self._tasks) + len(self.scanner._tasks),
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            details=f"scanner=active; learning={self.learning_service.state}; paper_only=true",
+        )
         # Main loop - keep running until stopped
         while self._running:
             await asyncio.sleep(60)
@@ -947,17 +1047,35 @@ class Orchestrator:
             await self._persist_state()
 
     async def _persist_state(self) -> None:
+        started = time.perf_counter()
+        positions_persisted = 0
         try:
             # Save open positions
             for pos in self.simulator.spot_positions.values():
                 self.repo.save_position(pos)
+                positions_persisted += 1
             for pos in self.simulator.futures_positions.values():
                 self.repo.save_position(pos)
+                positions_persisted += 1
             self.simulator._persist_daily_equity_baseline()
+            log_event(
+                logger, logging.INFO, "paper_state_persisted",
+                component="database", operation="persist_runtime_state",
+                outcome="SUCCESS", affected_rows=positions_persisted,
+                duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            )
         except Exception as exc:
             logger.error("State persistence failed: %s", exc)
+            log_event(
+                logger, logging.ERROR, "paper_state_persistence_failed",
+                component="database", operation="persist_runtime_state",
+                outcome="FAILURE", affected_rows=positions_persisted,
+                exception_type=type(exc).__name__,
+                recommendation="Inspect database_write_failed events and available disk space; verify open paper positions were persisted.",
+            )
 
     async def stop(self) -> None:
+        started = time.perf_counter()
         logger.info("Shutting down...")
         self._running = False
         for task in self._tasks:
@@ -973,6 +1091,12 @@ class Orchestrator:
         await self.event_bus.stop()
         await self.disaster_recovery.stop()
         logger.info("Shutdown complete")
+        log_event(
+            logger, logging.INFO, "orchestrator_runtime_stopped",
+            component="orchestrator", operation="stop",
+            outcome="SUCCESS",
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
 
     async def handle_signal(self, sig: int, frame) -> None:
         logger.info("Received signal %s", sig)

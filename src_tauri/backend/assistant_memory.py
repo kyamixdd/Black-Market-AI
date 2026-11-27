@@ -7,6 +7,7 @@ from uuid import uuid4
 from typing import Any
 
 MEMORY_TYPES = {"working", "episodic", "semantic", "procedural"}
+_MEMORY_CANDIDATE_LIMIT = 200
 _SOURCE = {"user_explicit", "assistant_summary", "validated_workflow"}
 _SECRET_PATTERNS = (
     re.compile(r"(?i)\b(api[_ -]?key|secret|password|token|private[_ -]?key)\s*[:=]\s*\S+"),
@@ -67,7 +68,9 @@ def build_memory_record(*, owner_key: str, memory_type: str, content: str,
 
 def retrieve_relevant_memories(repository, owner_key: str, query: str, *, limit: int = 6) -> list[dict[str, Any]]:
     """Score owner-scoped candidates using request overlap, recency, confidence and importance."""
-    candidates = repository.retrieve_assistant_memories(owner_key, limit=20)
+    candidates = repository.retrieve_assistant_memories(
+        owner_key, limit=_MEMORY_CANDIDATE_LIMIT,
+    )
     terms = set(re.findall(r"[a-z0-9]{2,}", query.lower()))
     scored = []
     now = datetime.now(timezone.utc)

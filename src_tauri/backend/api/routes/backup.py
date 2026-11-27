@@ -5,11 +5,10 @@ import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from config import BACKUP_DIR, DATABASE_URL
-from database.connection import Database
+from config import BACKUP_DIR
 from core.disaster_recovery import BackupConfig, DatabaseBackupManager
 
 logger = logging.getLogger(__name__)
@@ -19,13 +18,14 @@ class BackupRequest(BaseModel):
     description: str = Field(default="manual", min_length=1, max_length=80)
 
 @router.post("/create")
-def create_manual_backup(request: BackupRequest):
+def create_manual_backup(payload: BackupRequest, request: Request):
     """Create a consistent, integrity-checked SQLite backup."""
-    db = Database(DATABASE_URL)
+    db = getattr(request.app.state, "database", None)
+    if db is None:
+        raise HTTPException(status_code=503, detail="Application database is not ready.")
     try:
-        db.init_db()
         manager = DatabaseBackupManager(BackupConfig(backup_dir=BACKUP_DIR), db)
-        path = manager.create_backup(request.description)
+        path = manager.create_backup(payload.description)
         metadata = manager.validate_backup(path)
         return {
             "status": "created",
@@ -35,8 +35,6 @@ def create_manual_backup(request: BackupRequest):
     except Exception as exc:
         logger.exception("Manual backup creation failed")
         raise HTTPException(status_code=500, detail="Backup creation failed; inspect backend logs.") from exc
-    finally:
-        db.close()
 
 @router.get("/list")
 def list_backups():

@@ -22,6 +22,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(2);
 const LOG_TAIL_BYTES: u64 = 64 * 1024;
 const LOG_TAIL_LINES: usize = 200;
 const MAX_LOG_LINE_CHARS: usize = 2000;
+const MAX_BACKEND_LOG_BYTES: u64 = 10 * 1024 * 1024;
+const BACKEND_LOG_BACKUPS: usize = 3;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -270,8 +272,12 @@ impl BackendSupervisor {
             return;
         }
 
-        let log_file = match OpenOptions::new().create(true).append(true).open(&log_path) {
-            Ok(file) => file,
+        let log_writer = match BackendLogWriter::open(
+            log_path.clone(),
+            MAX_BACKEND_LOG_BYTES,
+            BACKEND_LOG_BACKUPS,
+        ) {
+            Ok(writer) => Arc::new(Mutex::new(writer)),
             Err(error) => {
                 drop(process_lock);
                 self.fail(
@@ -298,18 +304,8 @@ impl BackendSupervisor {
                 "BLACKMARKET_DESKTOP_DEV",
                 if cfg!(debug_assertions) { "1" } else { "0" },
             )
-            .stdout(Stdio::from(match log_file.try_clone() {
-                Ok(file) => file,
-                Err(error) => {
-                    drop(process_lock);
-                    self.fail(
-                        format!("Could not prepare backend log output: {error}"),
-                        Some(log_path),
-                    );
-                    return;
-                }
-            }))
-            .stderr(Stdio::from(log_file));
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if let Some(data_dir) = &self.app_data_dir {
             command
                 .env("BLACKMARKET_DATA_DIR", data_dir)
@@ -324,7 +320,7 @@ impl BackendSupervisor {
             return;
         }
 
-        let child = match command.spawn() {
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 drop(runtime);
@@ -340,6 +336,13 @@ impl BackendSupervisor {
                 return;
             }
         };
+
+        if let Some(stdout) = child.stdout.take() {
+            spawn_backend_log_reader(stdout, Arc::clone(&log_writer), "stdout");
+        }
+        if let Some(stderr) = child.stderr.take() {
+            spawn_backend_log_reader(stderr, log_writer, "stderr");
+        }
 
         runtime.status = StartupStatus {
             state: "starting".to_owned(),
@@ -533,6 +536,131 @@ impl BackendSupervisor {
         };
         stop_child(&mut child, shutdown_token.as_deref());
         drop(process_lock);
+    }
+}
+
+struct BackendLogWriter {
+    path: PathBuf,
+    file: Option<File>,
+    bytes_written: u64,
+    max_bytes: u64,
+    backup_count: usize,
+}
+
+impl BackendLogWriter {
+    fn open(path: PathBuf, max_bytes: u64, backup_count: usize) -> std::io::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let bytes_written = file.metadata()?.len();
+        Ok(Self {
+            path,
+            file: Some(file),
+            bytes_written,
+            max_bytes: max_bytes.max(1),
+            backup_count,
+        })
+    }
+
+    fn write_line(&mut self, line: &[u8]) -> std::io::Result<()> {
+        if self.bytes_written > 0
+            && self.bytes_written.saturating_add(line.len() as u64) > self.max_bytes
+        {
+            self.rotate()?;
+        }
+        let file = self.file.as_mut().expect("backend log file is open");
+        file.write_all(line)?;
+        self.bytes_written = self.bytes_written.saturating_add(line.len() as u64);
+        Ok(())
+    }
+
+    fn rotate(&mut self) -> std::io::Result<()> {
+        self.file.take();
+        let result = (|| {
+            for index in (1..=self.backup_count).rev() {
+                let destination = backend_log_backup_path(&self.path, index);
+                if destination.exists() {
+                    fs::remove_file(&destination)?;
+                }
+                let source = if index == 1 {
+                    self.path.clone()
+                } else {
+                    backend_log_backup_path(&self.path, index - 1)
+                };
+                if source.exists() {
+                    fs::rename(source, destination)?;
+                }
+            }
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&self.path)
+        })();
+
+        match result {
+            Ok(file) => {
+                self.file = Some(file);
+                self.bytes_written = 0;
+                Ok(())
+            }
+            Err(error) => {
+                self.file = Some(
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&self.path)?,
+                );
+                self.bytes_written = self.file.as_ref().map_or(0, |file| {
+                    file.metadata().map_or(0, |metadata| metadata.len())
+                });
+                Err(error)
+            }
+        }
+    }
+}
+
+fn backend_log_backup_path(path: &Path, index: usize) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(OsString::from)
+        .unwrap_or_else(|| OsString::from("backend.log"));
+    name.push(format!(".{index}"));
+    path.with_file_name(name)
+}
+
+fn spawn_backend_log_reader<R>(stream: R, writer: Arc<Mutex<BackendLogWriter>>, name: &str)
+where
+    R: Read + Send + 'static,
+{
+    let thread_name = format!("blackmarket-backend-log-{name}");
+    let spawn_result = thread::Builder::new().name(thread_name).spawn(move || {
+        let mut reader = BufReader::new(stream);
+        let mut line = Vec::new();
+        let mut logging_failed = false;
+        loop {
+            line.clear();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if !logging_failed {
+                        let mut writer =
+                            writer.lock().unwrap_or_else(|error| error.into_inner());
+                        if let Err(error) = writer.write_line(&line) {
+                            log::error!(
+                                "Could not write backend process output to its log: {error}"
+                            );
+                            logging_failed = true;
+                        }
+                    }
+                }
+                Err(error) => {
+                    log::error!("Could not read backend process output: {error}");
+                    break;
+                }
+            }
+        }
+    });
+    if let Err(error) = spawn_result {
+        log::error!("Could not start backend log reader thread: {error}");
     }
 }
 
@@ -903,7 +1031,38 @@ fn hide_console(command: &mut Command) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LOG_TAIL_LINES, Probe, bounded_log_lines, parse_health_response, redact_log_line};
+    use super::{
+        BackendLogWriter, LOG_TAIL_LINES, Probe, backend_log_backup_path, bounded_log_lines,
+        parse_health_response, redact_log_line,
+    };
+    use std::fs;
+    use uuid::Uuid;
+
+    #[test]
+    fn backend_log_writer_rotates_to_bounded_number_of_backups() {
+        let directory = std::env::temp_dir().join(format!("blackmarket-log-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("backend.log");
+        let mut writer = BackendLogWriter::open(path.clone(), 6, 2).unwrap();
+
+        writer.write_line(b"one\n").unwrap();
+        writer.write_line(b"two\n").unwrap();
+        writer.write_line(b"tri\n").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "tri\n");
+        assert_eq!(
+            fs::read_to_string(backend_log_backup_path(&path, 1)).unwrap(),
+            "two\n"
+        );
+        assert_eq!(
+            fs::read_to_string(backend_log_backup_path(&path, 2)).unwrap(),
+            "one\n"
+        );
+        assert!(!backend_log_backup_path(&path, 3).exists());
+
+        drop(writer);
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn health_check_requires_backend_database_and_websocket_readiness() {

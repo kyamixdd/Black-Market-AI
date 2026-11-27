@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
+from config import TIMEFRAME_PATTERN
 
 from ...bridge.orchestrator_bridge import get_bridge
 from .schemas import (
@@ -45,7 +46,7 @@ async def get_strategy_weights():
 async def get_market_regime(
     symbol: str,
     market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
-    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|4h|1d|1w)$"),
+    timeframe: str = Query("1h", pattern=TIMEFRAME_PATTERN),
     limit: int = Query(100, ge=50, le=1000),
 ):
     """Rule-based market regime with explicit evidence and sample sufficiency."""
@@ -78,7 +79,7 @@ async def get_market_regime(
 async def get_evidence_market_analysis(
     symbol: str,
     market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
-    timeframe: str = Query("1h", pattern="^(1m|3m|5m|15m|30m|1h|4h|1d|1w)$"),
+    timeframe: str = Query("1h", pattern=TIMEFRAME_PATTERN),
 ):
     """Aggregate observed market state and calculated evidence without prediction."""
     bridge = get_bridge()
@@ -104,7 +105,9 @@ async def get_evidence_market_analysis(
     }
     calculated = {
         key: analytics.get(key) for key in (
-            "price_changes", "indicators", "data_completeness", "status",
+            "price_change_pct", "historical_volatility_24h_pct", "atr_14_pct",
+            "volume_vs_prior_20_candles", "completed_candle_count",
+            "required_candles", "data_completeness",
         ) if key in analytics
     }
     supporting = list(regime.get("evidence", []))

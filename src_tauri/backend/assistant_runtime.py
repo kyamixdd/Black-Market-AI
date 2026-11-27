@@ -163,9 +163,14 @@ async def execute_assistant_query(
 
         trace.transition(AssistantTaskState.VALIDATING)
         interpretation = None
-        if len(successful) == 1 and plan_result.state == "completed":
+        if successful and plan_result.state == "completed":
             if intelligence_config.provider_enabled:
-                interpretation = await optional_provider_interpretation(query, successful[0])
+                provider_evidence = (
+                    successful[0] if len(successful) == 1 else {"results": successful}
+                )
+                interpretation = await optional_provider_interpretation(
+                    query, provider_evidence,
+                )
             if interpretation:
                 answer += "\n\nOptional provider interpretation (not verified facts): " + interpretation
 

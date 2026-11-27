@@ -8,12 +8,13 @@ from .momentum_analyzer import MomentumAnalyzer
 from .regime_detector import RegimeDetector
 from .volatility_analyzer import VolatilityAnalyzer
 from .volume_analyzer import VolumeAnalyzer
+from config import SUPPORTED_TIMEFRAMES
 
 
 class TrendAnalyzer:
     """Analyzes trends across multiple timeframes for confluence."""
 
-    TIMEFRAMES = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
+    TIMEFRAMES = list(SUPPORTED_TIMEFRAMES)
 
     def __init__(self, candle_manager: CandleManager):
         self.candles = candle_manager

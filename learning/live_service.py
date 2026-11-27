@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -19,6 +20,7 @@ from learning.feature_engine import FeatureEngine
 from learning.outcome_labeler import DIRECTIONAL_LABEL_THRESHOLD, OutcomeLabeler
 from learning.trainer import ModelTrainer
 from learning.walkforward_validator import WalkForwardValidator
+from core.observability import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,11 @@ class LiveLearningService:
 
     async def run(self) -> None:
         self.state = "bootstrapping"
+        log_event(
+            logger, logging.INFO, "learning_service_started",
+            component="learning", operation="run",
+            state=self.state, outcome="STARTED",
+        )
         try:
             await self._bootstrap()
         except asyncio.CancelledError:
@@ -56,6 +63,13 @@ class LiveLearningService:
             logger.exception("Live model bootstrap failed")
             self.last_training_result = {"status": "error", "reason": str(exc) or type(exc).__name__}
             self.state = "error"
+            log_event(
+                logger, logging.ERROR, "learning_bootstrap_failed",
+                component="learning", operation="bootstrap",
+                outcome="FAILURE", state=self.state,
+                exception_type=type(exc).__name__,
+                recommendation="Inspect the training traceback, data availability, and model artifact directory; no model was promoted.",
+            )
         while self.orch._running:
             try:
                 await self._live_cycle()
@@ -180,6 +194,12 @@ class LiveLearningService:
         return (X, y, timestamps, metadata) if include_metadata else (X, y, timestamps)
 
     async def _bootstrap(self) -> None:
+        bootstrap_started = time.perf_counter()
+        log_event(
+            logger, logging.INFO, "learning_bootstrap_started",
+            component="learning", operation="bootstrap",
+            outcome="STARTED",
+        )
         self._last_bootstrap_attempt = asyncio.get_running_loop().time()
         for _ in range(20):
             self._pairs = self._choose_pairs()
@@ -189,24 +209,57 @@ class LiveLearningService:
         if not self._pairs:
             self.state = "waiting_for_market_data"
             self.last_cycle_status = "no_eligible_symbols"
+            log_event(
+                logger, logging.WARNING, "learning_bootstrap_waiting_for_symbols",
+                component="learning", operation="select_training_symbols",
+                outcome="SKIPPED", state=self.state,
+                recommendation="Verify market discovery and ticker snapshots; learning waits rather than training on fabricated data.",
+            )
             return
 
         histories: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for market, symbol in self._pairs:
+            history_started = time.perf_counter()
             try:
                 histories[(market, symbol)] = await self._fetch_history(market, symbol, 1000)
+                log_event(
+                    logger, logging.INFO, "learning_history_collected",
+                    component="learning", operation="fetch_training_history",
+                    market=market, symbol=symbol, outcome="SUCCESS",
+                    eligible_count=len(histories[(market, symbol)]),
+                    duration_ms=round((time.perf_counter() - history_started) * 1000, 2),
+                )
             except Exception as exc:
                 logger.warning("Historical model bootstrap failed for %s %s: %s", market, symbol, exc)
+                log_event(
+                    logger, logging.ERROR, "learning_history_collection_failed",
+                    component="learning", operation="fetch_training_history",
+                    market=market, symbol=symbol, outcome="FAILURE",
+                    exception_type=type(exc).__name__,
+                    recommendation="Check public kline API connectivity, symbol eligibility, and historical data availability.",
+                )
         X, y, timestamps, metadata = self._bootstrap_samples(self._pairs, histories, include_metadata=True)
         self.training_samples = int(len(y))
         if len(y) < 300 or len(np.unique(y)) < 2:
             self.state = "waiting_for_history"
             self.last_cycle_status = f"insufficient_bootstrap_samples:{len(y)}"
             logger.warning("Model bootstrap needs at least 300 usable labeled hourly samples; got %d", len(y))
+            log_event(
+                logger, logging.WARNING, "learning_training_skipped",
+                component="learning", operation="validate_training_dataset",
+                outcome="SKIPPED", state=self.state, eligible_count=len(y),
+                recommendation="Collect at least 300 usable chronological labeled samples containing multiple classes; promotion gates remain unchanged.",
+            )
             return
 
         self.state = "training"
         self.last_cycle_status = f"validating:{len(y)}_historical_samples"
+        training_started = time.perf_counter()
+        log_event(
+            logger, logging.INFO, "learning_training_started",
+            component="learning", operation="train_and_validate",
+            outcome="STARTED", state=self.state, eligible_count=len(y),
+        )
         result = await asyncio.to_thread(self.trainer.train_and_validate, X, y, timestamps, metadata)
         self.last_training_result = self._training_summary(result)
         if result.get("status") == "trained":
@@ -256,6 +309,29 @@ class LiveLearningService:
                     "holdout_report": river_result.get("holdout_report"),
                 }
         self.last_training_at = datetime.now(timezone.utc).isoformat()
+        training_status = self.last_training_result.get("status", "unknown")
+        training_reason = self.last_training_result.get("reason")
+        promoted = self.state == "trained"
+        log_event(
+            logger,
+            logging.INFO if promoted else logging.WARNING,
+            "learning_training_completed",
+            component="learning", operation="train_and_validate",
+            outcome="PROMOTED" if promoted else "NOT_PROMOTED",
+            state=self.state, eligible_count=self.training_samples,
+            duration_ms=round((time.perf_counter() - training_started) * 1000, 2),
+            details=f"status={training_status}; reason={training_reason or 'none'}",
+            recommendation=None if promoted else "Review walk-forward holdout and cost-adjusted promotion-gate failure reasons; keep automated entries gated until a candidate passes.",
+        )
+        log_event(
+            logger,
+            logging.INFO if promoted else logging.WARNING,
+            "learning_bootstrap_completed",
+            component="learning", operation="bootstrap",
+            outcome="SUCCESS" if promoted else "DEGRADED",
+            state=self.state, eligible_count=self.training_samples,
+            duration_ms=round((time.perf_counter() - bootstrap_started) * 1000, 2),
+        )
         self._river_seen.update(
             prediction.prediction_id
             for prediction in self.repo.get_predictions_history(10000)
@@ -410,6 +486,7 @@ class LiveLearningService:
                 await self._record_prediction(market, symbol, candles)
 
     async def _live_cycle(self) -> None:
+        cycle_started = time.perf_counter()
         if not self._pairs or (
             self.state in {"waiting_for_history", "error", "validation_failed"}
             and asyncio.get_running_loop().time() - self._last_bootstrap_attempt >= 900
@@ -417,9 +494,16 @@ class LiveLearningService:
             await self._bootstrap()
             if not self._pairs:
                 self.last_cycle_status = "waiting_for_eligible_symbols"
+                log_event(
+                    logger, logging.WARNING, "learning_cycle_waiting_for_symbols",
+                    component="learning", operation="live_cycle",
+                    outcome="SKIPPED",
+                    recommendation="The live learner will retry after market data provides eligible symbols.",
+                )
                 return
         self.last_cycle_status = "collecting_live_hourly_candles"
         histories: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        history_failures = 0
         for market, symbol in self._pairs:
             try:
                 candles = await self._fetch_history(market, symbol, 3)
@@ -429,7 +513,15 @@ class LiveLearningService:
                     if series:
                         await self._record_prediction(market, symbol, series)
             except Exception as exc:
+                history_failures += 1
                 logger.warning("Live hourly candle update failed for %s %s: %s", market, symbol, exc)
+                log_event(
+                    logger, logging.ERROR, "learning_live_history_failed",
+                    component="learning", operation="collect_live_hourly_candles",
+                    market=market, symbol=symbol, outcome="FAILURE",
+                    exception_type=type(exc).__name__,
+                    recommendation="Check the public kline endpoint and retry after its bounded API backoff.",
+                )
 
         labeler = OutcomeLabeler(self.repo, self.orch.simulator)
         labeled = labeler.evaluate_unresolved()
@@ -445,6 +537,19 @@ class LiveLearningService:
         if (AUTO_MODEL_TRAINING and resolved_count >= 500
                 and resolved_count - self._last_retrain_count >= 100):
             await self._retrain_from_live_outcomes(resolved_count)
+        log_event(
+            logger,
+            logging.INFO if history_failures == 0 else logging.WARNING,
+            "learning_live_cycle_completed",
+            component="learning", operation="live_cycle",
+            outcome="SUCCESS" if history_failures == 0 else "PARTIAL_FAILURE",
+            state=self.state, eligible_count=len(histories),
+            failed_count=history_failures, labeled_count=labeled,
+            online_updates=online_updates,
+            duration_ms=round((time.perf_counter() - cycle_started) * 1000, 2),
+            details=f"resolved_predictions={resolved_count}; cycle={self.last_cycle_status}",
+            recommendation=None if history_failures == 0 else "Inspect learning_live_history_failed entries; successfully collected symbols continued through labeling.",
+        )
 
     async def _record_prediction(self, market: str, symbol: str, candles: list[dict[str, Any]]) -> None:
         closed = [candle for candle in candles if int(candle["close_time"]) < int(datetime.now(timezone.utc).timestamp() * 1000)]
@@ -480,6 +585,12 @@ class LiveLearningService:
             "created_at": created_at,
         })
         self._last_prediction_open[key] = open_time
+        log_event(
+            logger, logging.INFO, "learning_prediction_persisted",
+            component="learning", operation="record_prediction",
+            market=market, symbol=symbol, outcome="SUCCESS",
+            details=f"model_version={prediction.get('model_version') or 'untrained'}; timeframe=1h",
+        )
 
     def _learn_resolved_predictions(self) -> int:
         if self._river_model is None:
@@ -503,6 +614,12 @@ class LiveLearningService:
                 logger.exception("Unable to apply online update for prediction %s", prediction.prediction_id)
         if updates:
             self.river_updates += updates
+            log_event(
+                logger, logging.INFO, "learning_online_updates_applied",
+                component="learning", operation="learn_resolved_predictions",
+                outcome="SUCCESS", eligible_count=updates,
+                details=f"total_online_updates={self.river_updates}",
+            )
         return updates
 
     def _persist_river(self) -> None:
@@ -539,4 +656,15 @@ class LiveLearningService:
                 self.last_cycle_status = "live_retrain_activation_failed_existing_champion_unchanged"
         else:
             self.last_cycle_status = f"live_retrain_not_activated:{result.get('status', 'unknown')}"
+        promoted = self.last_cycle_status == "live_retrain_validated_and_activated"
+        log_event(
+            logger,
+            logging.INFO if promoted else logging.WARNING,
+            "learning_live_retraining_completed",
+            component="learning", operation="retrain_from_live_outcomes",
+            outcome="PROMOTED" if promoted else "NOT_PROMOTED",
+            eligible_count=resolved_count, state=self.state,
+            details=self.last_cycle_status,
+            recommendation=None if promoted else "Review validation evidence; the active champion was not replaced.",
+        )
 

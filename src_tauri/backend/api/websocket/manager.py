@@ -86,7 +86,13 @@ class WebSocketManager:
         self._connections: dict[str, WebSocket] = {}
         self._subscriptions: dict[WebSocketChannel, set[str]] = {}
         self._connection_channels: dict[str, set[WebSocketChannel]] = {}
+        self._outboxes: dict[str, asyncio.Queue[BaseModel]] = {}
+        self._send_tasks: dict[str, asyncio.Task] = {}
         self._running = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
 
     async def start(self) -> None:
         """Start the WebSocket manager and subscribe to EventBus."""
@@ -100,6 +106,12 @@ class WebSocketManager:
     async def shutdown(self) -> None:
         """Shutdown the WebSocket manager."""
         self._running = False
+        self.event_bus.unsubscribe_all(self._on_event)
+        send_tasks = list(self._send_tasks.values())
+        for task in send_tasks:
+            task.cancel()
+        if send_tasks:
+            await asyncio.gather(*send_tasks, return_exceptions=True)
         # Close all connections
         for ws in list(self._connections.values()):
             try:
@@ -109,13 +121,19 @@ class WebSocketManager:
         self._connections.clear()
         self._subscriptions.clear()
         self._connection_channels.clear()
-        self._running = False
+        self._outboxes.clear()
+        self._send_tasks.clear()
 
     def connect(self, websocket: WebSocket) -> str:
         """Register a new WebSocket connection."""
         connection_id = uuid.uuid4().hex[:12]
         self._connections[connection_id] = websocket
         self._connection_channels[connection_id] = set()
+        outbox: asyncio.Queue[BaseModel] = asyncio.Queue(maxsize=128)
+        self._outboxes[connection_id] = outbox
+        self._send_tasks[connection_id] = asyncio.create_task(
+            self._send_loop(connection_id, websocket, outbox)
+        )
         logger.info(f"WebSocket connected: {connection_id} (total: {len(self._connections)})")
         return connection_id
 
@@ -133,6 +151,10 @@ class WebSocketManager:
                 subs.discard(connection_id)
             self._connections.pop(connection_id, None)
             self._connection_channels.pop(connection_id, None)
+            self._outboxes.pop(connection_id, None)
+            send_task = self._send_tasks.pop(connection_id, None)
+            if send_task is not None and send_task is not asyncio.current_task():
+                send_task.cancel()
             logger.info(f"WebSocket disconnected: {connection_id} (remaining: {len(self._connections)})")
 
     async def handle_message(self, websocket: WebSocket, message: str) -> None:
@@ -230,11 +252,38 @@ class WebSocketManager:
         for channel in channels:
             for connection_id in list(self._subscriptions.get(channel, set())):
                 websocket = self._connections.get(connection_id)
-                if websocket:
-                    await self._send(
-                        websocket,
-                        WebSocketEventMessage(channel=channel, event=event_data),
-                    )
+                outbox = self._outboxes.get(connection_id)
+                if websocket and outbox:
+                    try:
+                        outbox.put_nowait(
+                            WebSocketEventMessage(channel=channel, event=event_data)
+                        )
+                    except asyncio.QueueFull:
+                        logger.warning(
+                            "Dropping WebSocket event for slow connection %s; outbound queue is full",
+                            connection_id,
+                        )
+
+    async def _send_loop(
+        self,
+        connection_id: str,
+        websocket: WebSocket,
+        outbox: asyncio.Queue[BaseModel],
+    ) -> None:
+        while self._running and self._connections.get(connection_id) is websocket:
+            message = await outbox.get()
+            try:
+                await websocket.send_text(message.model_dump_json())
+            except WebSocketDisconnect:
+                logger.debug("WebSocket client disconnected before queued message delivery")
+                self.disconnect(websocket)
+                return
+            except Exception:
+                logger.warning("Unable to deliver queued WebSocket message; dropping connection", exc_info=True)
+                self.disconnect(websocket)
+                return
+            finally:
+                outbox.task_done()
 
     async def _send(self, websocket: WebSocket, message: BaseModel) -> None:
         """Send JSON message to WebSocket."""

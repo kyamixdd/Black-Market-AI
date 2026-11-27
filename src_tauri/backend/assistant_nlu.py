@@ -7,11 +7,15 @@ from enum import Enum
 from uuid import uuid4
 from typing import Any
 
+from config import SUPPORTED_TIMEFRAMES
 from .assistant_intelligence import validate_market, validate_symbol
 
-TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
+TIMEFRAMES = set(SUPPORTED_TIMEFRAMES)
 COMMON_ASSETS = {"BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK", "LTC", "TRX", "TON", "BCH"}
-_TIMEFRAME_RE = re.compile(r"(?<![a-z0-9])(1m|3m|5m|15m|30m|1h|4h|1d|1w)(?![a-z0-9])", re.I)
+_TIMEFRAME_RE = re.compile(
+    r"(?<![a-z0-9])(" + "|".join(map(re.escape, SUPPORTED_TIMEFRAMES)) + r")(?![a-z0-9])",
+    re.I,
+)
 _TIMEFRAME_WORD_RE = re.compile(r"\b(1|3|5|15|30)\s*(?:-?minutes?|mins?)\b|\b(1|4)\s*(?:-?hours?|hrs?)\b|\b(daily|weekly)\b", re.I)
 _PAIR_RE = re.compile(r"\b([A-Z0-9]{2,12})(USDT|USDC|USD|BTC|ETH)\b", re.I)
 _DURATION_RE = re.compile(r"\b(?:last|past|over|for)\s+(\d+)\s+(minute|hour|day|week|month|year)s?\b", re.I)

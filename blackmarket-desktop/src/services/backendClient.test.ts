@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { backendBaseUrl, backendEventStreamUrl, backendWebSocketUrl, createBackendClient } from './backendClient.ts'
+import { getFrontendDiagnostics } from './frontendDiagnostics.ts'
 
 function response(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
@@ -135,4 +136,36 @@ test('request metrics report recent successes and failures without request detai
   assert.ok(metrics.averageDurationMs >= 0)
   assert.ok(metrics.p95DurationMs >= 0)
   assert.equal('url' in metrics, false)
+})
+
+test('frontend API traces record successful endpoints without query parameters', async () => {
+  const client = createBackendClient({
+    baseUrl: '/api/backend',
+    fetcher: async () => response(200, { ready: true }),
+  })
+
+  await client.get('/system/status?token=must-not-be-recorded')
+
+  const event = getFrontendDiagnostics().at(-1)
+  assert.equal(event?.event, 'frontend_api_request_completed')
+  assert.equal(event?.endpoint, '/system/status')
+  assert.equal(event?.status, 'SUCCESS')
+  assert.equal(JSON.stringify(event).includes('must-not-be-recorded'), false)
+})
+
+test('frontend API failures include actionable status details without query secrets', async () => {
+  const client = createBackendClient({
+    baseUrl: '/api/backend',
+    retries: 0,
+    fetcher: async () => response(503, { detail: 'Backend unavailable' }),
+  })
+
+  await assert.rejects(client.get('/system/status?api_token=must-not-be-recorded'))
+
+  const event = getFrontendDiagnostics().at(-1)
+  assert.equal(event?.event, 'frontend_api_request_failed')
+  assert.equal(event?.status, 'FAILURE')
+  assert.equal(event?.status_code, 503)
+  assert.ok(event?.recommendation)
+  assert.equal(JSON.stringify(event).includes('must-not-be-recorded'), false)
 })

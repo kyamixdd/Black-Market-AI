@@ -82,7 +82,14 @@ class Scanner:
     async def _analyze_market(self, market: str) -> None:
         """Refresh candles for the most liquid symbols, then run strategy analysis."""
         if self.candle_manager is None or self.intelligence is None:
+            log_event(
+                logger, logging.WARNING, "scanner_analysis_unavailable",
+                component="scanner", operation="analyze_market",
+                market=market, outcome="SKIPPED",
+                recommendation="Initialize the candle manager and intelligence core before starting market scans.",
+            )
             return
+        analysis_started = time.perf_counter()
         snapshots = self.cache.get_market_tickers(market)
         candidates = [
             item for item in snapshots
@@ -92,6 +99,12 @@ class Scanner:
         candidates.sort(key=lambda item: float(item.get("volume_24h") or 0), reverse=True)
         if not candidates:
             self._scan_status[market].update({"state": "NO_ELIGIBLE_DATA", "completed_at": datetime.now(timezone.utc).isoformat(), "last_error": "No eligible ticker snapshot available"})
+            log_event(
+                logger, logging.WARNING, "scanner_candidates_unavailable",
+                component="scanner", operation="filter_and_rank_symbols",
+                market=market, outcome="FAILURE",
+                recommendation="Wait for ticker retrieval and verify the exchange market is enabled and eligible symbols are registered.",
+            )
             return
 
         # Rotate through the full eligible universe in bounded batches. This avoids
@@ -108,6 +121,14 @@ class Scanner:
         prioritized = [(market, str(item["symbol"])) for item in selected]
         if not prioritized:
             return
+        log_event(
+            logger, logging.INFO, "scanner_candidates_ranked",
+            component="scanner", operation="filter_and_rank_symbols",
+            market=market, outcome="SUCCESS",
+            symbol_count=len(snapshots), candidate_count=len(candidates),
+            symbols_selected=len(prioritized),
+            details=f"ranking=quote_volume_desc; scan_all_eligible={self.scan_all_eligible}; offset={offset}",
+        )
 
         status = self._scan_status[market]
         scan_started = time.perf_counter()
@@ -138,6 +159,13 @@ class Scanner:
                         status["refresh_failures"] += 1
                         status["last_error"] = f"{symbol} {timeframe}: {collection.get('error')}"
                         self._record_refresh_failure(market, symbol, timeframe)
+                        log_event(
+                            logger, logging.ERROR, "scanner_candle_refresh_failed",
+                            component="scanner", operation="refresh_candles",
+                            market=market, symbol=symbol, outcome="FAILURE",
+                            details=f"timeframe={timeframe}; error={collection.get('error')}",
+                            recommendation="Check public kline API connectivity, symbol eligibility, interval support, and exchange rate limits.",
+                        )
                         return False
                     succeeded = bool(collection and collection.get("state") == "SUCCESS")
                     if succeeded:
@@ -146,6 +174,13 @@ class Scanner:
                         status["refresh_failures"] += 1
                         status["last_error"] = f"{symbol} {timeframe}: refresh_not_confirmed"
                         self._record_refresh_failure(market, symbol, timeframe)
+                        log_event(
+                            logger, logging.ERROR, "scanner_candle_refresh_unconfirmed",
+                            component="scanner", operation="refresh_candles",
+                            market=market, symbol=symbol, outcome="FAILURE",
+                            details=f"timeframe={timeframe}; collector did not confirm success",
+                            recommendation="Inspect candle collection status and the exchange response for this symbol and interval.",
+                        )
                     return succeeded
                 except asyncio.CancelledError:
                     raise
@@ -153,6 +188,14 @@ class Scanner:
                     status["refresh_failures"] += 1
                     status["last_error"] = f"{symbol} {timeframe}: {type(exc).__name__}"
                     self._record_refresh_failure(market, symbol, timeframe)
+                    log_event(
+                        logger, logging.ERROR, "scanner_candle_refresh_exception",
+                        component="scanner", operation="refresh_candles",
+                        market=market, symbol=symbol, outcome="FAILURE",
+                        error_type=type(exc).__name__,
+                        details=f"timeframe={timeframe}",
+                        recommendation="Inspect the traceback and exchange response; retries use bounded backoff.",
+                    )
                     logger.warning("Candle refresh failed for %s %s %s: %s", market, symbol, timeframe, exc)
                     return False
 
@@ -167,11 +210,26 @@ class Scanner:
         status["refresh_successes"] = sum(result is True for result in results)
         status["refresh_failures"] += sum(isinstance(result, BaseException) for result in results)
         try:
+            strategy_started = time.perf_counter()
             await self.intelligence.run_prioritized_scan(prioritized)
+            log_event(
+                logger, logging.INFO, "scanner_strategy_analysis_completed",
+                component="scanner", operation="run_prioritized_scan",
+                market=market, outcome="SUCCESS",
+                symbols_selected=len(prioritized),
+                duration_ms=round((time.perf_counter() - strategy_started) * 1000, 2),
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             status["last_error"] = f"strategy scan: {type(exc).__name__}"
+            log_event(
+                logger, logging.ERROR, "scanner_strategy_analysis_failed",
+                component="scanner", operation="run_prioritized_scan",
+                market=market, outcome="FAILURE",
+                exception_type=type(exc).__name__,
+                recommendation="Inspect the strategy traceback and check candle integrity and feature/model inputs.",
+            )
             logger.exception("Strategy scan batch failed for %s", market)
         status["completed_at"] = datetime.now(timezone.utc).isoformat()
         status["state"] = "DEGRADED" if status["refresh_failures"] or status["last_error"] else "COMPLETE"
@@ -181,6 +239,20 @@ class Scanner:
                   refresh_successes=status["refresh_successes"], refresh_failures=status["refresh_failures"],
                   refresh_skipped=status["refresh_skipped"],
                   duration_ms=round((time.perf_counter() - scan_started) * 1000, 2))
+        log_event(
+            logger,
+            logging.INFO if status["state"] == "COMPLETE" else logging.WARNING,
+            "scanner_market_analysis_summary",
+            component="scanner", operation="refresh_and_analyze_market",
+            market=market, outcome=status["state"],
+            symbols_selected=len(prioritized),
+            timeframe_count=len(self.analysis_timeframes),
+            refresh_successes=status["refresh_successes"],
+            refresh_failures=status["refresh_failures"],
+            refresh_skipped=status["refresh_skipped"],
+            duration_ms=round((time.perf_counter() - analysis_started) * 1000, 2),
+            recommendation=None if status["state"] == "COMPLETE" else "Inspect failed symbol/timeframe events; successful refreshes are retained and failed pairs use bounded retries.",
+        )
 
     async def _handle_stream_message(self, market: str, message: dict) -> None:
         """Consume validated Binance ticker events into the shared cache."""
@@ -266,7 +338,9 @@ class Scanner:
                     await asyncio.sleep(1)
                     continue
                 await client.sync_clock_if_due()
+                ticker_started = time.perf_counter()
                 tickers = await client.get_all_tickers()
+                eligible_tickers = 0
                 for ticker in tickers:
                     symbol = ticker.get("symbol")
                     if not self.registry.is_eligible(symbol, market):
@@ -280,6 +354,14 @@ class Scanner:
                     if not valid_price(price) or not valid_volume(volume) or not math.isfinite(change):
                         continue
                     self.cache.update_ticker(market, symbol, price, volume, change, source="REST")
+                    eligible_tickers += 1
+                log_event(
+                    logger, logging.INFO, "scanner_tickers_retrieved",
+                    component="scanner", operation="retrieve_and_validate_tickers",
+                    market=market, outcome="SUCCESS",
+                    symbol_count=len(tickers), eligible_count=eligible_tickers,
+                    duration_ms=round((time.perf_counter() - ticker_started) * 1000, 2),
+                )
                 await self._refresh_stream_subscriptions(market)
                 await self.event_bus.publish(make_event(
                     EventType.MARKET_SNAPSHOT, "scanner", market=market,
@@ -292,6 +374,13 @@ class Scanner:
                 raise
             except Exception as exc:
                 logger.error("%s ticker scan failed: %s", market, exc)
+                log_event(
+                    logger, logging.ERROR, "scanner_ticker_scan_failed",
+                    component="scanner", operation="retrieve_and_validate_tickers",
+                    market=market, outcome="FAILURE",
+                    exception_type=type(exc).__name__,
+                    recommendation="Check Binance public market-data reachability, rate limits, and exchange client logs.",
+                )
             await asyncio.sleep(30)
 
     async def _scan_futures_extra(self) -> None:
@@ -333,7 +422,13 @@ class Scanner:
             self.websocket_manager.add_handler(self._stream_handler)
         self._tasks.append(asyncio.create_task(self._scan_market_tickers("FUTURES")))
         self._tasks.append(asyncio.create_task(self._scan_futures_extra()))
-        logger.info("Scanner started")
+        log_event(
+            logger, logging.INFO, "scanner_started",
+            component="scanner", operation="start",
+            outcome="SUCCESS",
+            details=f"markets={','.join(sorted(self.enabled_markets))}; batch_size={self.analysis_symbol_limit}; concurrency={self.max_concurrent_scans}",
+            timeframe_count=len(self.analysis_timeframes),
+        )
 
     async def stop(self) -> None:
         self._running = False
@@ -342,3 +437,7 @@ class Scanner:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        log_event(
+            logger, logging.INFO, "scanner_stopped",
+            component="scanner", operation="stop", outcome="SUCCESS",
+        )

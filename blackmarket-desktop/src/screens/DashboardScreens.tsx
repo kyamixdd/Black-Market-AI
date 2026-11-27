@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { mutateJson, requestJson } from '../services/backendClient'
 import { DataTable as Table, DetailCard, EmptyState, ScreenHeader, SummaryCard, TableHead } from '../components/ui/TerminalPrimitives'
+import type { FrontendDiagnosticEvent } from '../services/frontendDiagnostics'
 
 export type ScreenName =
   | 'Overview'
@@ -393,6 +394,7 @@ type Props = {
     health: Record<string, unknown> | null
     logs: string[]
     logState: 'loading' | 'ready' | 'error' | 'unavailable'
+    frontendEvents: FrontendDiagnosticEvent[]
       requestMetrics: {
         windowSeconds: number
         requestCount: number
@@ -765,9 +767,9 @@ function PositionsScreen({ positions, openOrders, onPositionAction, onManualTrad
   const [tradeBusy, setTradeBusy] = useState(false)
   const [tradeMessage, setTradeMessage] = useState('')
   return (
-    <>
+    <div className="positions-screen">
       <ScreenHeader title="Positions" description="Open simulated exposure across separate Spot and Futures paper accounts" />
-      <section className="workspace-inspector" aria-label="Manual paper trade">
+      <section className="workspace-inspector positions-trade-panel" aria-label="Manual paper trade">
         <div className="workspace-inspector-heading"><strong>MANUAL PAPER TRADE</strong><span>Simulator only · risk checks enforced</span></div>
         <form className="workspace-inspector-actions" onSubmit={async (event) => {
           event.preventDefault(); setTradeBusy(true); setTradeMessage('')
@@ -795,9 +797,9 @@ function PositionsScreen({ positions, openOrders, onPositionAction, onManualTrad
           {tradeMessage && <span role="status">{tradeMessage}</span>}
         </form>
       </section>
-      <section className="workspace-inspector" aria-label="Open limit orders">
+      <section className="workspace-inspector positions-orders-panel" aria-label="Open limit orders">
         <div className="workspace-inspector-heading"><strong>OPEN LIMIT ORDERS</strong><span>{openOrders.length} pending</span></div>
-        {openOrders.length ? <Table minWidth={720}>
+        {openOrders.length ? <div className="positions-table-wrap"><Table minWidth={720}>
           <TableHead labels={['ORDER ID', 'ASSET', 'MARKET', 'SIDE', 'LIMIT PRICE', 'QUANTITY', 'STATUS', 'ACTION']} />
           {openOrders.map((order) => <tr key={order.order_id}>
             <td>{order.order_id ?? '—'}</td><td className="table-primary">{order.symbol ?? '—'}</td><td>{order.market ?? '—'}</td><td>{order.side ?? '—'}</td><td>{price(num(order.entry_price))}</td><td>{num(order.amount)?.toPrecision(6) ?? '—'}</td><td>{order.status ?? '—'}</td>
@@ -806,10 +808,10 @@ function PositionsScreen({ positions, openOrders, onPositionAction, onManualTrad
               try { await onCancelOrder(order.order_id) } catch (error) { window.alert(error instanceof Error ? error.message : 'Cancellation failed.') }
             }}>Cancel order</button></td>
           </tr>)}
-        </Table> : <EmptyState text="No open paper limit orders." />}
+        </Table></div> : <EmptyState text="No open paper limit orders." />}
       </section>
-      <div className="workspace-summary"><SummaryCard label="OPEN POSITIONS" value={String(positions.length)} /><SummaryCard label="SPOT" value={String(positions.filter((position) => position.market === 'SPOT').length)} /><SummaryCard label="FUTURES" value={String(positions.filter((position) => position.market === 'FUTURES').length)} /><SummaryCard label="UNREALIZED P&L" value={money(positions.reduce((total, position) => total + (position.unrealized_pnl ?? 0), 0))} /></div>
-      {positions.length ? <Table minWidth={1200}>
+      <div className="workspace-summary positions-summary"><SummaryCard label="OPEN POSITIONS" value={String(positions.length)} /><SummaryCard label="SPOT" value={String(positions.filter((position) => position.market === 'SPOT').length)} /><SummaryCard label="FUTURES" value={String(positions.filter((position) => position.market === 'FUTURES').length)} /><SummaryCard label="UNREALIZED P&L" value={money(positions.reduce((total, position) => total + (position.unrealized_pnl ?? 0), 0))} /></div>
+      {positions.length ? <div className="positions-table-wrap positions-open-table"><Table minWidth={1200}>
         <TableHead labels={['POSITION', 'ASSET', 'ACCOUNT', 'SIDE', 'ENTRY PRICE', 'CURRENT PRICE', 'AMOUNT', 'LEVERAGE', 'UNREALIZED P&L', 'STOP LOSS', 'TAKE PROFIT', 'LIQ. PRICE', 'MARGIN RATIO', 'OPENED', 'ACTION']} />
         {positions.map((position, index) => <tr key={position.position_id ?? index}>
           <td>{position.position_id ?? '—'}</td><td className="table-primary">{position.symbol ?? '—'}</td><td>{position.market ?? '—'}</td><td>{position.side ?? '—'}</td>
@@ -819,9 +821,9 @@ function PositionsScreen({ positions, openOrders, onPositionAction, onManualTrad
           <td>{position.margin_ratio == null ? '—' : `${(position.margin_ratio * 100).toFixed(2)}%`}</td><td>{timestamp(position.opened_at)}</td>
           <td><button className="table-action" onClick={() => setSelectedPosition(position)}>Inspect</button></td>
         </tr>)}
-      </Table> : <EmptyState text="No open positions in the paper simulator." />}
+      </Table></div> : <div className="positions-empty"><EmptyState text="No open positions in the paper simulator." /></div>}
       {selectedPosition && <PositionInspector position={selectedPosition} onClose={() => setSelectedPosition(null)} onPositionAction={onPositionAction} />}
-    </>
+    </div>
   )
 }
 
@@ -911,52 +913,75 @@ function IntelligenceScreen({ data, loadState }: { data: WorkspaceData; loadStat
     return [...counts].sort((a, b) => b[1] - a[1])
   }, [data.markets])
   return (
-    <>
+    <div className="intelligence-screen">
       <ScreenHeader title="Intelligence" description="Observed market regimes and persisted strategy evaluation; decision rationale is shown only when recorded" />
-      {loadState === 'error' && <p role="alert" className="workspace-note">Intelligence could not be loaded from the backend. Retry after the backend connection is restored.</p>}
-      {loadState === 'loading' && <p role="status" className="workspace-note">Loading rule-based market evidence from the backend…</p>}
-      <h2 className="workspace-section-title">Current evidence analysis</h2>
-      {data.intelligenceAnalysis ? data.intelligenceAnalysis.status === 'UNAVAILABLE'
-        ? <EmptyState text={String((data.intelligenceAnalysis.risk_factors as string[] | undefined)?.[0] ?? 'No market snapshot is available for this symbol.')} />
-        : <>
-          <div className="workspace-summary">
+      {loadState === 'error' && <p role="alert" className="intelligence-load-note">Intelligence could not be loaded from the backend. Retry after the backend connection is restored.</p>}
+      {loadState === 'loading' && <p role="status" className="intelligence-load-note">Loading rule-based market evidence from the backend…</p>}
+
+      <section className="intelligence-analysis-deck" aria-label="Current evidence analysis">
+        {data.intelligenceAnalysis && data.intelligenceAnalysis.status !== 'UNAVAILABLE' ? <>
+          <div className="intelligence-deck-heading">
+            <span>01 / CURRENT EVIDENCE</span>
+            <strong>Market classification</strong>
+          </div>
+          <div className="workspace-summary intelligence-summary">
             <SummaryCard label="ANALYSIS STATUS" value={String(data.intelligenceAnalysis.status ?? 'UNKNOWN')} />
             <SummaryCard label="REGIME" value={String(data.intelligenceAnalysis.regime?.regime ?? 'UNKNOWN')} detail={String(data.intelligenceAnalysis.regime?.method ?? 'Rule-based classification')} />
             <SummaryCard label="DATA FRESHNESS" value={String(data.intelligenceAnalysis.observed?.data_freshness ?? 'UNKNOWN')} detail={data.intelligenceAnalysis.observed?.data_age_seconds == null ? 'Age unavailable' : `${Number(data.intelligenceAnalysis.observed.data_age_seconds).toFixed(0)} seconds old`} />
             <SummaryCard label="OBSERVED PRICE" value={data.intelligenceAnalysis.observed?.price == null ? '—' : price(num(data.intelligenceAnalysis.observed.price))} detail="Exchange snapshot" />
           </div>
           {Array.isArray(data.intelligenceAnalysis.supporting_evidence) && data.intelligenceAnalysis.supporting_evidence.length > 0
-            ? <div className="workspace-note">Evidence: {data.intelligenceAnalysis.supporting_evidence.join(' ')}</div>
-            : <div className="workspace-note">The classifier returned no supporting evidence for this analysis.</div>}
+            ? <div className="intelligence-evidence-note"><span>Evidence</span><p>{data.intelligenceAnalysis.supporting_evidence.join(' ')}</p></div>
+            : <div className="intelligence-evidence-note"><span>Evidence</span><p>The classifier returned no supporting evidence for this analysis.</p></div>}
           {Array.isArray(data.intelligenceAnalysis.risk_factors) && data.intelligenceAnalysis.risk_factors.length > 0
-            ? <div className="workspace-note">Limitations: {data.intelligenceAnalysis.risk_factors.join(' ')}</div> : null}
-        </>
-        : <EmptyState text={loadState === 'error' ? 'The evidence analysis request failed.' : 'Evidence analysis will appear when backend data is available.'} />}
-      <h2 className="workspace-section-title">Observed regimes</h2>
-      {regimes.length ? <div className="workspace-summary">{regimes.map(([regime, count]) => <SummaryCard key={regime} label={regime} value={String(count)} detail="ticker snapshots" />)}</div> : <EmptyState text="Market regime snapshots unavailable." />}
-      <h2 className="workspace-section-title">Strategy evaluations</h2>
-      {data.strategies.length ? <Table minWidth={850}>
-        <TableHead labels={['STRATEGY', 'MARKET', 'SIGNALS', 'VALIDATED', 'WINS', 'LOSSES', 'WIN RATE', 'NET P&L', 'PROFIT FACTOR', 'WEIGHT']} />
-        {data.strategies.map((strategy, index) => <tr key={`${strategy.market}-${strategy.strategy}-${index}`}>
-          <td className="table-primary">{strategy.strategy ?? '—'}</td><td>{strategy.market ?? '—'}</td><td>{strategy.total_signals ?? '—'}</td><td>{strategy.validated_signals ?? '—'}</td>
-          <td>{strategy.winning_trades ?? '—'}</td><td>{strategy.losing_trades ?? '—'}</td><td>{strategy.win_rate == null ? '—' : `${strategy.win_rate.toFixed(1)}%`}</td>
-          <td className={(strategy.total_pnl ?? 0) >= 0 ? 'positive' : 'negative'}>{money(num(strategy.total_pnl))}</td><td>{strategy.profit_factor == null ? '—' : strategy.profit_factor.toFixed(2)}</td><td>{strategy.weight == null ? '—' : strategy.weight.toFixed(3)}</td>
-        </tr>)}
-      </Table> : <EmptyState text="No persisted strategy performance metrics are available." />}
-      <h2 className="workspace-section-title">Strategy weights</h2>
-      {Object.keys(data.strategyWeights).length ? <div className="workspace-summary">{Object.entries(data.strategyWeights).map(([strategy, raw]) => {
-        const weight = raw && typeof raw === 'object' ? raw as { base_weight?: number; regime_adjusted?: number } : {}
-        return <SummaryCard key={strategy} label={strategy.toUpperCase()} value={weight.regime_adjusted == null ? '—' : Number(weight.regime_adjusted).toFixed(3)} detail={weight.base_weight == null ? 'No base weight reported' : `Base weight ${Number(weight.base_weight).toFixed(3)}`} />
-      })}</div> : <EmptyState text="No strategy weights are available from the intelligence service." />}
-      <h2 className="workspace-section-title">Recent decision records</h2>
-      {data.signals.length ? <Table minWidth={760}>
-        <TableHead labels={['TIMESTAMP', 'ASSET', 'MARKET', 'STRATEGY', 'DECISION', 'REGIME', 'RECORDED REASONS']} />
-        {data.signals.slice(0, 50).map((signal, index) => <tr key={signal.signal_id ?? index}>
-          <td>{timestamp(signal.created_at)}</td><td className="table-primary">{signal.symbol ?? '—'}</td><td>{signal.market ?? '—'}</td><td>{signal.strategy ?? '—'}</td>
-          <td>{signal.direction ?? '—'} · {signal.status ?? '—'}</td><td>{signal.regime ?? '—'}</td><td>{signal.reasons?.length ? signal.reasons.join('; ') : 'No rationale recorded'}</td>
-        </tr>)}
-      </Table> : <EmptyState text="No signal decision records are available." />}
-    </>
+            ? <div className="intelligence-evidence-note intelligence-limitation"><span>Limitations</span><p>{data.intelligenceAnalysis.risk_factors.join(' ')}</p></div> : null}
+        </> : <div className="intelligence-empty-analysis">
+          <span>01 / CURRENT EVIDENCE</span>
+          <strong>Market classification unavailable</strong>
+          <p>{data.intelligenceAnalysis ? String((data.intelligenceAnalysis.risk_factors as string[] | undefined)?.[0] ?? 'No market snapshot is available for this symbol.') : loadState === 'error' ? 'The evidence analysis request failed.' : 'Evidence analysis will appear when backend data is available.'}</p>
+        </div>}
+      </section>
+
+      <div className="intelligence-grid">
+        <section className="intelligence-panel intelligence-regimes">
+          <header><span>02 / OBSERVED</span><strong>Market regimes</strong><small>{regimes.length} ACTIVE</small></header>
+          {regimes.length ? <div className="intelligence-regime-list">
+            {regimes.map(([regime, count]) => <div key={regime}><span>{regime}</span><strong>{count}</strong><small>ticker snapshots</small></div>)}
+          </div> : <EmptyState text="Market regime snapshots unavailable." />}
+        </section>
+
+        <section className="intelligence-panel intelligence-weights">
+          <header><span>03 / ADAPTATION</span><strong>Strategy weights</strong><small>{Object.keys(data.strategyWeights).length} MODELS</small></header>
+          {Object.keys(data.strategyWeights).length ? <div className="intelligence-weight-list">{Object.entries(data.strategyWeights).map(([strategy, raw]) => {
+            const weight = raw && typeof raw === 'object' ? raw as { base_weight?: number; regime_adjusted?: number } : {}
+            return <div key={strategy}><span>{strategy.toUpperCase()}</span><strong>{weight.regime_adjusted == null ? '—' : Number(weight.regime_adjusted).toFixed(3)}</strong><small>{weight.base_weight == null ? 'No base weight reported' : `Base ${Number(weight.base_weight).toFixed(3)}`}</small></div>
+          })}</div> : <EmptyState text="No strategy weights are available from the intelligence service." />}
+        </section>
+
+        <section className="intelligence-panel intelligence-strategies">
+          <header><span>04 / PERFORMANCE</span><strong>Strategy evaluations</strong><small>{data.strategies.length} RECORDS</small></header>
+          {data.strategies.length ? <div className="intelligence-table-wrap"><Table minWidth={850}>
+            <TableHead labels={['STRATEGY', 'MARKET', 'SIGNALS', 'VALIDATED', 'WINS', 'LOSSES', 'WIN RATE', 'NET P&L', 'PROFIT FACTOR', 'WEIGHT']} />
+            {data.strategies.map((strategy, index) => <tr key={`${strategy.market}-${strategy.strategy}-${index}`}>
+              <td className="table-primary">{strategy.strategy ?? '—'}</td><td>{strategy.market ?? '—'}</td><td>{strategy.total_signals ?? '—'}</td><td>{strategy.validated_signals ?? '—'}</td>
+              <td>{strategy.winning_trades ?? '—'}</td><td>{strategy.losing_trades ?? '—'}</td><td>{strategy.win_rate == null ? '—' : `${strategy.win_rate.toFixed(1)}%`}</td>
+              <td className={(strategy.total_pnl ?? 0) >= 0 ? 'positive' : 'negative'}>{money(num(strategy.total_pnl))}</td><td>{strategy.profit_factor == null ? '—' : strategy.profit_factor.toFixed(2)}</td><td>{strategy.weight == null ? '—' : strategy.weight.toFixed(3)}</td>
+            </tr>)}
+          </Table></div> : <EmptyState text="No persisted strategy performance metrics are available." />}
+        </section>
+
+        <section className="intelligence-panel intelligence-decisions">
+          <header><span>05 / AUDIT TRAIL</span><strong>Recent decision records</strong><small>{Math.min(data.signals.length, 50)} OF {data.signals.length}</small></header>
+          {data.signals.length ? <div className="intelligence-table-wrap"><Table minWidth={760}>
+            <TableHead labels={['TIMESTAMP', 'ASSET', 'MARKET', 'STRATEGY', 'DECISION', 'REGIME', 'RECORDED REASONS']} />
+            {data.signals.slice(0, 50).map((signal, index) => <tr key={signal.signal_id ?? index}>
+              <td>{timestamp(signal.created_at)}</td><td className="table-primary">{signal.symbol ?? '—'}</td><td>{signal.market ?? '—'}</td><td>{signal.strategy ?? '—'}</td>
+              <td>{signal.direction ?? '—'} · {signal.status ?? '—'}</td><td>{signal.regime ?? '—'}</td><td>{signal.reasons?.length ? signal.reasons.join('; ') : 'No rationale recorded'}</td>
+            </tr>)}
+          </Table></div> : <EmptyState text="No signal decision records are available." />}
+        </section>
+      </div>
+    </div>
   )
 }
 
@@ -968,106 +993,164 @@ function metricNumber(value: number | null | undefined): string {
 }
 function LearningScreen({ data }: { data: WorkspaceData }) {
   const promotions = data.events.filter((event) => ['MODEL_PROMOTED', 'MODEL_ROLLED_BACK', 'MODEL_TRAINED'].includes(event.event_type ?? ''))
+  const learning = data.learning
+  const gate = learning?.last_training_result?.validation?.promotion_gate
+  const failureReasons = gate?.failure_reasons ?? learning?.last_training_result?.batch_validation?.promotion_gate?.failure_reasons ?? []
+  const holdout = learning?.last_training_result?.holdout_report
+  const validation = learning?.last_training_result?.validation
+  const predictionRate = learning?.predictions_total
+    ? Math.round(((learning.predictions_resolved ?? 0) / learning.predictions_total) * 100)
+    : null
+  const activeModel = learning?.model_status === 'Trained'
   return (
-    <>
-      <ScreenHeader title="Learning" description="Local model status, predictions, outcomes, and persisted promotion or rollback events" />
-      <div className="workspace-summary"><SummaryCard label="MODEL STATUS" value={data.learning?.model_status ?? 'Unavailable'} /><SummaryCard label="LEARNING LOOP" value={data.learning?.training_state ?? '—'} detail={data.learning?.last_cycle_status ?? 'No cycle reported'} /><SummaryCard label="ACTIVE VERSION" value={data.learning?.version ?? '—'} /><SummaryCard label="BOOTSTRAP SAMPLES" value={String(data.learning?.training_samples ?? '—')} detail="Historical labeled hourly candles" /><SummaryCard label="ONLINE UPDATES" value={String(data.learning?.river_updates ?? '—')} /><SummaryCard label="PREDICTIONS" value={String(data.learning?.predictions_total ?? '—')} /><SummaryCard label="RESOLVED" value={String(data.learning?.predictions_resolved ?? '—')} /><SummaryCard label="MEASURED ACCURACY" value={data.learning?.accuracy == null ? '—' : `${data.learning.accuracy.toFixed(2)}%`} detail="Resolved outcomes only" /></div>
-      {data.learning?.last_training_result?.reason && <div role="status" className="workspace-note">Latest validation result: {data.learning.last_training_result.reason}</div>}
-      {data.learning?.model_status !== 'Trained' && <div className="workspace-note">No validated model is active. FLAT predictions with confidence 0.000 are the explicit untrained fallback, not a learned or calibrated confidence. Resolved-prediction accuracy summarizes historical outcomes and is separate from model holdout validation.</div>}
-      {(data.learning?.last_training_result?.validation?.promotion_gate?.failure_reasons
-        ?? data.learning?.last_training_result?.batch_validation?.promotion_gate?.failure_reasons
-        ?? []).length > 0 && <div className="workspace-note">Promotion checks: {(data.learning?.last_training_result?.validation?.promotion_gate?.failure_reasons
-          ?? data.learning?.last_training_result?.batch_validation?.promotion_gate?.failure_reasons
-          ?? []).join('; ')}</div>}
-      {data.learning?.last_training_result?.holdout_report && <>
-        <h2 className="workspace-section-title">Latest untouched holdout · River candidate</h2>
-        <div className="workspace-note">
-          {(() => {
-            const report = data.learning?.last_training_result?.holdout_report
-            if (!report) return null
-            const thresholds = report.thresholds
-            return <>
-              {report.validation_method ?? 'Holdout method unavailable'} · {report.holdout_samples ?? '—'} held-out samples from {report.train_samples ?? '—'} training samples · {report.holdout_untouched ? 'holdout labels were not used for model updates' : 'holdout was not untouched'}.
-              {' '}Accuracy {report.accuracy == null ? '—' : `${(report.accuracy * 100).toFixed(2)}%`} (required ≥ {thresholds?.accuracy_min == null ? '—' : `${(thresholds.accuracy_min * 100).toFixed(2)}%`}); macro precision {report.precision_macro == null ? '—' : `${(report.precision_macro * 100).toFixed(2)}%`}; macro recall {report.recall_macro == null ? '—' : `${(report.recall_macro * 100).toFixed(2)}%`}; macro F1 {report.f1_macro == null ? '—' : `${(report.f1_macro * 100).toFixed(2)}%`} (required ≥ {thresholds?.f1_macro_min == null ? '—' : `${(thresholds.f1_macro_min * 100).toFixed(2)}%`}).
-              {' '}Training ends {report.train_end_timestamp ? new Date(report.train_end_timestamp).toLocaleString() : '—'}; holdout {report.holdout_start_timestamp ? new Date(report.holdout_start_timestamp).toLocaleString() : '—'} through {report.holdout_end_timestamp ? new Date(report.holdout_end_timestamp).toLocaleString() : '—'}.
-              {report.failure_reasons?.length ? <> Failures: {report.failure_reasons.join('; ')}.</> : ' All holdout thresholds passed.'}
-            </>
-          })()}
+    <div className="learning-screen">
+      <ScreenHeader title="Learning" description="Model lifecycle, validation evidence, prediction outcomes, and promotion history" />
+      <div className="learning-status-bar" aria-label="Model lifecycle summary">
+        <div className="learning-status-main">
+          <span className="learning-eyebrow">LOCAL LEARNING SYSTEM</span>
+          <strong className={activeModel ? '' : 'learning-status-warn'}>{learning?.model_status ?? 'Unavailable'}</strong>
+          <small>{learning?.last_cycle_status ?? 'No learning cycle reported'}</small>
         </div>
-      </>}
-      {data.learning?.last_training_result?.validation?.promotion_gate?.models && <>
-        <h2 className="workspace-section-title">Random Forest and XGBoost · purged walk-forward evidence</h2>
-        <div className="workspace-note">{data.learning.last_training_result.validation.validation_provenance?.sample_count ?? '—'} chronologically ordered samples; {data.learning.last_training_result.validation.validation_provenance?.method ?? 'validation method unavailable'}; out of sample: {data.learning.last_training_result.validation.validation_provenance?.out_of_sample ? 'yes' : 'no'}; purge gap {data.learning.last_training_result.validation.validation_provenance?.purge_gap_ms ?? '—'} ms. These fold results are separate from resolved-prediction accuracy above.</div>
-        <div className="workspace-note">Configured requirements (unchanged): mean accuracy ≥ {metricPercent((data.learning.last_training_result.validation.promotion_gate.criteria?.min_mean_accuracy ?? 0) * 100)}, mean macro F1 ≥ {metricPercent((data.learning.last_training_result.validation.promotion_gate.criteria?.min_mean_f1 ?? 0) * 100)}, calibration ≥ {metricNumber(data.learning.last_training_result.validation.promotion_gate.criteria?.min_calibration_score)}, net expectancy ≥ {data.learning.last_training_result.validation.promotion_gate.criteria?.min_net_expectancy?.toFixed(6) ?? '—'}, max drawdown ≤ {metricPercent(data.learning.last_training_result.validation.promotion_gate.criteria?.max_drawdown_pct)}.</div>
-        <Table minWidth={900}>
-          <TableHead labels={['MODEL', 'FOLD', 'TRAIN / TEST', 'ACCURACY', 'PRECISION', 'RECALL', 'MACRO F1', 'FAILURES']} />
-          {(['rf', 'xgb'] as const).flatMap((model) => {
-            const gate = data.learning?.last_training_result?.validation?.promotion_gate
-            const modelGate = gate?.models?.[model]
-            const criteria = gate?.criteria
-            const folds = data.learning?.last_training_result?.validation?.models?.[model]?.folds ?? []
-            const economic = modelGate?.economic_evidence
-            const summary = `Mean accuracy ${metricPercent(modelGate?.mean_accuracy == null ? null : modelGate.mean_accuracy * 100)} / ≥${metricPercent(criteria?.min_mean_accuracy == null ? null : criteria.min_mean_accuracy * 100)}; mean macro F1 ${metricPercent(modelGate?.mean_f1 == null ? null : modelGate.mean_f1 * 100)} / ≥${metricPercent(criteria?.min_mean_f1 == null ? null : criteria.min_mean_f1 * 100)}; calibration ${metricNumber(modelGate?.calibration_score)} / ≥${metricNumber(criteria?.min_calibration_score)}; expectancy ${economic?.net_expectancy?.toFixed(6) ?? '—'} / ≥${criteria?.min_net_expectancy?.toFixed(6) ?? '—'}; drawdown ${metricPercent(economic?.max_drawdown_pct)} / ≤${metricPercent(criteria?.max_drawdown_pct)}; ${modelGate?.failure_reasons?.join('; ') || (modelGate?.passes ? 'All model promotion checks passed' : 'No model promotion result')}`
-            return folds.length ? folds.map((fold) => <tr key={`${model}-${fold.fold}`}>
-              <td className="table-primary">{model.toUpperCase()}</td><td>{fold.fold ?? '—'}</td><td>{fold.train_size ?? '—'} / {fold.test_size ?? '—'}</td>
-              <td>{metricPercent(fold.accuracy == null ? null : fold.accuracy * 100)}</td><td>{metricPercent(fold.precision_macro == null ? null : fold.precision_macro * 100)}</td>
-              <td>{metricPercent(fold.recall_macro == null ? null : fold.recall_macro * 100)}</td><td>{metricPercent(fold.f1_macro == null ? null : fold.f1_macro * 100)}</td><td>{summary}</td>
-            </tr>) : [<tr key={`${model}-summary`}><td className="table-primary">{model.toUpperCase()}</td><td colSpan={6}>No fold detail reported; mean accuracy {metricPercent(modelGate?.mean_accuracy == null ? null : modelGate.mean_accuracy * 100)}, macro F1 {metricPercent(modelGate?.mean_f1 == null ? null : modelGate.mean_f1 * 100)}</td><td>{summary}</td></tr>]
-          })}
-        </Table>
-        <div className="workspace-note">Net expectancy / maximum drawdown — RF: {(() => { const e = data.learning?.last_training_result?.validation?.promotion_gate?.models?.rf?.economic_evidence; return e ? `${e.net_expectancy?.toFixed(6) ?? '—'} / ${e.max_drawdown_pct?.toFixed(2) ?? '—'}%` : 'unavailable' })()} · XGBoost: {(() => { const e = data.learning?.last_training_result?.validation?.promotion_gate?.models?.xgb?.economic_evidence; return e ? `${e.net_expectancy?.toFixed(6) ?? '—'} / ${e.max_drawdown_pct?.toFixed(2) ?? '—'}%` : 'unavailable' })()}. Promotion thresholds remain unchanged.</div>
-      </>}
-      <h2 className="workspace-section-title">Model performance · evaluated data only</h2>
-      <div className="workspace-summary">
-        <SummaryCard label="PREDICTION ACCURACY" value={metricPercent(data.performance?.accuracy_pct)} detail={`${data.performance?.prediction_count ?? 0} resolved predictions`} />
-        <SummaryCard label="PRECISION · MACRO" value={metricPercent(data.performance?.precision_macro_pct)} detail="Macro average across observed classes" />
-        <SummaryCard label="RECALL · MACRO" value={metricPercent(data.performance?.recall_macro_pct)} detail="Macro average across observed classes" />
-        <SummaryCard label="PROFIT FACTOR" value={data.performance?.profit_factor === 'infinite' ? '∞' : metricNumber(data.performance?.profit_factor)} detail="Gross profit / gross loss" />
-        <SummaryCard label="WIN RATE" value={metricPercent(data.performance?.win_rate_pct)} detail={`${data.performance?.trade_count ?? 0} closed paper trades`} />
-        <SummaryCard label="MAX DRAWDOWN" value={metricPercent(data.performance?.max_drawdown_pct)} detail="Closed-trade equity sequence" />
-        <SummaryCard label="SHARPE RATIO" value={metricNumber(data.performance?.sharpe_ratio)} detail="Daily realized P&L; annualized" />
-        <SummaryCard label="TRADES EVALUATED" value={String(data.performance?.trade_count ?? 0)} detail="Closed paper trades only" />
+        <div><span>ACTIVE VERSION</span><strong>{learning?.version ?? '—'}</strong></div>
+        <div><span>TRAINING STATE</span><strong>{learning?.training_state ?? '—'}</strong></div>
+        <div><span>LAST TRAINED</span><strong>{learning?.last_training_at ? timestamp(learning.last_training_at) : '—'}</strong></div>
+        <div className="learning-model-flags">
+          <span>AVAILABLE MODELS</span>
+          <strong>RF {learning?.rf_loaded ? 'READY' : '—'} / XGB {learning?.xgb_loaded ? 'READY' : '—'} / RIVER {learning?.river_available ? 'READY' : '—'}</strong>
+        </div>
       </div>
-      <div className="workspace-note">Classification metrics use resolved predictions; trading metrics use closed paper trades. Sharpe uses daily realized P&L divided by initial paper equity, annualized with √365, and is unavailable with fewer than two daily observations. Missing metrics are shown as unavailable, not zero.</div>
-      <h2 className="workspace-section-title">Strategy comparison · walk-forward out-of-sample</h2>
-      {data.strategyComparison?.status === 'ok' ? <>
-        <div className="workspace-summary">
-          <SummaryCard label="ASSET / MARKET" value={`${data.strategyComparison.symbol ?? '—'} · ${data.strategyComparison.market ?? '—'}`} detail={`${data.strategyComparison.timeframe ?? '—'} · ${data.strategyComparison.candles ?? 0} candles`} />
-          <SummaryCard label="WALK-FORWARD FOLDS" value={String(data.strategyComparison.walk_forward_folds ?? 0)} detail="Expanding historical windows" />
-          <SummaryCard label="TEST WINDOW" value={`${timestamp(data.strategyComparison.evaluation_start_time)} → ${timestamp(data.strategyComparison.evaluation_end_time)}`} detail="Same unseen period for all strategies" />
+      <div className="learning-cycle" aria-label="Learning lifecycle">
+        <div><span>01</span><strong>COLLECT</strong><small>{learning?.training_samples ?? '—'} historical samples</small></div>
+        <i aria-hidden="true">→</i>
+        <div><span>02</span><strong>VALIDATE</strong><small>{learning?.last_training_result?.status ?? 'No candidate report'}</small></div>
+        <i aria-hidden="true">→</i>
+        <div><span>03</span><strong>PROMOTE</strong><small>{failureReasons.length ? 'Gate blocked' : activeModel ? 'Active model' : 'Not promoted'}</small></div>
+        <i aria-hidden="true">→</i>
+        <div><span>04</span><strong>RESOLVE</strong><small>{learning?.predictions_resolved ?? '—'} outcomes measured</small></div>
+      </div>
+      {!activeModel && <div className="learning-caution" role="note">
+        <strong>NO VALIDATED MODEL ACTIVE</strong>
+        <span>FLAT predictions with confidence 0.000 are the explicit untrained fallback, not learned or calibrated confidence. Resolved-prediction accuracy is historical outcome measurement, separate from holdout validation.</span>
+      </div>}
+      {learning?.last_training_result?.reason && <div className="learning-message" role="status"><span>LATEST TRAINING RESULT</span>{learning.last_training_result.reason}</div>}
+      {failureReasons.length > 0 && <div className="learning-message learning-message-alert" role="status"><span>PROMOTION GATE</span>{failureReasons.join('; ')}</div>}
+      <section className="learning-outcome-strip" aria-label="Learning activity summary">
+        <div><span>BOOTSTRAP SAMPLES</span><strong>{learning?.training_samples ?? '—'}</strong><small>Historical labeled hourly candles</small></div>
+        <div><span>ONLINE UPDATES</span><strong>{learning?.river_updates ?? '—'}</strong><small>Incremental learner updates</small></div>
+        <div><span>PREDICTIONS</span><strong>{learning?.predictions_total ?? '—'}</strong><small>Recorded by the local system</small></div>
+        <div><span>OUTCOMES RESOLVED</span><strong>{learning?.predictions_resolved ?? '—'}</strong><small>{predictionRate == null ? 'Resolution coverage unavailable' : `${predictionRate}% of recorded predictions`}</small></div>
+        <div><span>RESOLVED ACCURACY</span><strong>{learning?.accuracy == null ? '—' : `${learning.accuracy.toFixed(2)}%`}</strong><small>Resolved outcomes only</small></div>
+      </section>
+      <details className="learning-section learning-promotion-evidence">
+        <summary><span><small>01 / VALIDATION</small><strong>Promotion evidence</strong></span><span>{holdout || gate ? 'REPORT AVAILABLE' : 'NO REPORT'}</span></summary>
+        <div className="learning-section-content">
+          {holdout ? <div className="learning-evidence-block">
+            <h3>Untouched holdout · River candidate</h3>
+            <p>{holdout.validation_method ?? 'Holdout method unavailable'} · {holdout.holdout_samples ?? '—'} held-out samples from {holdout.train_samples ?? '—'} training samples · {holdout.holdout_untouched ? 'holdout labels were not used for model updates' : 'holdout was not untouched'}.</p>
+            <div className="learning-evidence-grid">
+              <div><span>ACCURACY / REQUIRED</span><strong>{holdout.accuracy == null ? '—' : `${(holdout.accuracy * 100).toFixed(2)}%`} / {holdout.thresholds?.accuracy_min == null ? '—' : `${(holdout.thresholds.accuracy_min * 100).toFixed(2)}%`}</strong></div>
+              <div><span>MACRO F1 / REQUIRED</span><strong>{holdout.f1_macro == null ? '—' : `${(holdout.f1_macro * 100).toFixed(2)}%`} / {holdout.thresholds?.f1_macro_min == null ? '—' : `${(holdout.thresholds.f1_macro_min * 100).toFixed(2)}%`}</strong></div>
+              <div><span>MACRO PRECISION</span><strong>{holdout.precision_macro == null ? '—' : `${(holdout.precision_macro * 100).toFixed(2)}%`}</strong></div>
+              <div><span>MACRO RECALL</span><strong>{holdout.recall_macro == null ? '—' : `${(holdout.recall_macro * 100).toFixed(2)}%`}</strong></div>
+            </div>
+            <p>Training ends {holdout.train_end_timestamp ? new Date(holdout.train_end_timestamp).toLocaleString() : '—'}; holdout {holdout.holdout_start_timestamp ? new Date(holdout.holdout_start_timestamp).toLocaleString() : '—'} through {holdout.holdout_end_timestamp ? new Date(holdout.holdout_end_timestamp).toLocaleString() : '—'}.</p>
+            {holdout.failure_reasons?.length ? <p className="learning-failure-text">Failures: {holdout.failure_reasons.join('; ')}</p> : <p>All reported holdout thresholds passed.</p>}
+          </div> : <EmptyState text="No untouched holdout report is available." />}
+          {gate && validation && <div className="learning-evidence-block">
+            <h3>Random Forest &amp; XGBoost · purged walk-forward</h3>
+            <p>{validation.validation_provenance?.sample_count ?? '—'} chronologically ordered samples; {validation.validation_provenance?.method ?? 'validation method unavailable'}; out of sample: {validation.validation_provenance?.out_of_sample ? 'yes' : 'no'}; purge gap {validation.validation_provenance?.purge_gap_ms ?? '—'} ms. Fold results are separate from resolved-prediction accuracy.</p>
+            <p>Requirements: mean accuracy ≥ {metricPercent((gate.criteria?.min_mean_accuracy ?? 0) * 100)}, macro F1 ≥ {metricPercent((gate.criteria?.min_mean_f1 ?? 0) * 100)}, calibration ≥ {metricNumber(gate.criteria?.min_calibration_score)}, net expectancy ≥ {gate.criteria?.min_net_expectancy?.toFixed(6) ?? '—'}, max drawdown ≤ {metricPercent(gate.criteria?.max_drawdown_pct)}.</p>
+            <Table minWidth={900}>
+              <TableHead labels={['MODEL', 'FOLD', 'TRAIN / TEST', 'ACCURACY', 'PRECISION', 'RECALL', 'MACRO F1', 'PROMOTION CHECKS']} />
+              {(['rf', 'xgb'] as const).flatMap((model) => {
+                const modelGate = gate.models?.[model]
+                const criteria = gate.criteria
+                const folds = validation.models?.[model]?.folds ?? []
+                const economic = modelGate?.economic_evidence
+                const summary = `Mean accuracy ${metricPercent(modelGate?.mean_accuracy == null ? null : modelGate.mean_accuracy * 100)} / ≥${metricPercent(criteria?.min_mean_accuracy == null ? null : criteria.min_mean_accuracy * 100)}; mean macro F1 ${metricPercent(modelGate?.mean_f1 == null ? null : modelGate.mean_f1 * 100)} / ≥${metricPercent(criteria?.min_mean_f1 == null ? null : criteria.min_mean_f1 * 100)}; calibration ${metricNumber(modelGate?.calibration_score)} / ≥${metricNumber(criteria?.min_calibration_score)}; expectancy ${economic?.net_expectancy?.toFixed(6) ?? '—'} / ≥${criteria?.min_net_expectancy?.toFixed(6) ?? '—'}; drawdown ${metricPercent(economic?.max_drawdown_pct)} / ≤${metricPercent(criteria?.max_drawdown_pct)}; ${modelGate?.failure_reasons?.join('; ') || (modelGate?.passes ? 'All promotion checks passed' : 'No promotion result')}`
+                return folds.length ? folds.map((fold) => <tr key={`${model}-${fold.fold}`}>
+                  <td className="table-primary">{model.toUpperCase()}</td><td>{fold.fold ?? '—'}</td><td>{fold.train_size ?? '—'} / {fold.test_size ?? '—'}</td>
+                  <td>{metricPercent(fold.accuracy == null ? null : fold.accuracy * 100)}</td><td>{metricPercent(fold.precision_macro == null ? null : fold.precision_macro * 100)}</td>
+                  <td>{metricPercent(fold.recall_macro == null ? null : fold.recall_macro * 100)}</td><td>{metricPercent(fold.f1_macro == null ? null : fold.f1_macro * 100)}</td><td>{summary}</td>
+                </tr>) : [<tr key={`${model}-summary`}><td className="table-primary">{model.toUpperCase()}</td><td colSpan={6}>No fold detail reported; mean accuracy {metricPercent(modelGate?.mean_accuracy == null ? null : modelGate.mean_accuracy * 100)}, macro F1 {metricPercent(modelGate?.mean_f1 == null ? null : modelGate.mean_f1 * 100)}</td><td>{summary}</td></tr>]
+              })}
+            </Table>
+            <p>Net expectancy / maximum drawdown — RF: {(() => { const e = gate.models?.rf?.economic_evidence; return e ? `${e.net_expectancy?.toFixed(6) ?? '—'} / ${e.max_drawdown_pct?.toFixed(2) ?? '—'}%` : 'unavailable' })()} · XGBoost: {(() => { const e = gate.models?.xgb?.economic_evidence; return e ? `${e.net_expectancy?.toFixed(6) ?? '—'} / ${e.max_drawdown_pct?.toFixed(2) ?? '—'}%` : 'unavailable' })()}. Promotion thresholds remain unchanged.</p>
+          </div>}
         </div>
-        <Table minWidth={950}>
-          <TableHead labels={['STRATEGY', 'RETURN', 'MAX DRAWDOWN', 'SHARPE', 'WIN RATE', 'PROFIT FACTOR', 'TRADES', 'BARS']} />
-          {data.strategyComparison.strategies.map((item) => <tr key={item.strategy}>
-            <td className="table-primary">{item.strategy}</td>
-            <td className={(item.total_return_pct ?? 0) >= 0 ? 'positive' : 'negative'}>{item.total_return_pct == null ? '—' : pct(item.total_return_pct)}</td>
-            <td>{item.max_drawdown_pct == null ? '—' : pct(item.max_drawdown_pct)}</td>
-            <td>{item.sharpe_ratio == null ? '—' : item.sharpe_ratio.toFixed(2)}</td>
-            <td>{item.win_rate_pct == null ? '—' : pct(item.win_rate_pct)}</td>
-            <td>{item.profit_factor === 'infinite' ? '∞' : item.profit_factor == null ? '—' : item.profit_factor.toFixed(2)}</td>
-            <td>{item.trades_evaluated ?? '—'}</td><td>{item.evaluation_bars ?? '—'}</td>
-          </tr>)}
-        </Table>
-        <div className="workspace-note">{data.strategyComparison.training_policy}. Costs: {data.strategyComparison.cost_policy}. No slippage or futures funding is included. Model rows remain flat until a valid out-of-sample fold prediction is available.</div>
-      </> : <EmptyState text={data.strategyComparison?.status === 'insufficient_data' ? 'Not enough closed historical candles to compare strategies.' : 'Strategy comparison will appear when historical candle data is available.'} />}
-      <h2 className="workspace-section-title">Model registry · candidate / champion state</h2>
-      {data.models.length ? <Table minWidth={900}>
-        <TableHead labels={['VERSION', 'MODEL', 'STATUS', 'ACTIVE', 'CHAMPION', 'PARENT', 'TRAINED']} />
-        {data.models.map((model, index) => <tr key={model.version ?? index}><td className="table-primary">{model.version ?? '—'}</td><td>{model.model_type ?? '—'}</td><td>{model.status ?? '—'}</td><td>{model.is_active ? 'YES' : 'NO'}</td><td>{model.is_champion ? 'YES' : 'NO'}</td><td>{model.parent_version ?? '—'}</td><td>{timestamp(model.trained_at)}</td></tr>)}
-      </Table> : <EmptyState text="Model registry is empty or unavailable; no candidate or champion state is inferred." />}
-      <h2 className="workspace-section-title">Prediction outcomes</h2>
-      {data.predictions.length ? <Table minWidth={950}>
-        <TableHead labels={['CREATED', 'ASSET', 'MARKET', 'TIMEFRAME', 'HORIZON', 'MODEL', 'PREDICTION', 'CONFIDENCE SCORE', 'OUTCOME', 'RETURN', 'SIMULATED P&L', 'CORRECT']} />
-        {data.predictions.map((prediction, index) => <tr key={prediction.prediction_id ?? index}>
-          <td>{timestamp(prediction.created_at)}</td><td className="table-primary">{prediction.symbol ?? '—'}</td><td>{prediction.market ?? '—'}</td><td>{prediction.timeframe ?? '—'}</td><td>{prediction.horizon_minutes == null ? '—' : `${prediction.horizon_minutes}m`}</td>
-          <td>{prediction.model_version ?? '—'}</td><td>{prediction.predicted_class ?? '—'}</td><td>{prediction.confidence == null ? '—' : prediction.confidence.toFixed(3)}</td>
-          <td>{prediction.actual_outcome ?? 'Pending'}</td><td>{pct(num(prediction.actual_return_pct ?? undefined))}</td><td>{money(num(prediction.simulated_pnl ?? undefined))}</td><td>{prediction.is_correct == null ? 'Pending' : prediction.is_correct ? 'YES' : 'NO'}</td>
-        </tr>)}
-      </Table> : <EmptyState text="No prediction history is available." />}
-      <h2 className="workspace-section-title">Promotion decisions</h2>
-      {promotions.length ? <Table minWidth={700}><TableHead labels={['TIMESTAMP', 'EVENT', 'MODEL / VERSION', 'DETAIL']} />{promotions.map((event, index) => <tr key={event.event_id ?? index}><td>{timestamp(event.timestamp)}</td><td>{event.event_type ?? '—'}</td><td>{String(event.payload?.version ?? event.payload?.model_version ?? '—')}</td><td>{String(event.payload?.reason ?? event.payload?.message ?? 'No additional detail recorded')}</td></tr>)}</Table> : <EmptyState text="No promotion or rollback events are recorded. Experiment registry data is not exposed by the current API." />}
-      <div className="workspace-note">Confidence is a score unless the associated model and calibration metadata establish otherwise. The UI does not claim exact future prices or unverified learning improvement.</div>
-    </>
+      </details>
+      <details className="learning-section learning-observed-performance">
+        <summary><span><small>02 / EVALUATION</small><strong>Observed performance</strong></span><span>{data.performance?.prediction_count ?? 0} PREDICTIONS · {data.performance?.trade_count ?? 0} TRADES</span></summary>
+        <div className="learning-section-content">
+          <div className="learning-metric-grid">
+            <SummaryCard label="PREDICTION ACCURACY" value={metricPercent(data.performance?.accuracy_pct)} detail={`${data.performance?.prediction_count ?? 0} resolved predictions`} />
+            <SummaryCard label="PRECISION · MACRO" value={metricPercent(data.performance?.precision_macro_pct)} detail="Average across observed classes" />
+            <SummaryCard label="RECALL · MACRO" value={metricPercent(data.performance?.recall_macro_pct)} detail="Average across observed classes" />
+            <SummaryCard label="PROFIT FACTOR" value={data.performance?.profit_factor === 'infinite' ? '∞' : metricNumber(data.performance?.profit_factor)} detail="Gross profit / gross loss" />
+            <SummaryCard label="WIN RATE" value={metricPercent(data.performance?.win_rate_pct)} detail={`${data.performance?.trade_count ?? 0} closed paper trades`} />
+            <SummaryCard label="MAX DRAWDOWN" value={metricPercent(data.performance?.max_drawdown_pct)} detail="Closed-trade equity sequence" />
+            <SummaryCard label="SHARPE RATIO" value={metricNumber(data.performance?.sharpe_ratio)} detail="Daily realized P&L; annualized" />
+            <SummaryCard label="TRADES EVALUATED" value={String(data.performance?.trade_count ?? 0)} detail="Closed paper trades only" />
+          </div>
+          <p>Classification metrics use resolved predictions; trading metrics use closed paper trades. Sharpe uses daily realized P&amp;L divided by initial paper equity, annualized with √365, and is unavailable with fewer than two daily observations. Missing metrics are shown as unavailable, not zero.</p>
+        </div>
+      </details>
+      <details className="learning-section learning-strategy-comparison">
+        <summary><span><small>03 / STRATEGY RESEARCH</small><strong>Walk-forward comparison</strong></span><span>{data.strategyComparison?.status === 'ok' ? `${data.strategyComparison.walk_forward_folds ?? 0} FOLDS` : 'NO EVALUATION'}</span></summary>
+        <div className="learning-section-content">
+          {data.strategyComparison?.status === 'ok' ? <>
+            <div className="learning-metric-grid learning-comparison-meta">
+              <SummaryCard label="ASSET / MARKET" value={`${data.strategyComparison.symbol ?? '—'} · ${data.strategyComparison.market ?? '—'}`} detail={`${data.strategyComparison.timeframe ?? '—'} · ${data.strategyComparison.candles ?? 0} candles`} />
+              <SummaryCard label="WALK-FORWARD FOLDS" value={String(data.strategyComparison.walk_forward_folds ?? 0)} detail="Expanding historical windows" />
+              <SummaryCard label="UNSEEN TEST WINDOW" value={`${timestamp(data.strategyComparison.evaluation_start_time)} → ${timestamp(data.strategyComparison.evaluation_end_time)}`} detail="Same period across strategies" />
+            </div>
+            <Table minWidth={950}>
+              <TableHead labels={['STRATEGY', 'RETURN', 'MAX DRAWDOWN', 'SHARPE', 'WIN RATE', 'PROFIT FACTOR', 'TRADES', 'BARS']} />
+              {data.strategyComparison.strategies.map((item) => <tr key={item.strategy}>
+                <td className="table-primary">{item.strategy}</td>
+                <td className={(item.total_return_pct ?? 0) >= 0 ? 'positive' : 'negative'}>{item.total_return_pct == null ? '—' : pct(item.total_return_pct)}</td>
+                <td>{item.max_drawdown_pct == null ? '—' : pct(item.max_drawdown_pct)}</td>
+                <td>{item.sharpe_ratio == null ? '—' : item.sharpe_ratio.toFixed(2)}</td>
+                <td>{item.win_rate_pct == null ? '—' : pct(item.win_rate_pct)}</td>
+                <td>{item.profit_factor === 'infinite' ? '∞' : item.profit_factor == null ? '—' : item.profit_factor.toFixed(2)}</td>
+                <td>{item.trades_evaluated ?? '—'}</td><td>{item.evaluation_bars ?? '—'}</td>
+              </tr>)}
+            </Table>
+            <p>{data.strategyComparison.training_policy}. Costs: {data.strategyComparison.cost_policy}. No slippage or futures funding is included. Model rows remain flat until a valid out-of-sample fold prediction is available.</p>
+          </> : <EmptyState text={data.strategyComparison?.status === 'insufficient_data' ? 'Not enough closed historical candles to compare strategies.' : 'Strategy comparison will appear when historical candle data is available.'} />}
+        </div>
+      </details>
+      <details className="learning-section learning-model-registry">
+        <summary><span><small>04 / MODEL REGISTRY</small><strong>Candidate &amp; champion history</strong></span><span>{data.models.length} VERSIONS</span></summary>
+        <div className="learning-section-content">
+          {data.models.length ? <Table minWidth={900}>
+            <TableHead labels={['VERSION', 'MODEL', 'STATUS', 'ACTIVE', 'CHAMPION', 'PARENT', 'TRAINED']} />
+            {data.models.map((model, index) => <tr key={model.version ?? index}><td className="table-primary">{model.version ?? '—'}</td><td>{model.model_type ?? '—'}</td><td>{model.status ?? '—'}</td><td>{model.is_active ? 'YES' : 'NO'}</td><td>{model.is_champion ? 'YES' : 'NO'}</td><td>{model.parent_version ?? '—'}</td><td>{timestamp(model.trained_at)}</td></tr>)}
+          </Table> : <EmptyState text="Model registry is empty or unavailable; no candidate or champion state is inferred." />}
+        </div>
+      </details>
+      <details className="learning-section learning-prediction-outcomes">
+        <summary><span><small>05 / FEEDBACK LOOP</small><strong>Prediction outcomes</strong></span><span>{data.predictions.length} RECORDS</span></summary>
+        <div className="learning-section-content">
+          {data.predictions.length ? <Table minWidth={950}>
+            <TableHead labels={['CREATED', 'ASSET', 'MARKET', 'TIMEFRAME', 'HORIZON', 'MODEL', 'PREDICTION', 'CONFIDENCE SCORE', 'OUTCOME', 'RETURN', 'SIMULATED P&L', 'CORRECT']} />
+            {data.predictions.map((prediction, index) => <tr key={prediction.prediction_id ?? index}>
+              <td>{timestamp(prediction.created_at)}</td><td className="table-primary">{prediction.symbol ?? '—'}</td><td>{prediction.market ?? '—'}</td><td>{prediction.timeframe ?? '—'}</td><td>{prediction.horizon_minutes == null ? '—' : `${prediction.horizon_minutes}m`}</td>
+              <td>{prediction.model_version ?? '—'}</td><td>{prediction.predicted_class ?? '—'}</td><td>{prediction.confidence == null ? '—' : prediction.confidence.toFixed(3)}</td>
+              <td>{prediction.actual_outcome ?? 'Pending'}</td><td>{pct(num(prediction.actual_return_pct ?? undefined))}</td><td>{money(num(prediction.simulated_pnl ?? undefined))}</td><td>{prediction.is_correct == null ? 'Pending' : prediction.is_correct ? 'YES' : 'NO'}</td>
+            </tr>)}
+          </Table> : <EmptyState text="No prediction history is available." />}
+          <p>Confidence is a score unless the associated model and calibration metadata establish otherwise. Predictions describe movement classes over a horizon, not exact future prices.</p>
+        </div>
+      </details>
+      <details className="learning-section learning-model-control">
+        <summary><span><small>06 / MODEL CONTROL</small><strong>Promotion &amp; rollback events</strong></span><span>{promotions.length} EVENTS</span></summary>
+        <div className="learning-section-content">
+          {promotions.length ? <Table minWidth={700}><TableHead labels={['TIMESTAMP', 'EVENT', 'MODEL / VERSION', 'DETAIL']} />{promotions.map((event, index) => <tr key={event.event_id ?? index}><td>{timestamp(event.timestamp)}</td><td>{event.event_type ?? '—'}</td><td>{String(event.payload?.version ?? event.payload?.model_version ?? '—')}</td><td>{String(event.payload?.reason ?? event.payload?.message ?? 'No additional detail recorded')}</td></tr>)}</Table> : <EmptyState text="No promotion or rollback events are recorded. Experiment registry data is not exposed by the current API." />}
+        </div>
+      </details>
+      <p className="learning-footnote">Learning may update validated models and strategy weights. It cannot change source code or risk limits. Missing metrics remain unavailable rather than being inferred as zero.</p>
+    </div>
   )
 }
 
@@ -1095,20 +1178,84 @@ function RiskScreen({ risk, portfolio, alerts }: { risk: WorkspaceRisk | null; p
 
 function ActivityScreen({ events, loadState }: { events: WorkspaceEvent[]; loadState: 'loading' | 'ready' | 'error' }) {
   const [filter, setFilter] = useState('')
-  const filtered = events.filter((event) => !filter || `${event.event_type} ${event.source} ${event.symbol}`.toLowerCase().includes(filter.toLowerCase()))
+  const eventDetail = (event: WorkspaceEvent) => String(event.payload?.message ?? event.payload?.reason ?? event.payload?.status ?? '—')
+  const filtered = events.filter((event) => !filter || [
+    event.event_type,
+    event.source,
+    event.symbol,
+    event.market,
+    eventDetail(event),
+  ].join(' ').toLowerCase().includes(filter.trim().toLowerCase()))
+  const alertCount = events.filter((event) => /ERROR|FAIL|REJECT|RISK_ALERT/i.test(event.event_type ?? '')).length
+  const sourceCount = new Set(events.map((event) => event.source).filter((source): source is string => Boolean(source))).size
+  const assetCount = new Set(events.map((event) => event.symbol).filter((symbol): symbol is string => Boolean(symbol))).size
   return (
-    <>
-      <ScreenHeader title="Activity" description="Recent persisted system events polled from the local application event history" actions={<input className="workspace-search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter events" aria-label="Filter events" />} />
-      {loadState === 'error' && <p role="alert" className="workspace-note">Activity history could not be loaded from the backend. Retry after the backend connection is restored.</p>}
-      {loadState === 'loading' && <p role="status" className="workspace-note">Loading persisted system events…</p>}
-      {filtered.length ? <Table minWidth={850}><TableHead labels={['TIMESTAMP', 'EVENT', 'SOURCE', 'ASSET', 'MARKET', 'DETAIL']} />{filtered.map((event, index) => <tr key={event.event_id ?? index}>
-        <td>{timestamp(event.timestamp)}</td><td className={/ERROR|FAIL|REJECT|RISK_ALERT/i.test(event.event_type ?? '') ? 'negative' : ''}>{event.event_type ?? '—'}</td><td>{event.source ?? '—'}</td><td>{event.symbol ?? '—'}</td><td>{event.market ?? '—'}</td><td>{String(event.payload?.message ?? event.payload?.reason ?? event.payload?.status ?? '—')}</td>
-      </tr>)}</Table> : loadState !== 'error' && loadState !== 'loading' ? <EmptyState text="No system events are available in local history." /> : null}
-      <div className="workspace-note">The API exposes persisted system events, not arbitrary process logs. Application errors remain visible in local backend logs.</div>
-    </>
+    <div className="activity-screen">
+      <ScreenHeader
+        title="Activity"
+        description="Persisted system events from the local application history"
+        actions={
+          <div className="activity-filter">
+            <input className="workspace-search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search events, source, asset…" aria-label="Filter activity events" />
+            {filter && <button type="button" className="activity-clear-filter" onClick={() => setFilter('')} aria-label="Clear activity filter">CLEAR</button>}
+          </div>
+        }
+      />
+      <div className="activity-metrics" aria-label="Activity summary">
+        <div className="activity-metric"><span>EVENTS LOADED</span><strong>{events.length}</strong><small>Persisted records</small></div>
+        <div className="activity-metric"><span>ALERTS &amp; FAILURES</span><strong className={alertCount ? 'negative' : ''}>{alertCount}</strong><small>Risk, rejected, or error events</small></div>
+        <div className="activity-metric"><span>EVENT SOURCES</span><strong>{sourceCount}</strong><small>Distinct producers</small></div>
+        <div className="activity-metric"><span>ASSETS</span><strong>{assetCount}</strong><small>Distinct symbols</small></div>
+      </div>
+      <section className="activity-ledger" aria-label="Persisted event ledger">
+        <div className="activity-ledger-heading">
+          <div>
+            <span className="activity-kicker">LOCAL EVENT STORE</span>
+            <h2>Event ledger</h2>
+          </div>
+          <span className="activity-ledger-count">{filtered.length} {filter ? 'MATCHES' : 'EVENTS'}</span>
+        </div>
+        {loadState === 'error' && <div role="alert" className="activity-empty-state activity-empty-alert"><span>BACKEND UNAVAILABLE</span><strong>Activity history could not be loaded</strong><p>Retry after the backend connection is restored.</p></div>}
+        {loadState === 'loading' && <div role="status" className="activity-empty-state"><span>LOCAL EVENT STORE</span><strong>Loading persisted system events</strong><p>Waiting for backend history response…</p></div>}
+        {filtered.length ? (
+          <div className="activity-table">
+            <Table minWidth={850}><TableHead labels={['TIMESTAMP', 'EVENT', 'SOURCE', 'ASSET', 'MARKET', 'DETAIL']} />{filtered.map((event, index) => (
+              <tr key={event.event_id ?? index}>
+                <td>{timestamp(event.timestamp)}</td>
+                <td className={/ERROR|FAIL|REJECT|RISK_ALERT/i.test(event.event_type ?? '') ? 'negative' : ''}>{event.event_type ?? '—'}</td>
+                <td>{event.source ?? '—'}</td>
+                <td>{event.symbol ?? '—'}</td>
+                <td>{event.market ?? '—'}</td>
+                <td>{eventDetail(event)}</td>
+              </tr>
+            ))}</Table>
+          </div>
+        ) : loadState === 'ready' ? <div className="activity-empty-state"><span>{filter ? 'FILTER RESULT' : 'LOCAL EVENT STORE'}</span><strong>{filter ? 'No matching events' : 'No system events recorded'}</strong><p>{filter ? 'Adjust or clear the current filter.' : 'Persisted application events will appear here.'}</p></div> : null}
+      </section>
+      <p className="workspace-note activity-note">The API exposes persisted system events, not arbitrary process logs. Application errors remain visible in local backend logs.</p>
+    </div>
   )
 }
 
+
+function DiagnosticStatusCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  const tone = /FAILED|UNAVAILABLE|DISCONNECTED|INACTIVE|DEGRADED/i.test(value)
+    ? 'negative'
+    : /READY|CONNECTED|ACTIVE|HEALTHY|RUNNING/i.test(value)
+      ? 'positive'
+      : 'neutral'
+  return (
+    <article className={`diagnostics-status-card ${tone}`}>
+      <div className="diagnostics-status-card-heading">
+        <span className="diagnostics-status-light" />
+        <span>{label}</span>
+        <small>{tone === 'positive' ? 'OK' : tone === 'negative' ? 'ISSUE' : 'CHECK'}</small>
+      </div>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  )
+}
 
 function DiagnosticsScreen({ data, activityLoadState, diagnostics }: {
   data: WorkspaceData
@@ -1131,6 +1278,22 @@ function DiagnosticsScreen({ data, activityLoadState, diagnostics }: {
     ['Risk manager', data.risk?.risk_manager_status?.toUpperCase() ?? 'UNKNOWN', 'Backend risk status from latest API response'],
     ['Persisted activity', activityLoadState === 'ready' ? 'READY' : activityLoadState === 'error' ? 'UNAVAILABLE' : 'CHECKING', 'Recent application events'],
   ]
+  const readyChecks = runtimeChecks.filter(([, state]) => /READY|CONNECTED|ACTIVE|HEALTHY|RUNNING/i.test(state)).length
+  const attentionRequired = runtimeChecks.some(([, state]) => /FAILED|UNAVAILABLE|DISCONNECTED|INACTIVE|DEGRADED/i.test(state))
+  const readinessPercent = runtimeChecks.length ? Math.round((readyChecks / runtimeChecks.length) * 100) : 0
+  const requestCount = diagnostics.requestMetrics.requestCount
+  const failureCount = diagnostics.requestMetrics.failureCount
+  const successCount = Math.max(0, requestCount - failureCount)
+  const successPercent = requestCount ? Math.round((successCount / requestCount) * 100) : 0
+  const failurePercent = requestCount ? Math.round((Math.min(requestCount, failureCount) / requestCount) * 100) : 0
+  const components = diagnostics.health?.components
+  const componentEntries = components && typeof components === 'object'
+    ? Object.entries(components as Record<string, { healthy?: boolean; details?: string | null }>)
+    : []
+  const detailedMetrics = diagnostics.health?.metrics
+  const metricsText = detailedMetrics && typeof detailedMetrics === 'object'
+    ? JSON.stringify(detailedMetrics, null, 2).slice(0, 16_000)
+    : ''
   const logMessage = diagnostics.logState === 'loading'
     ? 'Loading backend process logs…'
     : diagnostics.logState === 'error'
@@ -1142,35 +1305,156 @@ function DiagnosticsScreen({ data, activityLoadState, diagnostics }: {
           : ''
 
   return (
-    <>
-      <ScreenHeader title="System Diagnostics" description="Live service readiness, persisted application events, and local backend process output" />
-      <div className="workspace-summary">
-        <SummaryCard label="BACKEND SUPERVISOR" value={diagnostics.backendState.toUpperCase()} />
-        <SummaryCard label="AUTHENTICATED API" value={diagnostics.apiReady ? 'READY' : 'UNAVAILABLE'} />
-        <SummaryCard label="DATABASE" value={healthValue('database_connected')} />
-        <SummaryCard label="LIVE EVENT STREAM" value={diagnostics.websocketConnected ? 'CONNECTED' : 'DISCONNECTED'} />
-        <SummaryCard label="MARKET DATA" value={diagnostics.marketDataStatus.toUpperCase()} />
-        <SummaryCard label="SCANNER" value={healthValue('market_data_active')} />
-        <SummaryCard label="API REQUESTS / 60S" value={String(diagnostics.requestMetrics.requestCount)} detail="Frontend HTTP requests" />
-        <SummaryCard label="API FAILURES / 60S" value={String(diagnostics.requestMetrics.failureCount)} />
-        <SummaryCard label="API AVG / P95" value={`${diagnostics.requestMetrics.averageDurationMs} / ${diagnostics.requestMetrics.p95DurationMs} ms`} />
-      </div>
-      <h2 className="workspace-section-title">Feature runtime checks</h2>
-      <Table minWidth={700}><TableHead labels={['SERVICE', 'STATE', 'CHECK']} />{runtimeChecks.map(([name, state, detail]) => (
-        <tr key={name}><td>{name}</td><td className={/FAILED|UNAVAILABLE|DISCONNECTED|INACTIVE|DEGRADED/i.test(state) ? 'negative' : ''}>{state}</td><td>{detail}</td></tr>
-      ))}</Table>
-      <h2 className="workspace-section-title">Backend process logs</h2>
-      {logMessage ? <p role={diagnostics.logState === 'error' ? 'alert' : 'status'} className="workspace-note">{logMessage}</p> : (
-        <pre className="diagnostics-log" role="log" aria-live="polite">{diagnostics.logs.join('\n')}</pre>
-      )}
-      <h2 className="workspace-section-title">Recent application activity</h2>
-      {activityLoadState === 'error' && <p role="alert" className="workspace-note">Persisted activity could not be loaded. The displayed events may be stale.</p>}
-      {activityLoadState === 'loading' && <p role="status" className="workspace-note">Loading persisted system events…</p>}
-      {data.events.length ? <Table minWidth={850}><TableHead labels={['TIMESTAMP', 'EVENT', 'SOURCE', 'ASSET', 'MARKET', 'DETAIL']} />{data.events.slice(0, 50).map((event, index) => <tr key={event.event_id ?? index}>
-        <td>{timestamp(event.timestamp)}</td><td className={/ERROR|FAIL|REJECT|RISK_ALERT/i.test(event.event_type ?? '') ? 'negative' : ''}>{event.event_type ?? '—'}</td><td>{event.source ?? '—'}</td><td>{event.symbol ?? '—'}</td><td>{event.market ?? '—'}</td><td>{String(event.payload?.message ?? event.payload?.reason ?? event.payload?.status ?? '—')}</td>
-      </tr>)}</Table> : activityLoadState === 'ready' ? <EmptyState text="No system events are available in local history." /> : null}
-      {!diagnostics.isDesktop && <p className="workspace-note">Backend process logs are only exposed by the supervised desktop application.</p>}
-    </>
+    <div className="diagnostics-screen">
+      <header className="diagnostics-header">
+        <div className="diagnostics-header-copy">
+          <span className="diagnostics-eyebrow"><i /> LOCAL SYSTEM OBSERVABILITY</span>
+          <h1>System Diagnostics</h1>
+          <p>Service readiness, request health, backend activity, and persisted events.</p>
+        </div>
+        <aside className={`diagnostics-readiness ${attentionRequired ? 'attention' : readyChecks === runtimeChecks.length ? 'clear' : 'pending'}`} aria-label="Overall diagnostics status">
+          <div className={`diagnostics-readiness-heading ${readyChecks < runtimeChecks.length && !attentionRequired ? 'pending' : ''}`}><span className="diagnostics-status-light" /><span>OVERALL STATUS</span><b>{attentionRequired ? 'ATTENTION REQUIRED' : readyChecks === runtimeChecks.length ? 'ALL CHECKS PASSING' : 'CHECKS PENDING'}</b></div>
+          <div className="diagnostics-readiness-track" role="progressbar" aria-label="Passing service checks" aria-valuemin={0} aria-valuemax={runtimeChecks.length} aria-valuenow={readyChecks}>
+            <span style={{ width: `${readinessPercent}%` }} />
+          </div>
+          <small>{readyChecks} of {runtimeChecks.length} service checks passing</small>
+        </aside>
+      </header>
+      <section className="diagnostics-section diagnostics-overview">
+        <div className="diagnostics-overview-heading">
+          <div>
+            <span className="diagnostics-eyebrow">CORE / SERVICE MAP</span>
+            <h2 className="workspace-section-title">Live service status</h2>
+          </div>
+          <span className="diagnostics-live-tag"><i /> MONITORING</span>
+        </div>
+        <div className="diagnostics-health-grid">
+          <DiagnosticStatusCard label="BACKEND SUPERVISOR" value={diagnostics.backendState.toUpperCase()} detail="Managed Python process" />
+          <DiagnosticStatusCard label="AUTHENTICATED API" value={diagnostics.apiReady ? 'READY' : 'UNAVAILABLE'} detail="Local REST interface" />
+          <DiagnosticStatusCard label="DATABASE" value={healthValue('database_connected')} detail="SQLite connection" />
+          <DiagnosticStatusCard label="LIVE EVENT STREAM" value={diagnostics.websocketConnected ? 'CONNECTED' : 'DISCONNECTED'} detail="Authenticated WebSocket" />
+          <DiagnosticStatusCard label="MARKET DATA" value={diagnostics.marketDataStatus.toUpperCase()} detail="Quote and candle freshness" />
+          <DiagnosticStatusCard label="SCANNER" value={healthValue('market_data_active')} detail="Market scan lifecycle" />
+        </div>
+        <div className="diagnostics-telemetry">
+          <div className="diagnostics-telemetry-card">
+            <span>HTTP REQUESTS <small>/ 60 SEC</small></span>
+            <strong>{requestCount}</strong>
+            <small>Frontend API calls</small>
+          </div>
+          <div className="diagnostics-telemetry-card">
+            <span>FAILED REQUESTS <small>/ 60 SEC</small></span>
+            <strong className={failureCount ? 'negative' : 'positive'}>{failureCount}</strong>
+            <small>Recent request errors</small>
+          </div>
+          <div className="diagnostics-telemetry-card">
+            <span>LATENCY <small>AVG / P95</small></span>
+            <strong>{diagnostics.requestMetrics.averageDurationMs}<small> / {diagnostics.requestMetrics.p95DurationMs} ms</small></strong>
+            <small>Rolling request window</small>
+          </div>
+          <div className="diagnostics-request-health">
+            <div className="diagnostics-request-health-heading"><span>REQUEST HEALTH</span><strong>{requestCount ? `${successPercent}%` : '—'}</strong></div>
+            <div className="diagnostics-request-health-track" role="progressbar" aria-label="Successful API requests" aria-valuemin={0} aria-valuemax={requestCount} aria-valuenow={successCount}>
+              <span className="success" style={{ width: `${successPercent}%` }} />
+              <span className="failure" style={{ width: `${failurePercent}%` }} />
+            </div>
+            <small>{successCount} successful <i /> {failureCount} failed</small>
+          </div>
+        </div>
+      </section>
+      <details className="diagnostics-section diagnostics-collapsible">
+        <summary className="diagnostics-section-heading">
+          <div>
+            <h2 className="workspace-section-title">Feature runtime checks</h2>
+            <p>Health and availability checks reported by the running application.</p>
+          </div>
+          <span className="diagnostics-accordion-count">{runtimeChecks.length} CHECKS</span>
+        </summary>
+        <div className="diagnostics-content">
+          <div className="diagnostics-table diagnostics-runtime-table">
+            <Table minWidth={700}><TableHead labels={['SERVICE', 'STATE', 'CHECK']} />{runtimeChecks.map(([name, state, detail]) => (
+              <tr key={name}><td>{name}</td><td className={/FAILED|UNAVAILABLE|DISCONNECTED|INACTIVE|DEGRADED/i.test(state) ? 'negative' : ''}>{state}</td><td>{detail}</td></tr>
+            ))}</Table>
+          </div>
+        </div>
+      </details>
+      <details className="diagnostics-section diagnostics-collapsible">
+        <summary className="diagnostics-section-heading">
+          <div>
+            <h2 className="workspace-section-title">Backend components</h2>
+            <p>Subsystem health details and the latest backend metrics snapshot.</p>
+          </div>
+          <span className="diagnostics-accordion-count">{componentEntries.length} COMPONENTS</span>
+        </summary>
+        <div className="diagnostics-content">
+          {componentEntries.length ? (
+            <div className="diagnostics-table diagnostics-component-table">
+              <Table minWidth={700}><TableHead labels={['COMPONENT', 'STATE', 'DETAIL']} />{componentEntries.map(([name, value]) => (
+                <tr key={name}><td>{name}</td><td className={value.healthy ? '' : 'negative'}>{value.healthy ? 'HEALTHY' : 'DEGRADED'}</td><td>{value.details ?? 'No additional detail'}</td></tr>
+              ))}</Table>
+            </div>
+          ) : <EmptyState text="Detailed backend component status is not available yet." />}
+          {metricsText && <pre className="diagnostics-log" role="log" aria-label="Detailed subsystem health metrics">{metricsText}</pre>}
+        </div>
+      </details>
+      <details className="diagnostics-section diagnostics-collapsible">
+        <summary className="diagnostics-section-heading">
+          <div>
+            <h2 className="workspace-section-title">Frontend request &amp; render trace</h2>
+            <p>Most recent operations first · up to 100 events.</p>
+          </div>
+          <span className="diagnostics-accordion-count">{diagnostics.frontendEvents.length} EVENTS</span>
+        </summary>
+        <div className="diagnostics-content">
+          {diagnostics.frontendEvents.length ? (
+            <div className="diagnostics-table diagnostics-trace-table">
+              <Table minWidth={900}><TableHead labels={['TIMESTAMP', 'LEVEL', 'OPERATION', 'STATUS', 'MS', 'DETAIL / RECOMMENDATION']} />{diagnostics.frontendEvents.slice().reverse().slice(0, 100).map((event) => (
+                <tr key={event.id}>
+                  <td>{timestamp(event.timestamp)}</td>
+                  <td className={event.level === 'ERROR' ? 'negative' : ''}>{event.level}</td>
+                  <td>{event.operation}</td>
+                  <td className={event.status === 'FAILURE' ? 'negative' : ''}>{event.status}{event.status_code ? ` · HTTP ${event.status_code}` : ''}</td>
+                  <td>{event.duration_ms == null ? '—' : Math.round(event.duration_ms)}</td>
+                  <td>{[event.detail, event.recommendation].filter(Boolean).join(' — ') || event.endpoint || '—'}</td>
+                </tr>
+              ))}</Table>
+            </div>
+          ) : <EmptyState text="Frontend traces appear as the app performs requests and renders updates." />}
+          <p className="workspace-note">Frontend request and React render traces are kept in a bounded in-memory buffer and uploaded in small batches while the backend is available. Query strings and common credentials are removed; response bodies and trading payloads are never logged.</p>
+        </div>
+      </details>
+      <details className="diagnostics-section diagnostics-collapsible">
+        <summary className="diagnostics-section-heading">
+          <div>
+            <h2 className="workspace-section-title">Backend process logs</h2>
+            <p>Recent output from the supervised backend process.</p>
+          </div>
+          <span className="diagnostics-accordion-count">{diagnostics.logs.length} LINES</span>
+        </summary>
+        <div className="diagnostics-content">
+          {logMessage ? <p role={diagnostics.logState === 'error' ? 'alert' : 'status'} className="workspace-note">{logMessage}</p> : (
+            <pre className="diagnostics-log" role="log" aria-live="polite">{diagnostics.logs.join('\n')}</pre>
+          )}
+        </div>
+      </details>
+      <details className="diagnostics-section diagnostics-collapsible">
+        <summary className="diagnostics-section-heading">
+          <div>
+            <h2 className="workspace-section-title">Recent application activity</h2>
+            <p>Latest persisted events from the local application history.</p>
+          </div>
+          <span className="diagnostics-accordion-count">{data.events.length} EVENTS</span>
+        </summary>
+        <div className="diagnostics-content">
+          {activityLoadState === 'error' && <p role="alert" className="workspace-note">Persisted activity could not be loaded. The displayed events may be stale.</p>}
+          {activityLoadState === 'loading' && <p role="status" className="workspace-note">Loading persisted system events…</p>}
+          {data.events.length ? <div className="diagnostics-table diagnostics-activity-table"><Table minWidth={850}><TableHead labels={['TIMESTAMP', 'EVENT', 'SOURCE', 'ASSET', 'MARKET', 'DETAIL']} />{data.events.slice(0, 50).map((event, index) => <tr key={event.event_id ?? index}>
+            <td>{timestamp(event.timestamp)}</td><td className={/ERROR|FAIL|REJECT|RISK_ALERT/i.test(event.event_type ?? '') ? 'negative' : ''}>{event.event_type ?? '—'}</td><td>{event.source ?? '—'}</td><td>{event.symbol ?? '—'}</td><td>{event.market ?? '—'}</td><td>{String(event.payload?.message ?? event.payload?.reason ?? event.payload?.status ?? '—')}</td>
+          </tr>)}</Table></div> : activityLoadState === 'ready' ? <EmptyState text="No system events are available in local history." /> : null}
+          {!diagnostics.isDesktop && <p className="workspace-note">Backend process logs are only exposed by the supervised desktop application.</p>}
+        </div>
+      </details>
+    </div>
   )
 }
 
@@ -1195,16 +1479,23 @@ function IntelligenceModePanel() {
     conservative: 'Single-tool requests with provider interpretation and feedback adaptation disabled.',
   }
   return (
-    <>
-      <h2 className="workspace-section-title">Assistant intelligence · persistent</h2>
-      <div className="settings-card-list">
-        <label className="settings-card"><span><b>Intelligence mode</b><small>{descriptions[selected]}</small></span>
+    <section className="settings-section settings-intelligence">
+      <div className="settings-section-heading">
+        <div>
+          <span className="settings-index">01 / ASSISTANT PROFILE</span>
+          <h2>Assistant intelligence</h2>
+          <p>Choose how local market evidence is gathered and presented.</p>
+        </div>
+        <span className="settings-section-tag">PERSISTENT</span>
+      </div>
+      <div className="settings-intelligence-grid">
+        <label className="settings-card settings-field"><span><b>Intelligence mode</b><small>{descriptions[selected]}</small></span>
           <select className="workspace-select" value={selected} onChange={(event) => setSelected(event.target.value as Mode)}>
             <option value="balanced">Balanced</option><option value="fast">Fast</option><option value="research">Research</option><option value="conservative">Conservative</option>
           </select>
         </label>
-        <div className="settings-card"><span><b>Active profile</b><small>{profile ? `${profile.max_tool_calls} tool calls · ${profile.response_detail} response · memory ${profile.memory_enabled ? 'on' : 'off'} · provider ${profile.provider_enabled ? 'on' : 'off'}` : 'Loading configuration…'}</small></span></div>
-        <button className="settings-card" disabled={saving || !profile} onClick={async () => {
+        <div className="settings-card settings-field settings-profile-readout"><span><b>Active profile</b><small>{profile ? `${profile.max_tool_calls} tool calls · ${profile.response_detail} response · memory ${profile.memory_enabled ? 'on' : 'off'} · provider ${profile.provider_enabled ? 'on' : 'off'}` : 'Loading configuration…'}</small></span></div>
+        <button className="settings-card settings-field settings-apply-mode" disabled={saving || !profile} onClick={async () => {
           setSaving(true); setStatus('')
           try {
             const result = await mutateJson<Profile>('/settings/intelligence', 'PUT', { mode: selected })
@@ -1213,9 +1504,9 @@ function IntelligenceModePanel() {
           } catch (error) { setStatus(error instanceof Error ? error.message : 'Could not save intelligence mode.') }
           finally { setSaving(false) }
         }}><span><b>{saving ? 'Saving…' : 'Apply intelligence mode'}</b><small>Changes apply to subsequent assistant requests.</small></span></button>
-        {status && <p role="status" className="settings-status">{status}</p>}
       </div>
-    </>
+      {status && <p role="status" className="settings-status">{status}</p>}
+    </section>
   )
 }
 
@@ -1239,24 +1530,59 @@ function SettingsScreen({
     return draft[key] ?? (Array.isArray(setting) ? setting.join(', ') : String(setting ?? ''))
   }
   const updatePreference = (key: keyof DashboardPreferences) => onPreferencesChange({ ...preferences, [key]: !preferences[key] })
+  const capitalSettings = [
+    ['spot_initial_balance', 'Spot paper starting balance'],
+    ['futures_initial_balance', 'Futures paper starting balance'],
+  ] as const
+  const riskSettings = [
+    ['risk_per_trade_pct', 'Risk per trade'],
+    ['risk_max_daily_loss_pct', 'Maximum daily loss'],
+    ['risk_max_total_open_pct', 'Maximum total open risk'],
+    ['risk_max_leverage', 'Maximum Futures leverage'],
+    ['max_spot_positions', 'Maximum Spot positions'],
+    ['max_futures_positions', 'Maximum Futures positions'],
+  ] as const
+  const telegramSettings = [
+    ['telegram_notify_decisions', 'Decision updates'],
+    ['telegram_notify_executions', 'Paper trade executions'],
+    ['telegram_notify_risk', 'Risk alerts'],
+    ['telegram_notify_learning', 'Learning updates'],
+  ] as const
   return (
-    <>
+    <div className="settings-page">
       <ScreenHeader title="Settings" description="Engine settings are validated, saved locally by the backend, and applied to the running scanner and risk controls." />
       <IntelligenceModePanel />
-      <h2 className="workspace-section-title">Dashboard preferences · this device</h2>
-      <div className="settings-card-list">
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <div>
+            <span className="settings-index">02 / DISPLAY</span>
+            <h2>Dashboard preferences</h2>
+            <p>Personal controls saved on this device only.</p>
+          </div>
+          <span className="settings-section-tag">LOCAL</span>
+        </div>
+        <div className="settings-card-list settings-preferences-grid">
         {([
           ['autoScale', 'Chart auto-scale', 'Scale price to visible candle range'],
           ['crosshair', 'Chart crosshair', 'Show crosshair and axis labels'],
           ['showRiskAlerts', 'Show risk alert badge', 'Display a badge when risk events are present'],
         ] as [keyof DashboardPreferences, string, string][]).map(([key, label, detail]) => (
-          <button key={key} className="settings-card" role="switch" aria-checked={preferences[key]} onClick={() => updatePreference(key)}>
+          <button key={key} className="settings-card settings-field" role="switch" aria-checked={preferences[key]} onClick={() => updatePreference(key)}>
             <span><b>{label}</b><small>{detail}</small></span><i className={preferences[key] ? 'switch-on' : ''} />
           </button>
         ))}
-      </div>
-      <h2 className="workspace-section-title">Engine configuration · persistent</h2>
-      <form className="settings-card-list" onSubmit={async (event) => {
+        </div>
+      </section>
+      <section className="settings-section settings-engine-section">
+        <div className="settings-section-heading">
+          <div>
+            <span className="settings-index">03 / RUNTIME</span>
+            <h2>Engine configuration</h2>
+            <p>Persistent controls for markets, risk limits, and notifications.</p>
+          </div>
+          <span className="settings-section-tag">BACKEND</span>
+        </div>
+        <form className="settings-engine-form" onSubmit={async (event) => {
         event.preventDefault()
         setMessage('')
         const numberKeys = ['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions']
@@ -1295,35 +1621,80 @@ function SettingsScreen({
         catch (error) { setMessage(error instanceof Error ? error.message : 'Settings could not be saved.') }
         finally { setSaving(false) }
       }}>
-        <label className="settings-card"><span><b>Spot market data</b><small>Enable or pause Spot scanning</small></span><select className="workspace-select" value={value('spot_enabled')} onChange={(event) => setDraft((state) => ({ ...state, spot_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-        <label className="settings-card"><span><b>USDⓈ-M Futures</b><small>Enable or pause Futures scanning</small></span><select className="workspace-select" value={value('futures_enabled')} onChange={(event) => setDraft((state) => ({ ...state, futures_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-        <label className="settings-card"><span><b>Scan broader symbol set</b><small>Uses up to 50 high-volume eligible symbols per market</small></span><select className="workspace-select" value={value('scan_all_eligible_symbols')} onChange={(event) => setDraft((state) => ({ ...state, scan_all_eligible_symbols: event.target.value }))}><option value="true">Enabled</option><option value="false">Top 10</option></select></label>
-        <label className="settings-card"><span><b>Analysis timeframes</b><small>Comma-separated Binance intervals</small></span><input className="workspace-search" value={value('timeframes')} onChange={(event) => setDraft((state) => ({ ...state, timeframes: event.target.value }))} /></label>
-        {(['spot_initial_balance','futures_initial_balance','risk_per_trade_pct','risk_max_daily_loss_pct','risk_max_total_open_pct','risk_max_leverage','max_spot_positions','max_futures_positions'] as const).map((key) => <label className="settings-card" key={key}><span><b>{key.replaceAll('_',' ').toUpperCase()}</b></span><input className="workspace-search" type="number" min="0.01" step="any" value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))} /></label>)}
-        <label className="settings-card"><span><b>Telegram notifications</b><small>Uses credentials already configured in the private environment</small></span><select className="workspace-select" value={value('telegram_enabled')} onChange={(event) => setDraft((state) => ({ ...state, telegram_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
-        {(['telegram_notify_decisions','telegram_notify_executions','telegram_notify_risk','telegram_notify_learning'] as const).map((key) => <label className="settings-card" key={key}><span><b>{key.replace('telegram_notify_', 'Telegram ').replaceAll('_', ' ')}</b><small>Send this category to the configured authorized chat</small></span><select className="workspace-select" value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>)}
-        <button className="table-action" type="submit" disabled={saving || !Object.keys(draft).length}>{saving ? 'Saving…' : 'Save engine settings'}</button>
-        {message && <span role="status">{message}</span>}
-      </form>
-      <div className="workspace-summary">
+          <div className="settings-field-groups">
+            <fieldset className="settings-group">
+              <legend><span>01</span> Markets &amp; scanning</legend>
+              <div className="settings-fields">
+                <label className="settings-card settings-field"><span><b>Spot market data</b><small>Enable or pause Spot scanning</small></span><select className="workspace-select" value={value('spot_enabled')} onChange={(event) => setDraft((state) => ({ ...state, spot_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                <label className="settings-card settings-field"><span><b>USDⓈ-M Futures</b><small>Enable or pause Futures scanning</small></span><select className="workspace-select" value={value('futures_enabled')} onChange={(event) => setDraft((state) => ({ ...state, futures_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                <label className="settings-card settings-field"><span><b>Eligible symbol set</b><small>Scan up to 50 high-volume symbols per market</small></span><select className="workspace-select" value={value('scan_all_eligible_symbols')} onChange={(event) => setDraft((state) => ({ ...state, scan_all_eligible_symbols: event.target.value }))}><option value="true">Enabled</option><option value="false">Top 10</option></select></label>
+                <label className="settings-card settings-field"><span><b>Analysis timeframes</b><small>Comma-separated Binance intervals</small></span><input className="workspace-search" value={value('timeframes')} onChange={(event) => setDraft((state) => ({ ...state, timeframes: event.target.value }))} /></label>
+              </div>
+            </fieldset>
+            <fieldset className="settings-group">
+              <legend><span>02</span> Paper capital</legend>
+              <div className="settings-fields">
+                {capitalSettings.map(([key, label]) => <label className="settings-card settings-field" key={key}><span><b>{label}</b><small>Virtual account starting balance</small></span><input className="workspace-search" type="number" min="0.01" step="any" value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))} /></label>)}
+              </div>
+            </fieldset>
+            <fieldset className="settings-group">
+              <legend><span>03</span> Risk boundaries</legend>
+              <div className="settings-fields">
+                {riskSettings.map(([key, label]) => <label className="settings-card settings-field" key={key}><span><b>{label}</b><small>{key.endsWith('_pct') ? 'Percent limit' : key.includes('positions') ? 'Maximum open positions' : 'Futures multiplier'}</small></span><input className="workspace-search" type="number" min="0.01" step="any" value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))} /></label>)}
+              </div>
+            </fieldset>
+            <fieldset className="settings-group">
+              <legend><span>04</span> Telegram notifications</legend>
+              <div className="settings-fields">
+                <label className="settings-card settings-field"><span><b>Telegram delivery</b><small>Uses credentials configured in the private environment</small></span><select className="workspace-select" value={value('telegram_enabled')} onChange={(event) => setDraft((state) => ({ ...state, telegram_enabled: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>
+                {telegramSettings.map(([key, label]) => <label className="settings-card settings-field" key={key}><span><b>{label}</b><small>Send this category to the authorized chat</small></span><select className="workspace-select" value={value(key)} onChange={(event) => setDraft((state) => ({ ...state, [key]: event.target.value }))}><option value="true">Enabled</option><option value="false">Disabled</option></select></label>)}
+              </div>
+            </fieldset>
+          </div>
+          <div className="settings-form-footer">
+            <span className="settings-form-hint">Validated before applying · real exchange trading remains disabled.</span>
+            <button className="table-action" type="submit" disabled={saving || !Object.keys(draft).length}>{saving ? 'Saving…' : 'Save engine settings'}</button>
+            {message && <span role="status" className="settings-form-message">{message}</span>}
+          </div>
+        </form>
+      </section>
+      <section className="settings-section">
+        <div className="settings-section-heading">
+          <div>
+            <span className="settings-index">04 / CURRENT CONFIGURATION</span>
+            <h2>Engine status</h2>
+            <p>Read-only snapshot of current saved values.</p>
+          </div>
+        </div>
+        <div className="workspace-summary settings-readout-grid">
         <SummaryCard label="SPOT MARKET DATA" value={settings ? settings.spot_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} />
         <SummaryCard label="USDⓈ-M FUTURES" value={settings ? settings.futures_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} />
         <SummaryCard label="MARKET SCANNING" value={settings ? settings.scan_all_eligible_symbols ? 'ALL ELIGIBLE' : 'CONFIGURED SET' : 'Unavailable'} />
         <SummaryCard label="SPOT PAPER CAPITAL" value={money(num(settings?.spot_initial_balance))} />
         <SummaryCard label="FUTURES PAPER CAPITAL" value={money(num(settings?.futures_initial_balance))} />
         <SummaryCard label="TELEGRAM" value={settings ? settings.telegram_enabled ? 'ENABLED' : 'DISABLED' : 'Unavailable'} detail={settings?.telegram_enabled ? `Token ${settings.telegram_bot_token_configured ? 'configured' : 'missing'} · chat ${settings.telegram_chat_id_configured ? 'configured' : 'missing'}` : 'No credentials are exposed'} />
-      </div>
-      <h2 className="workspace-section-title">Risk controls · read-only</h2>
-      <div className="workspace-summary">
+        </div>
+      </section>
+      <section className="settings-section settings-risk-readout">
+        <div className="settings-section-heading">
+          <div>
+            <span className="settings-index">05 / SAFETY</span>
+            <h2>Risk controls</h2>
+            <p>These values are configured by the engine and are not changed here.</p>
+          </div>
+          <span className="settings-section-tag">READ ONLY</span>
+        </div>
+        <div className="workspace-summary settings-readout-grid">
         <SummaryCard label="RISK / TRADE" value={settings?.risk_per_trade_pct == null ? '—' : `${settings.risk_per_trade_pct}%`} />
         <SummaryCard label="MAX DAILY LOSS" value={settings?.risk_max_daily_loss_pct == null ? '—' : `${settings.risk_max_daily_loss_pct}%`} />
         <SummaryCard label="MAX OPEN RISK" value={settings?.risk_max_total_open_pct == null ? '—' : `${settings.risk_max_total_open_pct}%`} />
         <SummaryCard label="FUTURES LEVERAGE" value={settings?.risk_max_leverage == null ? '—' : `${settings.risk_max_leverage}x`} />
         <SummaryCard label="POSITION LIMITS" value={settings ? `${settings.max_spot_positions ?? '—'} Spot / ${settings.max_futures_positions ?? '—'} Futures` : '—'} />
         <SummaryCard label="TIMEFRAMES" value={settings?.timeframes?.length ? settings.timeframes.join(', ') : '—'} />
-      </div>
-      <div className="workspace-note">Telegram credentials remain secret and cannot be changed here. Starting balances can only be changed before the first paper trade. Real exchange trading remains disabled.</div>
-    </>
+        </div>
+      </section>
+      <div className="workspace-note settings-safety-note">Telegram credentials remain secret and cannot be changed here. Starting balances can only be changed before the first paper trade. Real exchange trading remains disabled.</div>
+    </div>
   )
 }
 
@@ -1355,11 +1726,13 @@ function CommunityLibraryScreen() {
   const [items, setItems] = useState<CommunityStrategy[]>([])
   const listRequestId = useRef(0)
   const [listLoading, setListLoading] = useState(false)
+  const [listFailed, setListFailed] = useState(false)
   const [query, setQuery] = useState('')
   const [strategyKey, setStrategyKey] = useState('')
   const [assetFilter, setAssetFilter] = useState('')
   const [timeframeFilter, setTimeframeFilter] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [showPublish, setShowPublish] = useState(false)
   const [showFavorites, setShowFavorites] = useState(false)
   const [sort, setSort] = useState('recent')
   const [selected, setSelected] = useState<CommunityStrategy | null>(null)
@@ -1400,11 +1773,13 @@ function CommunityLibraryScreen() {
     if (strategyKey) params.set('strategy_key', strategyKey)
     if (normalizedAsset) params.set('asset', normalizedAsset)
     if (normalizedTimeframe) params.set('timeframe', normalizedTimeframe)
+    setListFailed(false)
     setListLoading(true)
     try {
       const result = await requestJson<{ strategies?: CommunityStrategy[] }>(showFavorites ? '/community/favorites' : `/community/strategies?${params.toString()}`)
       if (requestId !== listRequestId.current) return
       if (!result || !Array.isArray(result.strategies)) {
+        setListFailed(true)
         setNotice('Community library returned an invalid response. Please refresh and try again.')
         return
       }
@@ -1412,6 +1787,7 @@ function CommunityLibraryScreen() {
       setNotice('')
     } catch (error) {
       if (requestId !== listRequestId.current) return
+      setListFailed(true)
       setNotice(error instanceof Error ? error.message : 'Unable to load community strategies.')
     } finally {
       if (requestId === listRequestId.current) setListLoading(false)
@@ -1464,6 +1840,7 @@ function CommunityLibraryScreen() {
       setNotice(editingId ? 'Published strategy version updated.' : 'Strategy published. Shared performance is labelled user-submitted.')
       setEditingId(null)
       setName('')
+      setShowPublish(false)
       await load()
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Unable to publish strategy.')
@@ -1506,6 +1883,7 @@ function CommunityLibraryScreen() {
   const editStrategy = (item: CommunityStrategy) => {
     if (busy) { setNotice('Wait for the current publish operation to finish before editing.'); return }
     setEditingId(item.public_id)
+    setShowPublish(true)
     setName(item.name)
     setDescription(item.description)
     setKey(item.strategy_key)
@@ -1563,17 +1941,32 @@ function CommunityLibraryScreen() {
     }
   }
 
-  return <div className="screen-stack">
+  return <div className="screen-stack community-screen">
     <ScreenHeader title="Community Strategy Library" description="Browse and share strategy research · simulator-only · no live execution" />
-    <p className="workspace-note">Listings are shared only with clients connected to this backend. Desktop local mode keeps its own library; it does not automatically sync to the hosted community.</p>
-    <section className="workspace-panel">
-      <div className="workspace-toolbar">
+    <div className="community-safety-strip">
+      <span className="community-safety-mark">PAPER / RESEARCH</span>
+      <p>Listings are shared only with clients connected to this backend. Desktop local mode keeps its own library; it does not automatically sync to the hosted community.</p>
+    </div>
+    <div className="community-index-strip" aria-label="Community library summary">
+      <div><span>RESULTS LOADED</span><strong>{items.length.toString().padStart(2, '0')}</strong></div>
+      <div><span>SAVED IN VIEW</span><strong>{items.filter(item => item.is_favorite).length.toString().padStart(2, '0')}</strong></div>
+      <div className="community-mode-indicator"><span>EXECUTION MODE</span><strong>SIMULATOR ONLY</strong></div>
+      <button className="community-publish-toggle" type="button" aria-expanded={showPublish} onClick={() => setShowPublish(value => !value)}>
+        <span aria-hidden="true">{showPublish ? '−' : '+'}</span>{showPublish ? 'Close publisher' : 'Publish research'}
+      </button>
+    </div>
+    <section className="workspace-panel community-catalog">
+      <div className="community-catalog-heading">
+        <div><span className="community-kicker">{showFavorites ? 'PERSONAL SAVED SET' : 'SHARED RESEARCH INDEX'}</span><h2>{showFavorites ? 'Saved strategies' : 'Strategy catalog'}</h2></div>
+        <span className="community-result-count">{listLoading ? 'UPDATING…' : `${items.length} ${items.length === 1 ? 'ENTRY' : 'ENTRIES'}`}</span>
+      </div>
+      <div className="community-filter-grid">
         <input className="workspace-search" aria-label="Search strategies" placeholder="Search strategy name or description" value={query} onChange={event => setQuery(event.target.value)} />
         <select className="workspace-search" aria-label="Filter strategy type" value={strategyKey} onChange={event => setStrategyKey(event.target.value)}>
           <option value="">All strategy types</option>
           {['momentum','breakout','trend_following','mean_reversion','reversal'].map(value => <option key={value} value={value}>{value.replaceAll('_',' ')}</option>)}
         </select>
-        <button className="table-action" onClick={() => setShowFavorites(value => !value)}>{showFavorites ? 'All strategies' : 'Saved strategies'}</button>
+        <button className="table-action community-saved-toggle" aria-pressed={showFavorites} onClick={() => setShowFavorites(value => !value)}>{showFavorites ? 'All strategies' : 'Saved strategies'}</button>
         <input className="workspace-search" aria-label="Filter by asset" placeholder="Asset (BTCUSDT)" value={assetFilter} onChange={event => setAssetFilter(event.target.value)} />
         <input className="workspace-search" aria-label="Filter by timeframe" placeholder="Timeframe (15m)" value={timeframeFilter} onChange={event => setTimeframeFilter(event.target.value)} />
         <select className="workspace-search" aria-label="Sort strategies" value={sort} onChange={event => setSort(event.target.value)}>
@@ -1582,36 +1975,57 @@ function CommunityLibraryScreen() {
       </div>
       {notice && <p className="workspace-note" role="status">{notice}</p>}
       {listLoading && <p className="workspace-note" role="status">Loading community strategies…</p>}
-      <div className="workspace-summary-grid">
-        {items.map(item => <article className="workspace-panel" key={item.public_id}>
+      <div className="workspace-summary-grid community-summary-grid">
+        {items.map(item => <article className="workspace-panel community-strategy" key={item.public_id}>
+          <div className="community-strategy-meta">
+            <span>{item.strategy_key.replaceAll('_',' ')}</span>
+            <span>VERSION {item.version}</span>
+            <span className="community-provenance">{item.report_provenance.replaceAll('_',' ')}</span>
+          </div>
           <h3>{item.name}</h3>
-          <p>{item.description || 'No description supplied.'}</p>
-          <p className="workspace-note">{item.strategy_key.replaceAll('_',' ')} · v{item.version} · {item.supported_timeframes.join(', ')}</p>
-          <p className="workspace-note">Report provenance: <b>{item.report_provenance.replaceAll('_',' ')}</b> · {String(item.backtest_report?.total_trades ?? '—')} reported trades · win rate {String(item.backtest_report?.win_rate_pct ?? '—')}% · return {String(item.backtest_report?.net_return_pct ?? '—')}% · drawdown {String(item.backtest_report?.max_drawdown_pct ?? '—')}%</p>
+          <p className="community-strategy-description">{item.description || 'No description supplied.'}</p>
+          <div className="community-tags" aria-label="Supported markets and timeframes">
+            {item.supported_assets.map(asset => <span key={asset}>{asset}</span>)}
+            {item.supported_timeframes.map(timeframe => <span key={timeframe}>{timeframe}</span>)}
+          </div>
+          <div className="community-report-grid" aria-label="Submitted backtest metrics">
+            <div><span>TRADES</span><strong>{String(item.backtest_report?.total_trades ?? '—')}</strong></div>
+            <div><span>WIN RATE</span><strong>{String(item.backtest_report?.win_rate_pct ?? '—')}%</strong></div>
+            <div><span>NET RETURN</span><strong>{String(item.backtest_report?.net_return_pct ?? '—')}%</strong></div>
+            <div><span>DRAWDOWN</span><strong>{String(item.backtest_report?.max_drawdown_pct ?? '—')}%</strong></div>
+          </div>
+          <p className="community-user-submitted">USER-SUBMITTED / NOT INDEPENDENTLY VERIFIED</p>
           <div className="workspace-actions">
-            <button className="table-action" onClick={() => void openDetails(item)}>Details</button>
+            <button className="table-action" onClick={() => void openDetails(item)}>Inspect</button>
             {item.is_owner && <button className="table-action" onClick={() => editStrategy(item)}>Edit / new version</button>}
             <button className="table-action" disabled={pendingItemActions.has(item.public_id)} aria-pressed={item.is_favorite} onClick={() => void toggleFavorite(item)}>{pendingItemActions.has(item.public_id) ? 'Updating…' : item.is_favorite ? '★ Saved' : '☆ Save'} · {item.favorite_count}</button>
             <button className="table-action" disabled={pendingItemActions.has(item.public_id)} onClick={() => void reportItem(item)}>{pendingItemActions.has(item.public_id) ? 'Submitting…' : 'Report'}</button>
           </div>
         </article>)}
       </div>
-      {!listLoading && !items.length && <EmptyState text="No public strategies found. Try a different search, or publish a strategy below." />}
+      {!listLoading && !listFailed && !items.length && <EmptyState text={showFavorites ? 'No saved strategies yet. Save a listing to keep it here.' : 'No public strategies found. Try another filter, or publish your research.'} />}
     </section>
-    {selected && <section className="workspace-panel">
-      <div className="workspace-toolbar"><h2>{selected.name} · v{selected.version}</h2><button className="table-action" onClick={() => { detailRequestId.current += 1; setSelected(null) }}>Close</button></div>
+    {selected && <section className="workspace-panel community-detail">
+      <div className="community-catalog-heading">
+        <div><span className="community-kicker">LISTING INSPECTION / VERSION {selected.version}</span><h2>{selected.name}</h2></div>
+        <button className="table-action" onClick={() => { detailRequestId.current += 1; setSelected(null) }}>Close inspection</button>
+      </div>
       <p>{selected.description}</p>
       <p className="workspace-note">Shared report: {selected.report_provenance.replaceAll('_',' ')} · SHA-256 {selected.report_sha256 || 'not available'}. Reproducibility: {selected.reproducibility_status ?? 'NOT_REPLAYED'} · Verification: {selected.verification_status ?? 'NOT_VERIFIED'}. The digest confirms stored content integrity only; locally generated reports have not been independently replayed or verified.</p>
-      <h3>Submitted backtest summary</h3><pre className="workspace-code">{JSON.stringify(selected.backtest_report, null, 2)}</pre>
-      <h3>Rules</h3><pre className="workspace-code">{JSON.stringify(selected.rules, null, 2)}</pre>
-      <h3>Risk configuration</h3><pre className="workspace-code">{JSON.stringify(selected.risk_configuration, null, 2)}</pre>
-      <h3>Known limitations</h3><ul>{selected.known_limitations.map((item, i) => <li key={i}>{item}</li>)}</ul>
-      <h3>Version history</h3><ol>{(selected.version_history ?? []).map(version => <li key={version.version}>v{version.version} · {version.created_at ? new Date(version.created_at).toLocaleString() : 'timestamp unavailable'} · {String(version.snapshot.name ?? selected.name)}</li>)}</ol>
+      <div className="community-inspection-grid">
+        <details><summary>Submitted backtest summary</summary><pre className="workspace-code">{JSON.stringify(selected.backtest_report, null, 2)}</pre></details>
+        <details><summary>Strategy rules</summary><pre className="workspace-code">{JSON.stringify(selected.rules, null, 2)}</pre></details>
+        <details><summary>Risk configuration</summary><pre className="workspace-code">{JSON.stringify(selected.risk_configuration, null, 2)}</pre></details>
+        <details><summary>Known limitations</summary><ul>{selected.known_limitations.map((item, i) => <li key={i}>{item}</li>)}</ul></details>
+        <details><summary>Version history ({selected.version_history?.length ?? 0})</summary><ol>{(selected.version_history ?? []).map(version => <li key={version.version}>v{version.version} · {version.created_at ? new Date(version.created_at).toLocaleString() : 'timestamp unavailable'} · {String(version.snapshot.name ?? selected.name)}</li>)}</ol></details>
+      </div>
       {selected.is_owner && <button className="table-action" onClick={() => editStrategy(selected)}>Edit / publish next version</button>}
     </section>}
-    <section className="workspace-panel">
-      <h2>{editingId ? 'Update published strategy' : 'Publish a strategy'}</h2>
-      {editingId && <button className="table-action" type="button" onClick={() => { if (busy) return; setEditingId(null); setName(''); setDescription(''); setNotice('Editing cancelled.') }}>Cancel version update</button>}
+    {showPublish && <section className="workspace-panel community-publisher">
+      <div className="community-catalog-heading">
+        <div><span className="community-kicker">{editingId ? 'VERSION WORKFLOW' : 'CONTRIBUTOR WORKFLOW'}</span><h2>{editingId ? 'Update published strategy' : 'Publish a strategy'}</h2></div>
+        {editingId && <button className="table-action" type="button" onClick={() => { if (busy) return; setEditingId(null); setName(''); setShowPublish(false); setNotice('Editing cancelled.') }}>Cancel version update</button>}
+      </div>
       <p className="workspace-note">Only the fields below are published. Account balances, credentials, private trades, and personal settings are not sent. Backtest metrics are marked user-submitted, not verified.</p>
       <form className="workspace-form" onSubmit={publish}>
         <label>Strategy name<input className="workspace-search" required minLength={2} maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
@@ -1624,9 +2038,9 @@ function CommunityLibraryScreen() {
         <label>Known limitations (one per line)<textarea className="workspace-search" rows={3} value={limitations} onChange={event => setLimitations(event.target.value)} /></label>
         <label>Local Strategy Lab report ID (optional)<input className="workspace-search" maxLength={64} value={sourceReportId} onChange={event => setSourceReportId(event.target.value)} placeholder="Paste a saved report ID to use its generated metrics" /></label>
         <label>Backtest summary (JSON, user-submitted unless a local report ID is supplied)<textarea className="workspace-search" rows={3} value={report} onChange={event => setReport(event.target.value)} /></label>
-        <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Publishing…' : 'Publish to public library'}</button>
+        <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Publishing…' : editingId ? 'Save new strategy version' : 'Publish to public library'}</button>
       </form>
-    </section>
+    </section>}
   </div>
 }
 
@@ -1688,9 +2102,9 @@ function AutonomousScreen() {
     catch (error) { setMessage(error instanceof Error ? error.message : 'Telegram test failed.') }
     finally { setBusy(false); void refresh() }
   }
-  return <>
+  return <div className="autonomous-screen">
     <ScreenHeader title="Autonomous paper engine" description="Live backend status, decisions, entry controls, and monitoring. All execution uses the simulated paper account." />
-    <div className="workspace-summary">
+    <div className="workspace-summary autonomous-status-deck">
       <SummaryCard label="MODE" value={status?.mode ?? 'Checking'} detail="Real-money execution is disabled" />
       <SummaryCard label="ENGINE" value={status?.running ? 'RUNNING' : 'STOPPED'} />
       <SummaryCard label="NEW ENTRIES" value={status?.enabled ? 'ENABLED' : 'PAUSED'} detail={status?.entry_ready ? 'Readiness checks passed' : (status?.readiness_reasons ?? ['Loading readiness']).join(', ')} />
@@ -1699,17 +2113,25 @@ function AutonomousScreen() {
       <SummaryCard label="LEARNING" value={status?.learning?.state ?? '—'} detail={status?.learning?.last_cycle_status} />
       <SummaryCard label="TELEGRAM" value={status?.telegram?.connected ? 'CONNECTED' : status?.telegram?.configured ? 'NOT CONNECTED' : 'NOT CONFIGURED'} />
     </div>
-    <div className="workspace-actions">
-      {status?.enabled ? <button className="table-action" disabled={busy} onClick={() => void control(false)}>Pause new entries</button> : <button className="primary-action" disabled={busy || !status?.entry_ready} title={!status?.entry_ready ? (status?.readiness_reasons ?? []).join(', ') : undefined} onClick={() => void control(true)}>Resume entries</button>}
-      <button className="table-action" disabled={busy || !status?.telegram?.enabled} onClick={() => void testTelegram()}>Send Telegram test</button>
-      <span>{status?.strategies?.length ?? 0} strategies configured · {status?.open_orders ?? 0} pending orders</span>
-    </div>
-    {message && <p role="status" className="settings-status">{message}</p>}
-    <h2 className="workspace-section-title">Latest plan</h2>
-    {status?.last_decision ? <DetailCard label={`${status.last_decision.symbol ?? '—'} · ${status.last_decision.status ?? '—'}`} value={`${status.last_decision.strategy ?? '—'} ${status.last_decision.strategy_direction ?? ''} · ${status.last_decision.reason ?? ''}`} /> : <EmptyState text="No autonomous decisions recorded. The engine records validated signals, rejections, and executions as they occur." />}
-    <h2 className="workspace-section-title">Recent decisions</h2>
-    <Table><TableHead labels={['TIME','ASSET','STRATEGY','DIRECTION','RESULT','REASON']} />{decisions.length ? decisions.map((item, index) => <tr key={`${item.event_id ?? item.signal_id ?? 'decision'}-${index}`}><td>{timestamp(item.timestamp ?? item.decision_time)}</td><td>{item.symbol ?? '—'} {item.market ?? ''}</td><td>{item.strategy ?? '—'}</td><td>{item.strategy_direction ?? '—'}</td><td>{item.status ?? '—'}</td><td>{item.reason ?? '—'}</td></tr>) : <tr><td colSpan={6}>No decisions have been persisted yet.</td></tr>}</Table>
-  </>
+    <section className="autonomous-controls" aria-label="Autonomous engine controls">
+      <header><span>CONTROL ROOM</span><strong>Entry execution</strong><small>{status?.strategies?.length ?? 0} STRATEGIES · {status?.open_orders ?? 0} PENDING</small></header>
+      <div className="workspace-actions">
+        {status?.enabled ? <button className="table-action" disabled={busy} onClick={() => void control(false)}>Pause new entries</button> : <button className="primary-action" disabled={busy || !status?.entry_ready} title={!status?.entry_ready ? (status?.readiness_reasons ?? []).join(', ') : undefined} onClick={() => void control(true)}>Resume entries</button>}
+        <button className="table-action" disabled={busy || !status?.telegram?.enabled} onClick={() => void testTelegram()}>Send Telegram test</button>
+      </div>
+      {message && <p role="status" className="settings-status">{message}</p>}
+    </section>
+    <section className="autonomous-plan">
+      <header><span>01 / LATEST PLAN</span><strong>Decision snapshot</strong></header>
+      {status?.last_decision ? <DetailCard label={`${status.last_decision.symbol ?? '—'} · ${status.last_decision.status ?? '—'}`} value={`${status.last_decision.strategy ?? '—'} ${status.last_decision.strategy_direction ?? ''} · ${status.last_decision.reason ?? ''}`} /> : <EmptyState text="No autonomous decisions recorded. The engine records validated signals, rejections, and executions as they occur." />}
+    </section>
+    <section className="autonomous-decisions">
+      <header><span>02 / AUDIT TRAIL</span><strong>Recent decisions</strong><small>{decisions.length} RECORDS</small></header>
+      <div className="autonomous-table-wrap">
+        <Table minWidth={760}><TableHead labels={['TIME','ASSET','STRATEGY','DIRECTION','RESULT','REASON']} />{decisions.length ? decisions.map((item, index) => <tr key={`${item.event_id ?? item.signal_id ?? 'decision'}-${index}`}><td>{timestamp(item.timestamp ?? item.decision_time)}</td><td className="table-primary">{item.symbol ?? '—'} {item.market ?? ''}</td><td>{item.strategy ?? '—'}</td><td>{item.strategy_direction ?? '—'}</td><td>{item.status ?? '—'}</td><td>{item.reason ?? '—'}</td></tr>) : <tr><td colSpan={6}>No decisions have been persisted yet.</td></tr>}</Table>
+      </div>
+    </section>
+  </div>
 }
 
 
@@ -1829,10 +2251,14 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
       setPersistenceMessage('Saved strategy contains invalid market, symbol, timeframe, or sizing settings. Nothing was loaded.')
       return
     }
-    const requiredNumbers = [definition.initial_capital, definition.risk_per_trade_pct, definition.fixed_notional, definition.max_position_pct, definition.strategy_parameters?.min_score]
+    const requiredNumbers = [definition.initial_capital, definition.risk_per_trade_pct, definition.fixed_notional, definition.max_position_pct]
     if (requiredNumbers.some(value => value == null || !Number.isFinite(Number(value)) || Number(value) <= 0) ||
         Number(definition.risk_per_trade_pct) > 100 || Number(definition.max_position_pct) > 100) {
       setPersistenceMessage('Saved strategy contains invalid numeric settings. Nothing was loaded.')
+      return
+    }
+    if (!Number.isFinite(Number(definition.strategy_parameters?.min_score)) || Number(definition.strategy_parameters?.min_score) < 0) {
+      setPersistenceMessage('Saved strategy contains an invalid minimum score. Nothing was loaded.')
       return
     }
     const optionalNumbers = [definition.fee_rate, definition.slippage_bps, definition.spread_bps, definition.funding_rate]
@@ -1952,9 +2378,10 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     if (!/^[A-Z0-9]{2,30}$/.test(symbol.trim().toUpperCase())) return 'Enter a valid market symbol using letters and numbers.'
     if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) return 'Choose valid start and end dates.'
     if (startTime >= endTime) return 'The start date must be earlier than the end date.'
-    const values = [capital, risk, notional, maxPosition, minScore]
-    if (values.some(value => value.trim() === '' || !Number.isFinite(Number(value)) || Number(value) <= 0)) return 'Capital, risk, notional, position limit, and minimum score must be valid positive numbers.'
+    const values = [capital, risk, notional, maxPosition]
+    if (values.some(value => value.trim() === '' || !Number.isFinite(Number(value)) || Number(value) <= 0)) return 'Capital, risk, notional, and position limit must be valid positive numbers.'
     if (Number(risk) > 100 || Number(maxPosition) > 100) return 'Risk and maximum position percentages cannot exceed 100%.'
+    if (minScore.trim() === '' || !Number.isFinite(Number(minScore)) || Number(minScore) < 0) return 'Minimum strategy score must be a non-negative number.'
     const optionalValues = [feeRate, slippage, spread]
     if (optionalValues.some(value => value !== '' && (!Number.isFinite(Number(value)) || Number(value) < 0))) return 'Fee, slippage, and spread must be non-negative numbers.'
     if (funding !== '' && (!Number.isFinite(Number(funding)) || Number(funding) < -100 || Number(funding) > 100)) return 'Funding rate must be between -100 and 100.'
@@ -2017,12 +2444,37 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
     const y = 8 + ((curveMax - point.equity) / Math.max(1e-9, curveMax - curveMin)) * 164
     return `${x.toFixed(1)},${y.toFixed(1)}`
   }).join(' ')
+  const primaryMetrics = [
+    ['Net return', metrics?.net_return_pct == null ? '—' : pct(metrics.net_return_pct)],
+    ['Max drawdown', pct(metrics?.max_drawdown_pct)],
+    ['Win rate', pct(metrics?.win_rate_pct)],
+    ['Profit factor', metrics?.profit_factor ?? '—'],
+    ['Sharpe', metrics?.sharpe_ratio == null ? '—' : num(metrics.sharpe_ratio)?.toFixed(2) ?? '—'],
+    ['Trades', String(metrics?.trade_count ?? 0)],
+  ]
+  const additionalMetrics = [
+    ['Gross return', metrics?.gross_return_pct == null ? '—' : pct(metrics.gross_return_pct)],
+    ['Exposure', pct(metrics?.exposure_pct)],
+    ['Buy & hold', metrics?.benchmark_buy_hold_return_pct == null ? '—' : pct(metrics.benchmark_buy_hold_return_pct)],
+    ['Average winner', money(num(metrics?.average_winning_trade))],
+    ['Average loser', money(num(metrics?.average_losing_trade))],
+    ['Average reward / risk', metrics?.average_reward_risk == null ? '—' : `${num(metrics.average_reward_risk)?.toFixed(2) ?? '—'}R`],
+  ]
   return (
     <div className="workspace-content strategy-lab">
       <ScreenHeader title="Strategy Lab" description="Historical research · simulated execution · paper-trading compatible" />
-      <section className="workspace-panel">
-        <h2>Strategy DNA · behavior monitoring</h2>
-        <p className="workspace-note">Profiles are derived from saved backtests and closed paper trades. Diagnostics describe observed behavior only; they do not predict future profitability.</p>
+      <div className="strategy-command-strip" aria-label="Current research configuration">
+        <div><span>MODE</span><strong>HISTORICAL / PAPER</strong></div>
+        <div><span>STRATEGY</span><strong>{strategy.replaceAll('_', ' ')}</strong></div>
+        <div><span>MARKET</span><strong>{symbol.toUpperCase()} · {market}</strong></div>
+        <div><span>WINDOW</span><strong>{start} → {end}</strong></div>
+      </div>
+      <section className="workspace-panel strategy-dna-panel">
+        <div className="strategy-panel-heading">
+          <div><span className="strategy-kicker">OBSERVED BEHAVIOR / NOT A FORECAST</span><h2>Strategy DNA</h2></div>
+          <span className="strategy-panel-meta">{dna?.profiles?.length ?? '—'} PROFILES</span>
+        </div>
+        <p className="workspace-note">Profiles compare saved backtests with closed paper trades; they describe observed behavior and do not predict future profitability.</p>
         {dnaError && <div role="status" className="workspace-note">Strategy DNA unavailable: {dnaError}</div>}
         {!dna && !dnaError && <p className="workspace-note">Loading historical and paper-trading records…</p>}
         {dna?.profiles?.map((profile: any) => <details key={profile.strategy}>
@@ -2039,8 +2491,12 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
           <p className="workspace-note">Known limitations: {profile.known_limitations?.join(' · ')} · Last evaluated: {profile.last_evaluated_at ?? 'Not evaluated'}</p>
         </details>)}
       </section>
-      <form className="workspace-form" onSubmit={run}>
-        <div className="workspace-form-grid">
+      <form className="workspace-form backtest-form" onSubmit={run}>
+        <div className="strategy-panel-heading">
+          <div><span className="strategy-kicker">RESEARCH CONFIGURATION</span><h2>Build a backtest</h2></div>
+          <span className="strategy-panel-meta">NO LIVE ORDERS</span>
+        </div>
+        <div className="strategy-primary-grid">
           <label>Strategy<select value={strategy} onChange={e => setStrategy(e.target.value)}>{['momentum','breakout','trend_following','mean_reversion','reversal'].map(v => <option key={v}>{v}</option>)}</select></label>
           <label>Asset<input value={symbol} onChange={e => setSymbol(e.target.value)} maxLength={20} required /></label>
           <label>Market<select value={market} onChange={e => setMarket(e.target.value as 'SPOT'|'FUTURES')}><option>SPOT</option><option>FUTURES</option></select></label>
@@ -2049,64 +2505,72 @@ function StrategyLabScreen({ onRun, onCompare, data, preferences, screen, symbol
           <label>End date<input type="date" value={end} onChange={e => setEnd(e.target.value)} required /></label>
           <label>Starting capital<input type="number" min="1" step="any" value={capital} onChange={e => setCapital(e.target.value)} required /></label>
           <label>Position sizing<select value={mode} onChange={e => setMode(e.target.value)}><option value="risk_pct">Risk % per trade</option><option value="fixed_notional">Fixed notional</option></select></label>
-          <label>Risk per trade (%)<input type="number" min="0.01" max="100" step="any" value={risk} onChange={e => setRisk(e.target.value)} /></label>
-          <label>Fixed notional<input type="number" min="0.01" step="any" value={notional} onChange={e => setNotional(e.target.value)} /></label>
-          <label>Max position (% equity)<input type="number" min="0.01" max="100" step="any" value={maxPosition} onChange={e => setMaxPosition(e.target.value)} /></label>
-          <label>Minimum strategy score<input type="number" min="0" step="any" value={minScore} onChange={e => setMinScore(e.target.value)} /></label>
-          <label>Fee rate (optional)<input type="number" min="0" step="any" placeholder="Use market default" value={feeRate} onChange={e => setFeeRate(e.target.value)} /></label>
-          <label>Slippage (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={slippage} onChange={e => setSlippage(e.target.value)} /></label>
-          <label>Spread (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={spread} onChange={e => setSpread(e.target.value)} /></label>
-          <label>Funding rate per 8h (optional)<input type="number" step="any" placeholder="Futures assumption only" value={funding} onChange={e => setFunding(e.target.value)} /></label>
         </div>
-        <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Running backtest…' : 'Run historical backtest'}</button>
-        <button className="table-action" type="button" disabled={busy} onClick={() => void compare()}>Compare all strategies</button>
+        <details className="strategy-advanced">
+          <summary>Position limits &amp; execution costs <span>Risk · sizing · fees · slippage · funding</span></summary>
+          <div className="strategy-advanced-grid">
+            <label>Risk per trade (%)<input type="number" min="0.01" max="100" step="any" value={risk} onChange={e => setRisk(e.target.value)} /></label>
+            <label>Fixed notional<input type="number" min="0.01" step="any" value={notional} onChange={e => setNotional(e.target.value)} /></label>
+            <label>Max position (% equity)<input type="number" min="0.01" max="100" step="any" value={maxPosition} onChange={e => setMaxPosition(e.target.value)} /></label>
+            <label>Minimum strategy score<input type="number" min="0" step="any" value={minScore} onChange={e => setMinScore(e.target.value)} /></label>
+            <label>Fee rate (optional)<input type="number" min="0" step="any" placeholder="Use market default" value={feeRate} onChange={e => setFeeRate(e.target.value)} /></label>
+            <label>Slippage (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={slippage} onChange={e => setSlippage(e.target.value)} /></label>
+            <label>Spread (bps)<input type="number" min="0" step="any" placeholder="Use market default" value={spread} onChange={e => setSpread(e.target.value)} /></label>
+            <label>Funding rate per 8h (optional)<input type="number" step="any" placeholder="Futures assumption only" value={funding} onChange={e => setFunding(e.target.value)} /></label>
+          </div>
+        </details>
+        <div className="strategy-run-actions">
+          <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Running backtest…' : 'Run historical backtest'}</button>
+          <button className="table-action" type="button" disabled={busy} onClick={() => void compare()}>Compare all strategies</button>
+          <span>Historical data · simulated fills · no live execution</span>
+        </div>
       </form>
       {error && <div role="alert" className="workspace-error">{error}</div>}
-      <section className="workspace-panel persistence-panel">
-        <h2>Saved research & workspaces</h2>
-        <div className="workspace-form-grid">
-          <label>Strategy name<input value={strategyName} onChange={event => setStrategyName(event.target.value)} placeholder={strategy} maxLength={120} /></label>
-          <button className="table-action" type="button" onClick={() => void saveCurrentStrategy()}>Save strategy definition</button>
-          <label>Saved strategy<select value={chosenStrategyId} onChange={event => setChosenStrategyId(event.target.value)}><option value="">Choose saved strategy</option>{savedStrategies.map(item => <option key={item.strategy_id} value={item.strategy_id}>{item.name} · {item.strategy_key} v{item.version}</option>)}</select></label>
-          <button className="table-action" type="button" disabled={!chosenStrategyId} onClick={loadChosenStrategy}>Load strategy</button>
-          <label>Saved backtest report<select value={chosenReportId} onChange={event => setChosenReportId(event.target.value)}><option value="">Choose report</option>{savedReports.map(item => <option key={item.report_id} value={item.report_id}>{item.symbol} · {item.strategy_name} · {timestamp(item.created_at)}</option>)}</select></label>
-          <button className="table-action" type="button" disabled={!chosenReportId} onClick={() => void loadChosenReport()}>Open report</button>
-          <button className="table-action" type="button" onClick={() => void saveWorkspaceSnapshot()}>Save workspace snapshot</button>
-          <label>Saved workspace<select value={chosenWorkspaceId} onChange={event => setChosenWorkspaceId(event.target.value)}><option value="">Choose workspace</option>{savedWorkspaces.map(item => <option key={item.workspace_id} value={item.workspace_id}>{item.name} · {timestamp(item.updated_at)}</option>)}</select></label>
-          <button className="table-action" type="button" disabled={!chosenWorkspaceId} onClick={() => void loadChosenWorkspace()}>Restore workspace</button>
-        </div>
-        {persistenceMessage && <p role="status" className="workspace-note">{persistenceMessage}</p>}
-        {loadedReport && <details open><summary>Saved report · {loadedReport.report_id}</summary><pre>{JSON.stringify(loadedReport, null, 2)}</pre></details>}
-        {loadedWorkspace && <details><summary>Restored workspace data</summary><pre>{JSON.stringify({name: loadedWorkspace.name, updated_at: loadedWorkspace.updated_at, schema_version: loadedWorkspace.schema_version, payload: loadedWorkspace.payload}, null, 2)}</pre></details>}
-      </section>
       {result?.status === 'insufficient_data' && <EmptyState text={`Insufficient historical candles. Available: ${result.available_candles}; required: ${result.required_candles}. Try a wider range or another timeframe.`} />}
       {comparison?.results && <section><h2>Strategy comparison · same conditions</h2><div className="workspace-summary-grid">{comparison.results.map((item: any) => <SummaryCard key={item.strategy} label={item.strategy} value={item.metrics ? pct(item.metrics.net_return_pct) : item.status} detail={item.metrics ? `DD ${pct(item.metrics.max_drawdown_pct)} · ${item.metrics.trade_count} trades` : 'Insufficient history'} />)}</div></section>}
       {metrics && <>
-        <div className="workspace-summary-grid">
-          {[
-            ['Net return', metrics.net_return_pct == null ? '—' : pct(metrics.net_return_pct)],
-            ['Gross return', metrics.gross_return_pct == null ? '—' : pct(metrics.gross_return_pct)],
-            ['Max drawdown', pct(metrics.max_drawdown_pct)],
-            ['Profit factor', metrics.profit_factor ?? '—'],
-            ['Win rate', pct(metrics.win_rate_pct)],
-            ['Sharpe', metrics.sharpe_ratio == null ? '—' : num(metrics.sharpe_ratio)?.toFixed(2) ?? '—'],
-            ['Trades', String(metrics.trade_count ?? 0)],
-            ['Exposure', pct(metrics.exposure_pct)],
-            ['Buy & hold', metrics.benchmark_buy_hold_return_pct == null ? '—' : pct(metrics.benchmark_buy_hold_return_pct)],
-            ['Average winner', money(num(metrics.average_winning_trade))],
-            ['Average loser', money(num(metrics.average_losing_trade))],
-            ['Average reward / risk', metrics.average_reward_risk == null ? '—' : `${num(metrics.average_reward_risk)?.toFixed(2) ?? '—'}R`],
-          ].map(([label,value]) => <SummaryCard key={label} label={label} value={String(value)} />)}
-        </div>
-        <p className="workspace-note">Execution assumptions: next-bar open entry, conservative stop-first intrabar exit, taker fees, spread and slippage. Funding is omitted unless a rate is explicitly supplied. Research results do not guarantee future performance.</p>
-        <section className="workspace-panel"><h2>Equity curve</h2><svg viewBox="0 0 600 180" role="img" aria-label="Backtest marked-to-market equity curve" className="strategy-equity-chart"><polyline points={curvePoints} fill="none" stroke="currentColor" strokeWidth="2" /></svg><p className="workspace-note">Costs · fees {money(num(metrics.costs?.fees))} · spread {money(num(metrics.costs?.spread))} · slippage {money(num(metrics.costs?.slippage))} · funding {money(num(metrics.costs?.funding))}</p></section>
-        <Table>
-          <TableHead labels={['Trade','Side','Entry','Exit','Net P&L','Exit reason']} />
-          <tbody>{(result.trades ?? []).map((trade: any) => <tr key={trade.trade_id} onClick={() => setSelectedTrade(trade)}><td>{trade.trade_id}</td><td>{trade.side}</td><td>{price(num(trade.entry_fill))}</td><td>{price(num(trade.exit_fill))}</td><td>{money(num(trade.net_pnl))}</td><td>{trade.close_reason}</td></tr>)}</tbody>
-        </Table>
-        {selectedTrade && <DetailCard label="Selected trade details" value={JSON.stringify(selectedTrade, null, 2)} />}
-        <details><summary>Equity curve data ({result.equity_curve?.length ?? 0} points)</summary><pre>{JSON.stringify(result.equity_curve, null, 2)}</pre></details>
+        <section className="strategy-results">
+          <div className="strategy-panel-heading"><div><span className="strategy-kicker">SIMULATED PERFORMANCE</span><h2>Backtest results</h2></div><span className="strategy-panel-meta">{result.trades?.length ?? 0} CLOSED TRADES</span></div>
+          <div className="strategy-result-primary">{primaryMetrics.map(([label, value]) => <SummaryCard key={label} label={label} value={String(value)} />)}</div>
+          <details className="strategy-extra-metrics">
+            <summary>Additional metrics <span>Gross return · exposure · benchmark · average trade</span></summary>
+            <div className="strategy-result-secondary">{additionalMetrics.map(([label, value]) => <SummaryCard key={label} label={label} value={String(value)} />)}</div>
+          </details>
+            <p className="workspace-note">Execution assumptions: next-bar open entry, conservative stop-first intrabar exit, taker fees, spread and slippage. Funding is omitted unless a rate is explicitly supplied. Research results do not guarantee future performance.</p>
+            <section className="workspace-panel strategy-equity-panel"><h2>Equity curve</h2><svg viewBox="0 0 600 180" role="img" aria-label="Backtest marked-to-market equity curve" className="strategy-equity-chart"><polyline points={curvePoints} fill="none" stroke="currentColor" strokeWidth="2" /></svg><p className="workspace-note">Execution costs · fees {money(num(metrics.costs?.fees))} · spread {money(num(metrics.costs?.spread))} · slippage {money(num(metrics.costs?.slippage))} · funding {money(num(metrics.costs?.funding))}</p></section>
+            <details className="strategy-trades">
+              <summary>Trade ledger ({result.trades?.length ?? 0}) <span>Open the ledger to inspect fills and exit reasons</span></summary>
+              <Table>
+                <TableHead labels={['Trade','Side','Entry','Exit','Net P&L','Exit reason']} />
+                <tbody>{(result.trades ?? []).map((trade: any) => <tr key={trade.trade_id} onClick={() => setSelectedTrade(trade)}><td>{trade.trade_id}</td><td>{trade.side}</td><td>{price(num(trade.entry_fill))}</td><td>{price(num(trade.exit_fill))}</td><td>{money(num(trade.net_pnl))}</td><td>{trade.close_reason}</td></tr>)}</tbody>
+              </Table>
+              {selectedTrade && <DetailCard label="Selected trade details" value={JSON.stringify(selectedTrade, null, 2)} />}
+            </details>
+            <details><summary>Equity curve data ({result.equity_curve?.length ?? 0} points)</summary><pre>{JSON.stringify(result.equity_curve, null, 2)}</pre></details>
+        </section>
       </>}
+      <details className="workspace-panel persistence-panel strategy-persistence">
+        <summary className="strategy-persistence-heading">
+            <span><small className="strategy-kicker">LOCAL DATABASE</small><strong>Saved research &amp; workspaces</strong></span>
+            <span className="strategy-panel-meta">{savedStrategies.length} STRATEGIES · {savedReports.length} REPORTS · {savedWorkspaces.length} WORKSPACES</span>
+        </summary>
+        <div className="strategy-persistence-content">
+            <div className="workspace-form-grid">
+              <label>Strategy name<input value={strategyName} onChange={event => setStrategyName(event.target.value)} placeholder={strategy} maxLength={120} /></label>
+              <button className="table-action" type="button" onClick={() => void saveCurrentStrategy()}>Save strategy definition</button>
+              <label>Saved strategy<select value={chosenStrategyId} onChange={event => setChosenStrategyId(event.target.value)}><option value="">Choose saved strategy</option>{savedStrategies.map(item => <option key={item.strategy_id} value={item.strategy_id}>{item.name} · {item.strategy_key} v{item.version}</option>)}</select></label>
+              <button className="table-action" type="button" disabled={!chosenStrategyId} onClick={loadChosenStrategy}>Load strategy</button>
+              <label>Saved backtest report<select value={chosenReportId} onChange={event => setChosenReportId(event.target.value)}><option value="">Choose report</option>{savedReports.map(item => <option key={item.report_id} value={item.report_id}>{item.symbol} · {item.strategy_name} · {timestamp(item.created_at)}</option>)}</select></label>
+              <button className="table-action" type="button" disabled={!chosenReportId} onClick={() => void loadChosenReport()}>Open report</button>
+              <button className="table-action" type="button" onClick={() => void saveWorkspaceSnapshot()}>Save workspace snapshot</button>
+              <label>Saved workspace<select value={chosenWorkspaceId} onChange={event => setChosenWorkspaceId(event.target.value)}><option value="">Choose workspace</option>{savedWorkspaces.map(item => <option key={item.workspace_id} value={item.workspace_id}>{item.name} · {timestamp(item.updated_at)}</option>)}</select></label>
+              <button className="table-action" type="button" disabled={!chosenWorkspaceId} onClick={() => void loadChosenWorkspace()}>Restore workspace</button>
+            </div>
+            {persistenceMessage && <p role="status" className="workspace-note">{persistenceMessage}</p>}
+            {loadedReport && <details open><summary>Saved report · {loadedReport.report_id}</summary><pre>{JSON.stringify(loadedReport, null, 2)}</pre></details>}
+            {loadedWorkspace && <details><summary>Restored workspace data</summary><pre>{JSON.stringify({name: loadedWorkspace.name, updated_at: loadedWorkspace.updated_at, schema_version: loadedWorkspace.schema_version, payload: loadedWorkspace.payload}, null, 2)}</pre></details>}
+        </div>
+      </details>
     </div>
   )
 }

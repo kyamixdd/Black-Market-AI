@@ -10,7 +10,7 @@ router = APIRouter(prefix="/activity", tags=["activity"])
 
 
 @router.get("", response_model=SystemEventListResponse)
-async def get_activity(limit: int = Query(100, le=1000)):
+async def get_activity(limit: int = Query(100, ge=1, le=1000)):
     """Get recent system events."""
     bridge = get_bridge()
     events = bridge.get_recent_events(limit)

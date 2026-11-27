@@ -635,6 +635,42 @@ class Repository:
             session.commit()
             return True
 
+    def bind_community_owner(self, legacy_owner: str, authenticated_owner: str) -> None:
+        """Bind pre-auth community records to the current authenticated owner key."""
+        if not legacy_owner or legacy_owner == authenticated_owner:
+            return
+        with self._get_session() as session:
+            session.execute(
+                update(PublicStrategyModel)
+                .where(PublicStrategyModel.owner_key == legacy_owner)
+                .values(owner_key=authenticated_owner)
+            )
+            session.execute(
+                update(PublicStrategyVersionModel)
+                .where(PublicStrategyVersionModel.owner_key == legacy_owner)
+                .values(owner_key=authenticated_owner)
+            )
+            session.execute(
+                update(StrategyReportFlagModel)
+                .where(StrategyReportFlagModel.reporter_key == legacy_owner)
+                .values(reporter_key=authenticated_owner)
+            )
+            legacy_favorites = session.scalars(
+                select(StrategyFavoriteModel).where(
+                    StrategyFavoriteModel.owner_key == legacy_owner
+                )
+            ).all()
+            for favorite in legacy_favorites:
+                existing = session.get(
+                    StrategyFavoriteModel,
+                    (authenticated_owner, favorite.public_id),
+                )
+                if existing is not None:
+                    session.delete(favorite)
+                else:
+                    favorite.owner_key = authenticated_owner
+            session.commit()
+
     def list_strategy_favorites(self, owner_key: str) -> list[dict[str, Any]]:
         with self._get_session() as session:
             ids = session.scalars(select(StrategyFavoriteModel.public_id).where(
@@ -970,7 +1006,7 @@ class Repository:
             ).order_by(AssistantMemoryModel.importance.desc(), AssistantMemoryModel.updated_at.desc())
             if memory_types:
                 stmt = stmt.where(AssistantMemoryModel.memory_type.in_(memory_types))
-            rows = list(session.scalars(stmt.limit(max(1, min(int(limit), 20)))).all())
+            rows = list(session.scalars(stmt.limit(max(1, min(int(limit), 200)))).all())
             for row in rows:
                 row.access_count += 1
                 row.last_accessed_at = now

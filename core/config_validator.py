@@ -53,6 +53,7 @@ def validate_config() -> dict[str, Any]:
         SCAN_ALL_ELIGIBLE_SYMBOLS,
         SIGNAL_DEDUP_WINDOW_SECONDS,
         SIGNAL_STALE_SECONDS,
+        SUPPORTED_TIMEFRAMES,
         SPOT_ENABLED,
         SPOT_INITIAL_BALANCE,
         TELEGRAM_BOT_TOKEN,
@@ -82,7 +83,7 @@ def validate_config() -> dict[str, Any]:
         errors.append("At least one of SPOT_ENABLED or USDM_FUTURES_ENABLED must be true")
 
     # Validate TIMEFRAMES
-    valid_timeframes = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w"}
+    valid_timeframes = set(SUPPORTED_TIMEFRAMES)
     for tf in TIMEFRAMES:
         if tf not in valid_timeframes:
             errors.append(f"Invalid timeframe: {tf}. Must be one of {valid_timeframes}")

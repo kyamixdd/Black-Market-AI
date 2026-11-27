@@ -223,7 +223,15 @@ def test_intelligence_market_analysis_exposes_observed_and_calculated_evidence(m
 
         @staticmethod
         async def get_symbol_analytics(*_args):
-            return {"status": "READY", "indicators": {}, "data_completeness": 1.0}
+            return {
+                "price_change_pct": {"1h": 0.5, "24h": 1.0, "7d": 2.0},
+                "historical_volatility_24h_pct": 1.25,
+                "atr_14_pct": 0.75,
+                "volume_vs_prior_20_candles": {"ratio": 1.1},
+                "completed_candle_count": 100,
+                "required_candles": {"1h_change": 2},
+                "data_completeness": {"1h": "READY"},
+            }
 
         @staticmethod
         async def get_candles(*_args, **_kwargs):
@@ -245,8 +253,63 @@ def test_intelligence_market_analysis_exposes_observed_and_calculated_evidence(m
         assert payload["symbol"] == "BTCUSDT"
         assert payload["observed"]["price"] == 100.0
         assert "calculated" in payload
+        assert payload["calculated"]["price_change_pct"] == {
+            "1h": 0.5, "24h": 1.0, "7d": 2.0,
+        }
+        assert payload["calculated"]["historical_volatility_24h_pct"] == 1.25
+        assert payload["calculated"]["atr_14_pct"] == 0.75
+        assert payload["calculated"]["volume_vs_prior_20_candles"] == {"ratio": 1.1}
+        assert payload["calculated"]["completed_candle_count"] == 100
+        assert payload["calculated"]["required_candles"] == {"1h_change": 2}
         assert "supporting_evidence" in payload
         assert "invalidation_conditions" in payload
+
+
+def test_assistant_tools_endpoint_returns_registered_tools():
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src_tauri.backend.api.routes import assistant
+
+    app = FastAPI()
+    app.include_router(assistant.router, prefix="/api")
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/assistant/tools",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["tools"]
+
+
+def test_trade_statistics_without_losses_are_json_serializable(monkeypatch):
+    pytest.importorskip("fastapi")
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src_tauri.backend.api.routes import trades
+    from src_tauri.backend.bridge.orchestrator_bridge import OrchestratorBridge
+
+    bridge = object.__new__(OrchestratorBridge)
+    bridge.simulator = SimpleNamespace(
+        initial_spot_balance=10_000.0,
+        initial_futures_balance=10_000.0,
+    )
+    bridge._all_closed_trades = lambda: [{"pnl": 25.0}]
+    bridge.get_recent_trades = lambda _limit: []
+    monkeypatch.setattr(trades, "get_bridge", lambda: bridge)
+    app = FastAPI()
+    app.include_router(trades.router, prefix="/api")
+
+    with TestClient(app) as client:
+        list_response = client.get("/api/trades")
+        stats_response = client.get("/api/trades/stats")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["profit_factor"] is None
+    assert stats_response.status_code == 200
+    assert stats_response.json()["profit_factor"] is None
 
 
 def test_strategy_comparison_route_caches_results_without_runtime_error(monkeypatch):
@@ -343,6 +406,7 @@ def test_main_api_registers_requested_read_routes():
         "/api/learning",
         "/api/risk/status",
         "/api/activity",
+        "/api/diagnostics/frontend",
     }.issubset(paths)
     assert any(getattr(route, "path", None) == "/ws" for route in app.routes)
 
@@ -377,6 +441,43 @@ def test_market_snapshot_exposes_its_data_source(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["data_source"] == "WEBSOCKET_BOOK"
+
+
+def test_frontend_diagnostics_ingestion_redacts_secrets_and_rejects_query_paths(caplog):
+    import logging
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from src_tauri.backend.api.routes import diagnostics
+
+    app = FastAPI()
+    app.include_router(diagnostics.router, prefix="/api")
+    event = {
+        "id": "test-event-1",
+        "timestamp": "2026-11-25T16:05:21+00:00",
+        "level": "ERROR",
+        "event": "frontend_api_request_failed",
+        "operation": "GET /system/status",
+        "status": "FAILURE",
+        "duration_ms": 125,
+        "endpoint": "/system/status",
+        "status_code": 503,
+        "detail": "api_key=should-not-be-logged",
+        "recommendation": "Check the backend.",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/api/diagnostics/frontend", json={"events": [event]})
+        invalid_path = client.post(
+            "/api/diagnostics/frontend",
+            json={"events": [{**event, "endpoint": "/system/status?token=secret"}]},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"accepted": 1}
+    assert invalid_path.status_code == 422
+    record = next(record for record in caplog.records if getattr(record, "event", None) == "frontend_diagnostic")
+    assert record.details == "api_key=[REDACTED]"
+    assert "should-not-be-logged" not in record.details
 
 
 def test_backend_startup_stops_when_database_integrity_check_fails(monkeypatch):
@@ -459,11 +560,15 @@ def test_health_endpoint_reports_readiness_without_legacy_paper_trading_attribut
         health_monitor=FakeHealthMonitor(),
         scanner=SimpleNamespace(_running=True),
         intelligence=SimpleNamespace(predictor=SimpleNamespace(is_trained=False)),
-        ws_manager=SimpleNamespace(status_snapshot=lambda: {"state": "LIVE"}),
+        ws_manager=SimpleNamespace(status_snapshot=lambda: {"state": "DISCONNECTED"}),
     )
     assert not hasattr(orchestrator, "paper_trading")
     monkeypatch.setattr(main, "orchestrator", orchestrator)
-    monkeypatch.setattr(main, "ws_manager", SimpleNamespace(get_stats=lambda: {"running": True}))
+    monkeypatch.setattr(
+        main,
+        "ws_manager",
+        SimpleNamespace(get_stats=lambda: {"running": True}, is_running=True),
+    )
     monkeypatch.setattr(main, "db", object())
 
     app = FastAPI()
@@ -479,7 +584,7 @@ def test_health_endpoint_reports_readiness_without_legacy_paper_trading_attribut
         "database_connected": True,
         "market_data_active": True,
         "learning_active": False,
-        "paper_trading_active": True,
+        "paper_trading_active": False,
         "uptime_seconds": 12.5,
         "version": "1.0.0",
     }
@@ -510,6 +615,11 @@ def test_internal_shutdown_requires_the_supervisor_token(monkeypatch):
         assert client.post("/_internal/shutdown").status_code == 404
 
         monkeypatch.setattr(main, "_shutdown_token", "private-test-token")
+        non_ascii_response = client.post(
+            "/_internal/shutdown",
+            headers={b"Authorization": b"Bearer priv\xc3\xa9"},
+        )
+        assert non_ascii_response.status_code == 401
         assert client.post(
             "/_internal/shutdown",
             headers={"Authorization": "Bearer wrong-token"},

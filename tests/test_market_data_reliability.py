@@ -1,5 +1,6 @@
 """Offline tests for the shared market-data reliability contract."""
 import asyncio
+import logging
 import time
 import pytest
 from market.data_reliability import (
@@ -101,6 +102,44 @@ async def test_historical_collection_discards_unclosed_candles():
     status = manager.get_collection_status("SPOT", "BTCUSDT", "1h")
     assert status["state"] == "FAILED"
     assert status["error"] == "no_valid_closed_candles"
+
+
+@pytest.mark.asyncio
+async def test_historical_collection_suppresses_duplicate_failure_logs_and_reports_recovery(caplog):
+    manager = CandleManager()
+
+    class Client:
+        rows = []
+
+        async def get_klines(self, *_args, **_kwargs):
+            return self.rows
+
+        def now_ms(self):
+            return int(time.time() * 1000)
+
+    client = Client()
+    with caplog.at_level(logging.WARNING, logger="market.candle_manager"):
+        await manager.collect_historical(client, client, "SPOT", "BTCUSDT", "1m")
+        await manager.collect_historical(client, client, "SPOT", "BTCUSDT", "1m")
+
+    failure_logs = [
+        record for record in caplog.records
+        if record.name == "market.candle_manager" and record.levelno == logging.WARNING
+    ]
+    assert len(failure_logs) == 1
+
+    key = ("SPOT", "BTCUSDT", "1m")
+    manager._collection_warning_state[key]["logged_at"] -= 61
+    with caplog.at_level(logging.WARNING, logger="market.candle_manager"):
+        await manager.collect_historical(client, client, "SPOT", "BTCUSDT", "1m")
+    assert "1 duplicate warnings suppressed" in caplog.text
+
+    close_time = client.now_ms() - 1_000
+    open_time = close_time - 59_999
+    client.rows = [[open_time, "100", "102", "99", "101", "10", close_time]]
+    with caplog.at_level(logging.INFO, logger="market.candle_manager"):
+        assert await manager.collect_historical(client, client, "SPOT", "BTCUSDT", "1m") == 1
+    assert "Historical candle refresh recovered for SPOT BTCUSDT 1m" in caplog.text
 
 
 @pytest.mark.asyncio

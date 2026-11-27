@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, inspect, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
+from core.observability import instrument_sql_engine
 from .models import Base
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class Database:
                     cursor.close()
             else:
                 self._engine = create_engine(self.url, future=True)
+            instrument_sql_engine(self._engine)
         return self._engine
 
     def session_maker(self):
@@ -156,6 +158,16 @@ class Database:
             return {"status": "ok", "tables": len(tables), "url": self.url}
         except Exception as exc:
             return {"status": "error", "error": str(exc)}
+
+    def write_diagnostics(self) -> dict:
+        observer = getattr(self.engine, "_blackmarket_write_observer", None)
+        return observer.snapshot() if observer is not None else {
+            "successful_statements": 0,
+            "failed_statements": 0,
+            "affected_rows_by_table": {},
+            "last_write_at": None,
+            "last_error_at": None,
+        }
 
     def close(self) -> None:
         """Dispose of the engine to release file locks."""

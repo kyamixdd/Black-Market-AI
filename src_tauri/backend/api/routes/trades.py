@@ -79,7 +79,7 @@ def _validated_manual_signal(request: ManualOrderRequest, bridge):
 
 
 @router.get("", response_model=TradeListResponse)
-async def get_trades(limit: int = Query(100, le=1000)):
+async def get_trades(limit: int = Query(100, ge=1, le=1000)):
     bridge = get_bridge()
     trades = bridge.get_recent_trades(limit)
     stats = bridge.get_trade_statistics()

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from sqlalchemy import select
 
-from config import WALK_FORWARD_MIN_SAMPLES
+from config import SUPPORTED_TIMEFRAMES, WALK_FORWARD_MIN_SAMPLES
 from database.connection import get_session_maker
 from database.models import CandleModel, PredictionModel
 from database.repositories import Repository
@@ -127,7 +127,7 @@ class DatasetBuilder:
     def _get_ohlc_data(self, symbol: str, market: str, timestamp_ms: int,
                        lookback_candles: int = 200) -> dict[str, dict[str, np.ndarray]] | None:
         """Get multi-timeframe OHLC data up to the given timestamp."""
-        timeframes = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]
+        timeframes = SUPPORTED_TIMEFRAMES
         ohlc_data = {}
 
         with self.session_maker() as session:

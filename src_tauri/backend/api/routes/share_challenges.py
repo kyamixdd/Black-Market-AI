@@ -16,13 +16,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
+from config import SUPPORTED_TIMEFRAMES
 
 from database.connection import get_session_maker
 from database.models import ShareableAnalysisModel
 
 router = APIRouter(prefix="/community", tags=["community"])
 SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}$")
-TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}
+TIMEFRAMES = set(SUPPORTED_TIMEFRAMES)
 
 
 def _json_safe(value: Any, name: str, max_bytes: int = 80_000) -> Any:

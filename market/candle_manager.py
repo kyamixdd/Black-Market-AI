@@ -17,6 +17,7 @@ TIMEFRAME_SECONDS = {
     "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800,
     "1h": 3600, "2h": 7200, "4h": 14400, "6h": 21600, "12h": 43200, "1d": 86400, "1w": 604800,
 }
+COLLECTION_FAILURE_LOG_INTERVAL_SECONDS = 60.0
 
 
 class CandleManager:
@@ -26,7 +27,38 @@ class CandleManager:
         self._candles: dict[tuple, list[dict]] = defaultdict(list)
         self._max_per_series = 500
         self._collection_status: dict[tuple[str, str, str], dict] = {}
+        self._collection_warning_state: dict[tuple[str, str, str], dict] = {}
         self._exchange_clock_offset_ms = 0
+
+    def _log_collection_failure(self, key: tuple[str, str, str], error: str, message: str) -> None:
+        now = time.monotonic()
+        error_code = error.partition(":")[0]
+        previous = self._collection_warning_state.get(key)
+        if (
+            previous
+            and previous["error"] == error_code
+            and now - previous["logged_at"] < COLLECTION_FAILURE_LOG_INTERVAL_SECONDS
+        ):
+            previous["suppressed"] += 1
+            return
+
+        suppressed = previous["suppressed"] if previous and previous["error"] == error_code else 0
+        suffix = f" ({suppressed} duplicate warnings suppressed)" if suppressed else ""
+        logger.warning("%s%s", message, suffix)
+        self._collection_warning_state[key] = {
+            "error": error_code,
+            "logged_at": now,
+            "suppressed": 0,
+        }
+
+    def _log_collection_recovery(self, key: tuple[str, str, str]) -> None:
+        previous = self._collection_warning_state.pop(key, None)
+        if previous:
+            logger.info(
+                "Historical candle refresh recovered for %s %s %s after %d suppressed warnings",
+                *key,
+                previous["suppressed"],
+            )
 
     def current_time_ms(self) -> int:
         return int(time.time() * 1000) + self._exchange_clock_offset_ms
@@ -224,10 +256,13 @@ class CandleManager:
                 "latest_candle_age_seconds": latest_age, "error": error,
             }
             if error:
-                logger.warning(
-                    "Historical candle refresh %s for %s %s %s: %s",
-                    state.lower(), market, symbol, timeframe, error,
+                self._log_collection_failure(
+                    key,
+                    error,
+                    f"Historical candle refresh {state.lower()} for {market} {symbol} {timeframe}: {error}",
                 )
+            else:
+                self._log_collection_recovery(key)
             return added
         except asyncio.CancelledError:
             raise
@@ -237,7 +272,11 @@ class CandleManager:
                 "returned_candles": 0, "changed_candles": 0,
                 "latest_candle_age_seconds": None, "error": type(exc).__name__,
             }
-            logger.warning("Historical collection failed for %s %s %s: %s", market, symbol, timeframe, exc)
+            self._log_collection_failure(
+                key,
+                type(exc).__name__,
+                f"Historical collection failed for {market} {symbol} {timeframe}: {type(exc).__name__}",
+            )
             return 0
 
     def get_collection_status(self, market: str, symbol: str, timeframe: str) -> dict | None:

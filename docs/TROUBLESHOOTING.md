@@ -12,6 +12,19 @@ Frontend availability does not indicate backend readiness or current market-data
 
 The health summary reports component readiness separately. A `DEGRADED` status can mean the backend and market feeds are running but no validated model is available; automated paper entries remain gated until model validation passes.
 
+The supervisor's WebSocket readiness check confirms that the local API event transport is running. It does not claim that public Binance exchange streams are configured or connected; check the separate market-data component state for exchange-feed readiness.
+
+## Reading the live Diagnostics screen
+
+- **Backend component health / subsystem metrics**: open `System Diagnostics` to see component states and current scanner batches, market eligibility, learning state, model availability, paper-only/autonomous-entry gates, WebSocket status, uptime, and database write counts.
+- **Frontend function and render trace**: successful/failed API calls include method, path, status, duration, and suggested checks. React commit spans flag slow renders. The view refreshes live while open; the browser keeps a bounded in-memory trace and uploads batches when connected.
+- **Backend process logs**: search for structured events such as `scanner_candidates_ranked`, `signal_analysis_completed`, `learning_training_completed`, `paper_trading_decision`, `database_write_batch_summary`, and `api_request`. Correlate frontend API failures by endpoint and timestamp, then use the logged recommendation. SQL write failures are immediate; successful writes are aggregated by operation/table.
+- **Log size / older entries**: the desktop supervisor rotates `backend.log` at 10 MiB and retains up to three numbered backups in the per-user app log directory. Review the current file and `backend.log.1` through `backend.log.3` for older entries. Keep these local logs private; do not attach them before checking for sensitive data.
+- **Persisted Activity**: shows domain events and decisions saved in SQLite. It is not the same as the full process log.
+- **No logs or gaps**: in browser-only mode, native backend process logs are unavailable. Frontend traces remain local until backend ingestion succeeds. A full frontend buffer is bounded and retains the most recent entries.
+
+Diagnostic telemetry deliberately excludes query strings, authorization data, request/response bodies, SQL parameter values, and individual market ticks. High-frequency successful database writes are summarized over 10-second windows; failures are not suppressed. The system reports workflow/function boundaries and meaningful operations, not every private helper invocation or DOM mutation.
+
 ## Desktop startup / backend unavailable
 
 1. Check the startup readiness state and application logs.
@@ -21,6 +34,8 @@ The health summary reports component readiness separately. A `DEGRADED` status c
 5. Record the application version and backend log if startup fails.
 
 The current Windows installer pipeline packages a backend executable. Older development builds may depend on a configured Python environment.
+
+If the desktop stays open but `/health` is unavailable and the log says `Watchdog detected stall`, the process is not healthy even if it remains visible. The watchdog currently records stalls but does not automatically restart the backend. Quit the application using its system-tray menu so the supervisor can attempt graceful shutdown; do not terminate the process while it may be writing to SQLite.
 
 ## API authentication
 

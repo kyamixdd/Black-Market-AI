@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from config import SUPPORTED_TIMEFRAMES
 from .assistant_intelligence import TOOL_NAMES, execute_tool
 
 
@@ -41,7 +42,7 @@ _BASE_INPUT_SCHEMA = {
     "properties": {
         "symbol": {"type": "string", "minLength": 2, "maxLength": 20},
         "market": {"type": "string", "enum": ["SPOT", "FUTURES"]},
-        "timeframe": {"type": "string", "enum": ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"]},
+        "timeframe": {"type": "string", "enum": list(SUPPORTED_TIMEFRAMES)},
     },
     "required": ["symbol", "market", "timeframe"],
     "additionalProperties": False,
@@ -153,9 +154,7 @@ class AssistantToolRegistry:
             raise ToolRegistryError("invalid_symbol", "Symbol must contain 2 to 20 characters.")
         if not isinstance(market, str) or market not in {"SPOT", "FUTURES"}:
             raise ToolRegistryError("invalid_market", "Market must be SPOT or FUTURES.")
-        if not isinstance(timeframe, str) or timeframe not in {
-            "1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"
-        }:
+        if not isinstance(timeframe, str) or timeframe not in SUPPORTED_TIMEFRAMES:
             raise ToolRegistryError("invalid_timeframe", "Unsupported timeframe.")
         return {"symbol": symbol.strip().upper(), "market": market, "timeframe": timeframe}
 

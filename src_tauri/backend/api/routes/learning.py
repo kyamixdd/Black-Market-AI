@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import re
 import uuid
+from typing import Any, Literal
 
 from fastapi import APIRouter, Query, HTTPException
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from config import TIMEFRAME_PATTERN
 
 from ...bridge.orchestrator_bridge import get_bridge
 from database.connection import get_session_maker
 from database.repositories import Repository
+from ..request_validation import validate_json_payload_size
 from .schemas import (
     LearningStatusResponse,
     PredictionListResponse,
@@ -20,6 +24,55 @@ from .schemas import (
 router = APIRouter(prefix="/learning", tags=["learning"])
 
 _STRATEGY_COMPARISON_CACHE: dict[tuple[str, str, str, int], tuple[float, dict]] = {}
+_LAB_STRATEGIES = Literal[
+    "momentum", "breakout", "trend_following", "mean_reversion", "reversal",
+]
+
+
+class StrategyLabRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_id: str | None = Field(default=None, max_length=64, pattern=r"^[a-fA-F0-9-]{8,64}$")
+    symbol: str = Field(default="BTCUSDT", min_length=3, max_length=20, pattern=r"^[A-Z0-9]+$")
+    market: str = Field(default="SPOT", pattern=r"^(SPOT|FUTURES)$")
+    timeframe: str = Field(default="1h", pattern=TIMEFRAME_PATTERN)
+    strategy: _LAB_STRATEGIES = "momentum"
+    start_date: str = Field(min_length=1, max_length=64)
+    end_date: str = Field(min_length=1, max_length=64)
+    initial_capital: float = Field(default=1000, gt=0, allow_inf_nan=False)
+    sizing_mode: Literal["risk_pct", "fixed_notional"] = "risk_pct"
+    risk_per_trade_pct: float = Field(default=1, gt=0, allow_inf_nan=False)
+    fixed_notional: float = Field(default=100, gt=0, allow_inf_nan=False)
+    max_position_pct: float = Field(default=50, gt=0, le=100, allow_inf_nan=False)
+    fee_rate: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    slippage_bps: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    spread_bps: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    funding_rate: float | None = Field(default=None, allow_inf_nan=False)
+    strategy_parameters: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def bounded_payload(cls, value: Any) -> Any:
+        return validate_json_payload_size(value, label="Strategy Lab request")
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def normalize_symbol(cls, value: Any) -> Any:
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("market", mode="before")
+    @classmethod
+    def normalize_market(cls, value: Any) -> Any:
+        return value.strip().upper() if isinstance(value, str) else value
+
+    @field_validator("strategy", mode="before")
+    @classmethod
+    def normalize_strategy(cls, value: Any) -> Any:
+        return value.strip().lower() if isinstance(value, str) else value
+
+
+class StrategyLabCompareRequest(StrategyLabRequest):
+    strategies: list[_LAB_STRATEGIES] | None = Field(default=None, min_length=1, max_length=5)
 
 
 @router.get("", response_model=LearningStatusResponse)
@@ -31,7 +84,7 @@ async def get_learning_status():
 
 
 @router.get("/predictions", response_model=PredictionListResponse)
-async def get_predictions(limit: int = Query(100, le=1000)):
+async def get_predictions(limit: int = Query(100, ge=1, le=1000)):
     """Get recent predictions with outcomes."""
     bridge = get_bridge()
     predictions = bridge.get_recent_predictions(limit)
@@ -120,7 +173,7 @@ def _finite_metric(value):
 async def get_strategy_comparison(
     symbol: str = Query("BTCUSDT", min_length=3, max_length=20, pattern=r"^[A-Z0-9]+$"),
     market: str = Query("SPOT", pattern="^(SPOT|FUTURES)$"),
-    timeframe: str = Query("1h", pattern="^(5m|15m|30m|1h|4h|1d)$"),
+    timeframe: str = Query("1h", pattern=TIMEFRAME_PATTERN),
     limit: int = Query(1000, ge=180, le=2000),
 ):
     """Compare five strategies on an identical historical out-of-sample period."""
@@ -209,35 +262,36 @@ def _save_lab_report(strategy_name: str, payload: dict, report: dict) -> str:
 
 
 @router.post("/strategy-lab")
-async def run_strategy_lab(payload: dict):
+async def run_strategy_lab(payload: StrategyLabRequest):
     """Run a deterministic historical simulation using completed candle data."""
     from datetime import datetime
     from learning.strategy_lab import LabConfig, STRATEGIES, run_strategy_lab
 
-    symbol = str(payload.get("symbol", "BTCUSDT")).upper()
-    market = str(payload.get("market", "SPOT")).upper()
-    timeframe = str(payload.get("timeframe", "1h"))
-    strategy = str(payload.get("strategy", "momentum")).lower()
+    payload_data = payload.model_dump(exclude_none=True)
+    symbol = payload.symbol
+    market = payload.market
+    timeframe = payload.timeframe
+    strategy = payload.strategy
     if not re.fullmatch(r"[A-Z0-9]{3,20}", symbol):
         raise HTTPException(status_code=422, detail="Invalid symbol")
     if strategy not in STRATEGIES:
         raise HTTPException(status_code=422, detail="Unsupported strategy")
     try:
-        start = datetime.fromisoformat(str(payload["start_date"]).replace("Z", "+00:00"))
-        end = datetime.fromisoformat(str(payload["end_date"]).replace("Z", "+00:00"))
+        start = datetime.fromisoformat(payload.start_date.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(payload.end_date.replace("Z", "+00:00"))
         if start.tzinfo is None or end.tzinfo is None or start >= end:
             raise ValueError("Date range must be timezone-aware and start before end")
         config = LabConfig(
             symbol=symbol, market=market, timeframe=timeframe,
             start_time=int(start.timestamp() * 1000), end_time=int(end.timestamp() * 1000),
-            initial_capital=payload.get("initial_capital", 1000),
-            sizing_mode=payload.get("sizing_mode", "risk_pct"),
-            risk_per_trade_pct=payload.get("risk_per_trade_pct", 1),
-            fixed_notional=payload.get("fixed_notional", 100),
-            max_position_pct=payload.get("max_position_pct", 50),
-            fee_rate=payload.get("fee_rate"), slippage_bps=payload.get("slippage_bps"),
-            spread_bps=payload.get("spread_bps"), funding_rate=payload.get("funding_rate"),
-            strategy_parameters=payload.get("strategy_parameters", {}),
+            initial_capital=payload.initial_capital,
+            sizing_mode=payload.sizing_mode,
+            risk_per_trade_pct=payload.risk_per_trade_pct,
+            fixed_notional=payload.fixed_notional,
+            max_position_pct=payload.max_position_pct,
+            fee_rate=payload.fee_rate, slippage_bps=payload.slippage_bps,
+            spread_bps=payload.spread_bps, funding_rate=payload.funding_rate,
+            strategy_parameters=payload.strategy_parameters,
         )
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid backtest configuration: {exc}") from exc
@@ -293,7 +347,7 @@ async def run_strategy_lab(payload: dict):
             trade_rows, observations, minimum_sample=5,
             initial_capital=float(config.initial_capital),
         )
-        report_id = _save_lab_report(strategy, payload, result)
+        report_id = _save_lab_report(strategy, payload_data, result)
         result["report_id"] = report_id
         return result
     except ValueError as exc:
@@ -301,20 +355,19 @@ async def run_strategy_lab(payload: dict):
 
 
 @router.post("/strategy-lab/compare")
-async def compare_strategy_lab(payload: dict):
+async def compare_strategy_lab(payload: StrategyLabCompareRequest):
     """Compare selected strategies on the same symbol, timeframe and candle window."""
     from learning.strategy_lab import STRATEGIES
-    names = payload.get("strategies", list(STRATEGIES))
-    if not isinstance(names, list) or not names or any(name not in STRATEGIES for name in names):
-        raise HTTPException(status_code=422, detail="Select one or more supported strategies")
+    payload_data = payload.model_dump(exclude_none=True)
+    names = payload.strategies or list(STRATEGIES)
     results = []
     for name in names:
-        config = dict(payload)
+        config = {key: value for key, value in payload_data.items() if key != "strategies"}
         config["strategy"] = name
-        results.append(await run_strategy_lab(config))
-    comparison = {"status": "ok", "conditions": {k: payload.get(k) for k in
+        results.append(await run_strategy_lab(StrategyLabRequest.model_validate(config)))
+    comparison = {"status": "ok", "conditions": {k: payload_data.get(k) for k in
             ("symbol", "market", "timeframe", "start_date", "end_date", "initial_capital")},
             "results": results}
-    report_id = _save_lab_report("strategy-comparison", payload, comparison)
+    report_id = _save_lab_report("strategy-comparison", payload_data, comparison)
     comparison["report_id"] = report_id
     return comparison

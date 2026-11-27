@@ -7,6 +7,7 @@ import json
 import math
 import re
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +19,7 @@ from market.candle_manager import CandleManager
 from market.analytics import breadth_summary, historical_volatility, volume_comparison, price_change, return_correlation
 
 logger = logging.getLogger(__name__)
+_CACHE_MAX_ENTRIES = 1000
 
 
 class OrchestratorBridge:
@@ -31,8 +33,15 @@ class OrchestratorBridge:
         self.simulator = orchestrator.simulator
         self.intelligence = orchestrator.intelligence
         self.risk_manager = orchestrator.simulator.risk_manager
-        self._candle_refresh_at: dict[tuple[str, str, str], float] = {}
-        self._analytics_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+        self._candle_refresh_at: OrderedDict[tuple[str, str, str], float] = OrderedDict()
+        self._analytics_cache: OrderedDict[tuple[str, str], tuple[float, dict]] = OrderedDict()
+
+    @staticmethod
+    def _remember_cache(cache: OrderedDict, key, value) -> None:
+        cache[key] = value
+        cache.move_to_end(key)
+        while len(cache) > _CACHE_MAX_ENTRIES:
+            cache.popitem(last=False)
 
 
     def get_market_data_status(self) -> dict:
@@ -188,8 +197,10 @@ class OrchestratorBridge:
         now = time.monotonic()
         series = self.candles.get_series(market, symbol, timeframe, limit=1000)
         last_refresh = self._candle_refresh_at.get(key, 0.0)
+        if key in self._candle_refresh_at:
+            self._candle_refresh_at.move_to_end(key)
         if not series or now - last_refresh >= 5:
-            self._candle_refresh_at[key] = now
+            self._remember_cache(self._candle_refresh_at, key, now)
             await self.candles.collect_historical(
                 self.orch.spot_client,
                 self.orch.futures_client,
@@ -589,7 +600,7 @@ class OrchestratorBridge:
         win_rate = len(wins) / len(trades) * 100 if trades else 0
         gross_profit = sum(t["pnl"] for t in wins)
         gross_loss = abs(sum(t["pnl"] for t in losses))
-        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        profit_factor: float | None = gross_profit / gross_loss if gross_loss > 0 else None
 
         # Max drawdown
         initial_equity = self.simulator.initial_spot_balance + self.simulator.initial_futures_balance
@@ -636,11 +647,13 @@ class OrchestratorBridge:
         """Get strategy weights by regime."""
         intel = self.orch.intelligence
         selector = intel.strategy_selector
+        current_regime = getattr(self.orch, "_current_regime", None)
+        regime_preferences = selector.regime_prefs.get(current_regime, {})
         weights = {}
         for strat, weight in selector.weights.items():
             weights[strat] = {
                 "base_weight": weight,
-                "regime_adjusted": weight * selector.regime_prefs.get("BULL_TREND", {}).get(strat, 1.0) if "BULL_TREND" in selector.regime_prefs else weight,
+                "regime_adjusted": weight * regime_preferences.get(strat, 1.0),
             }
         return weights
 
@@ -983,6 +996,7 @@ class OrchestratorBridge:
         cache_key, now = (market, symbol), time.monotonic()
         cached = self._analytics_cache.get(cache_key)
         if cached and now - cached[0] < 60:
+            self._analytics_cache.move_to_end(cache_key)
             result = dict(cached[1])
             age = max(0.0, now - cached[0])
             result["data_age_seconds"] = age
@@ -1032,7 +1046,7 @@ class OrchestratorBridge:
             "flow_sample_scope": "Last 500 aggregate trades; not full 24h",
             "flow_last_trade_time": datetime.fromtimestamp(latest_trade_ms / 1000, tz=timezone.utc) if latest_trade_ms else None,
         }
-        self._analytics_cache[cache_key] = (now, result)
+        self._remember_cache(self._analytics_cache, cache_key, (now, result))
         return dict(result)
 
     # ===== Long/Short =====

@@ -255,7 +255,7 @@ class TradeListResponse(BaseModel):
     total: int
     total_pnl: float
     win_rate: float
-    profit_factor: float
+    profit_factor: float | None
     max_drawdown_pct: float
 
 
@@ -263,7 +263,7 @@ class TradeStatisticsResponse(BaseModel):
     total: int
     total_pnl: float
     win_rate: float
-    profit_factor: float
+    profit_factor: float | None
     max_drawdown_pct: float
 
 

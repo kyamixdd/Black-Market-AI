@@ -1,5 +1,6 @@
 import { getApiToken } from './localAuth.js'
 import { backendEventStreamUrl, backendWebSocketUrl, isDesktopRuntime } from './backendClient.js'
+import { recordFrontendDiagnostic } from './frontendDiagnostics.ts'
 
 type EventCallback = (data: unknown) => void
 
@@ -60,12 +61,29 @@ export class WebSocketService {
 
   private setState(state: ConnectionState) {
     if (this.state !== state) {
+      const previous = this.state
       this.state = state
+      recordFrontendDiagnostic({
+        level: state === 'connected' ? 'INFO' : state === 'disconnected' ? 'WARNING' : 'INFO',
+        event: 'frontend_realtime_state_changed',
+        operation: 'realtime.connection_state',
+        status: state === 'connected' ? 'SUCCESS' : state === 'disconnected' ? 'WARNING' : 'SUCCESS',
+        detail: `${previous} -> ${state}; transport=${isDesktopRuntime() ? 'websocket' : 'sse'}`,
+        recommendation: state === 'disconnected' ? 'Check backend readiness and event-stream logs; automatic reconnect remains enabled.' : undefined,
+      })
       this.emit('stateChange', state)
     }
   }
 
   connect(): Promise<void> {
+    recordFrontendDiagnostic({
+      level: 'INFO',
+      event: 'frontend_realtime_connect_started',
+      operation: 'realtime.connect',
+      status: 'SUCCESS',
+      endpoint: isDesktopRuntime() ? this.url : backendEventStreamUrl(),
+      detail: `transport=${isDesktopRuntime() ? 'authenticated_websocket' : 'authenticated_sse'}`,
+    })
     if (!isDesktopRuntime()) {
       if (this.eventSource?.readyState === EventSource.OPEN || this.eventSource?.readyState === EventSource.CONNECTING) return Promise.resolve()
       this.manuallyDisconnected = false
@@ -78,6 +96,13 @@ export class WebSocketService {
           if (this.eventSource !== source) return
           this.reconnectAttempts = 0
           this.setState('connected')
+          recordFrontendDiagnostic({
+            level: 'INFO',
+            event: 'frontend_realtime_connected',
+            operation: 'realtime.connect_sse',
+            status: 'SUCCESS',
+            endpoint: backendEventStreamUrl(),
+          })
           this.emit('connected')
           if (!settled) { settled = true; resolve() }
         }
@@ -122,6 +147,14 @@ export class WebSocketService {
           if (this.eventSource !== source) return
           this.setState('reconnecting')
           this.emit('error', 'The authenticated website event stream disconnected.')
+          recordFrontendDiagnostic({
+            level: 'ERROR',
+            event: 'frontend_realtime_connection_failed',
+            operation: 'realtime.connect_sse',
+            status: 'FAILURE',
+            endpoint: backendEventStreamUrl(),
+            recommendation: 'Verify the hosted backend event-stream proxy and service health; the client will reconnect automatically.',
+          })
           if (!settled) { settled = true; reject(new Error('Website event stream unavailable')) }
           source.close()
           this.eventSource = null
@@ -138,6 +171,13 @@ export class WebSocketService {
     const token = getApiToken()
     if (!token) {
       this.setState('disconnected')
+      recordFrontendDiagnostic({
+        level: 'ERROR',
+        event: 'frontend_realtime_authentication_missing',
+        operation: 'realtime.authenticate',
+        status: 'FAILURE',
+        recommendation: 'Wait for the Tauri supervisor to provide the current per-launch API token, then retry.',
+      })
       if (!this.manuallyDisconnected) this.scheduleReconnect()
       return Promise.reject(new Error('The authenticated desktop API session is unavailable.'))
     }
@@ -168,6 +208,14 @@ export class WebSocketService {
 
         socket.onerror = (error) => {
           this.emit('error', error)
+          recordFrontendDiagnostic({
+            level: 'ERROR',
+            event: 'frontend_realtime_connection_failed',
+            operation: 'realtime.connect_websocket',
+            status: 'FAILURE',
+            endpoint: this.url,
+            recommendation: 'Check backend WebSocket readiness and local API authentication; reconnect is attempted automatically.',
+          })
           if (!settled) {
             settled = true
             reject(new Error('WebSocket connection failed'))
@@ -182,6 +230,13 @@ export class WebSocketService {
             if (message.type === 'authenticated') {
               this.setState('connected')
               this.reconnectAttempts = 0
+              recordFrontendDiagnostic({
+                level: 'INFO',
+                event: 'frontend_realtime_connected',
+                operation: 'realtime.authenticate',
+                status: 'SUCCESS',
+                endpoint: this.url,
+              })
               this.startPing()
               this.send({ type: 'subscribe', channels: [...this.subscriptions.keys()] })
               this.emit('connected')
@@ -194,10 +249,27 @@ export class WebSocketService {
             this.handleMessage(message)
           } catch (error) {
             this.emit('error', error)
+            recordFrontendDiagnostic({
+              level: 'ERROR',
+              event: 'frontend_realtime_connection_failed',
+              operation: 'realtime.connect_websocket',
+              status: 'FAILURE',
+              endpoint: this.url,
+              recommendation: 'Check the authenticated backend WebSocket endpoint and backend stream diagnostics.',
+            })
           }
         }
       } catch (error) {
         this.setState('disconnected')
+        recordFrontendDiagnostic({
+          level: 'ERROR',
+          event: 'frontend_realtime_connection_failed',
+          operation: 'realtime.create_websocket',
+          status: 'FAILURE',
+          endpoint: this.url,
+          detail: error instanceof Error ? error.message : 'Unable to create the WebSocket connection.',
+          recommendation: 'Verify the desktop runtime and backend WebSocket endpoint, then retry.',
+        })
         if (!this.manuallyDisconnected) this.scheduleReconnect()
         reject(error)
       }
@@ -225,6 +297,14 @@ export class WebSocketService {
       this.maxReconnectDelay,
     )
     this.reconnectAttempts += 1
+    recordFrontendDiagnostic({
+      level: 'WARNING',
+      event: 'frontend_realtime_reconnect_scheduled',
+      operation: 'realtime.schedule_reconnect',
+      status: 'WARNING',
+      duration_ms: delay,
+      detail: `attempt=${this.reconnectAttempts}; maximum_delay_ms=${this.maxReconnectDelay}`,
+    })
     this.setState('reconnecting')
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null

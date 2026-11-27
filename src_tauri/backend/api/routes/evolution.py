@@ -1,17 +1,34 @@
 """Controlled evolution API routes."""
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from core.controlled_evolution import approve_proposal, create_improvement_proposal, detect_weaknesses, list_proposals, list_versions, rollback_version
+from ..request_validation import validate_json_payload_size
 
 router = APIRouter(prefix="/evolution", tags=["controlled-evolution"])
 
 class ProposalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    patch: dict = Field(min_length=1)
-    candidate_report: dict
-    baseline_report: dict | None = None
+    patch: dict[str, object] = Field(min_length=1)
+    candidate_report: dict[str, object]
+    baseline_report: dict[str, object] | None = None
     rationale: str = Field(min_length=10, max_length=1000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def bounded_payload(cls, value):
+        return validate_json_payload_size(value, label="Evolution proposal")
+
+
+class WeaknessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    report: dict[str, object]
+
+    @model_validator(mode="before")
+    @classmethod
+    def bounded_payload(cls, value):
+        return validate_json_payload_size(value, label="Evolution report")
+
 
 class ApprovalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -23,9 +40,9 @@ def _auth(request: Request):
         raise HTTPException(status_code=401, detail="Authentication required")
 
 @router.post("/weaknesses")
-async def weaknesses(request: Request, report: dict):
+async def weaknesses(request: Request, payload: WeaknessRequest):
     _auth(request)
-    try: return {"weaknesses": detect_weaknesses(report)}
+    try: return {"weaknesses": detect_weaknesses(payload.report)}
     except ValueError as exc: raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 @router.post("/proposals", status_code=201)

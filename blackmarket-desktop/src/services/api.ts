@@ -2,6 +2,7 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { backendBaseUrl, isDesktopRuntime } from './backendClient.js';
 import { getApiAuthorization } from './localAuth';
+import { recordFrontendDiagnostic } from './frontendDiagnostics.ts'
 
 const API_BASE_URL = backendBaseUrl();
 
@@ -21,6 +22,7 @@ export type IntelligenceConfigUpdate = Partial<IntelligenceConfig> & { mode: Int
 
 class ApiService {
   private client: AxiosInstance;
+  private readonly requestStartedAt = new WeakMap<object, number>()
 
   constructor() {
     this.client = axios.create({
@@ -32,13 +34,43 @@ class ApiService {
     this.client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
       const authorization = getApiAuthorization()
       if (authorization) config.headers.set('Authorization', authorization.Authorization)
+      this.requestStartedAt.set(config, Date.now())
       return config
     })
 
     this.client.interceptors.response.use(
-      (response) => response.data,
+      (response) => {
+        const path = response.config.url?.split(/[?#]/, 1)[0] ?? 'unknown'
+        recordFrontendDiagnostic({
+          level: 'INFO',
+          event: 'frontend_api_request_completed',
+          operation: `${(response.config.method ?? 'GET').toUpperCase()} ${path}`,
+          status: 'SUCCESS',
+          endpoint: path.startsWith('/') ? path : `/${path}`,
+          status_code: response.status,
+          duration_ms: Date.now() - (this.requestStartedAt.get(response.config) ?? Date.now()),
+        })
+        return response.data
+      },
       (error: AxiosError) => {
         const message = error.response?.data?.detail || error.message || 'Unknown error';
+        const path = error.config?.url?.split(/[?#]/, 1)[0] ?? 'unknown'
+        const status = error.response?.status
+        recordFrontendDiagnostic({
+          level: 'ERROR',
+          event: 'frontend_api_request_failed',
+          operation: `${(error.config?.method ?? 'GET').toUpperCase()} ${path}`,
+          status: 'FAILURE',
+          endpoint: path.startsWith('/') ? path : `/${path}`,
+          status_code: status,
+          duration_ms: Date.now() - (error.config ? this.requestStartedAt.get(error.config) ?? Date.now() : Date.now()),
+          detail: typeof message === 'string' ? message : 'API request failed.',
+          recommendation: status === 401
+            ? 'Re-establish the desktop API session and verify its per-launch token.'
+            : status && status >= 500
+              ? 'Inspect the matching backend request log and traceback.'
+              : 'Check backend availability, request validation, and connectivity.',
+        })
         return Promise.reject(new Error(message));
       }
     );

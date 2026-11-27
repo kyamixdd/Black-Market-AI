@@ -5,6 +5,7 @@ import asyncio
 import logging
 import json
 import math
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -28,6 +29,7 @@ from paper_trading.funding_calculator import FundingCalculator
 from paper_trading.liquidation_engine import LiquidationEngine
 from paper_trading.pnl_calculator import PnLCalculator
 from paper_trading.risk_manager import RiskManager
+from core.observability import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -317,8 +319,34 @@ class Simulator:
 
     async def execute_signal(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
         """Serialize balance validation and collateral reservation."""
-        async with self._account_lock:
-            return await self._execute_signal_locked(signal, quantity_override)
+        started = time.perf_counter()
+        try:
+            async with self._account_lock:
+                position_id = await self._execute_signal_locked(signal, quantity_override)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log_event(
+                logger, logging.ERROR, "paper_order_execution_failed",
+                component="paper_trading", operation="execute_signal",
+                market=signal.get("market"), symbol=signal.get("symbol"),
+                outcome="FAILURE", exception_type=type(exc).__name__,
+                duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                recommendation="Inspect the simulator traceback and database_write_failed events; no live exchange order was submitted.",
+            )
+            raise
+        log_event(
+            logger,
+            logging.INFO if position_id else logging.WARNING,
+            "paper_order_execution_completed" if position_id else "paper_order_execution_rejected",
+            component="paper_trading", operation="execute_signal",
+            market=signal.get("market"), symbol=signal.get("symbol"),
+            outcome="EXECUTED" if position_id else "REJECTED",
+            details=f"position_id={position_id or 'none'}; paper_only=true",
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            recommendation=None if position_id else "Review signal/risk rejection events and paper balance, market-data freshness, and position limits.",
+        )
+        return position_id
 
     async def _execute_signal_locked(self, signal: dict[str, Any], quantity_override: float | None = None) -> str | None:
         """Execute a signal while holding the account allocation lock.

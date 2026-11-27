@@ -16,8 +16,10 @@ from fastapi import APIRouter, HTTPException
 from ...bridge.orchestrator_bridge import get_bridge
 from ...assistant_nlu import ContextSnapshot
 from ...assistant_runtime import AssistantRuntimeError, execute_assistant_query
+from ...assistant_tool_registry import create_default_registry
 from ...assistant_planning import TASK_EXECUTION_MANAGER
 from core.intelligence_config import get_runtime_intelligence_config
+from config import TIMEFRAME_PATTERN
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -106,9 +108,9 @@ _ASYNC_TASK_LIMIT = 128
 
 class AssistantQuery(BaseModel):
     query: str = Field(min_length=2, max_length=500)
-    symbol: str = Field(default="BTCUSDT", min_length=2, max_length=20)
-    market: str = Field(default="SPOT", min_length=4, max_length=7)
-    timeframe: str = Field(default="1h", min_length=2, max_length=3)
+    symbol: str = Field(default="BTCUSDT", min_length=2, max_length=20, pattern=r"^[A-Z0-9]+$")
+    market: str = Field(default="SPOT", pattern=r"^(SPOT|FUTURES)$")
+    timeframe: str = Field(default="1h", pattern=TIMEFRAME_PATTERN)
 
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -11,7 +12,7 @@ import re
 import sys
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable
@@ -29,7 +30,7 @@ config_dir = Path(os.environ.get("BLACKMARKET_CONFIG_DIR", PROJECT_ROOT))
 config_path = config_dir / ".env"
 load_dotenv(config_path if config_path.is_file() else PROJECT_ROOT / ".env")
 
-from config import DATABASE_URL, LOG_LEVEL
+from config import DATABASE_URL, LOG_LEVEL, PAPER_TRADING_ENABLED
 from core.config_validator import validate_config_or_exit
 from core.event_models import EventType, make_event
 from core.observability import configure_structured_logging, log_event
@@ -54,6 +55,7 @@ from src_tauri.backend.api.routes import (
     share_challenges,
     evolution,
     autonomous,
+    diagnostics,
 )
 from src_tauri.backend.api.routes.schemas import (
     HealthResponse,
@@ -127,18 +129,43 @@ async def lifespan(app: FastAPI):
     log_event(logger, logging.INFO, "backend_starting", component="api")
 
     # Validate configuration
+    phase_started = time.perf_counter()
     validate_config_or_exit()
+    log_event(
+        logger, logging.INFO, "backend_configuration_validated",
+        component="api", operation="validate_configuration",
+        outcome="SUCCESS", duration_ms=round((time.perf_counter() - phase_started) * 1000, 2),
+    )
 
     # Initialize database
+    phase_started = time.perf_counter()
     db = Database(DATABASE_URL)
     db.init_db()
     integrity = db.integrity_check()
     if integrity.lower() != "ok":
+        log_event(
+            logger, logging.ERROR, "backend_database_integrity_failed",
+            component="database", operation="startup_integrity_check",
+            outcome="FAILURE", details=integrity,
+            recommendation="Stop startup and restore/recover the SQLite database from a verified backup before retrying.",
+        )
         raise RuntimeError(f"SQLite database integrity check failed: {integrity}")
+    log_event(
+        logger, logging.INFO, "backend_database_ready",
+        component="database", operation="initialize_and_check",
+        outcome="SUCCESS", duration_ms=round((time.perf_counter() - phase_started) * 1000, 2),
+    )
+    app.state.database = db
 
     # Create orchestrator
+    phase_started = time.perf_counter()
     orchestrator = Orchestrator(db)
     await orchestrator.initialize()
+    log_event(
+        logger, logging.INFO, "backend_orchestrator_ready",
+        component="orchestrator", operation="initialize",
+        outcome="SUCCESS", duration_ms=round((time.perf_counter() - phase_started) * 1000, 2),
+    )
 
     # Create bridge
     bridge = get_bridge(orchestrator)
@@ -179,6 +206,7 @@ async def lifespan(app: FastAPI):
             await ws_manager.shutdown()
         if db:
             db.close()
+        app.state.database = None
         log_event(logger, logging.INFO, "backend_stopped", component="api")
 
 
@@ -196,17 +224,36 @@ def _refresh_runtime_health() -> None:
         refresh()
 
 
-_request_buckets: dict[str, deque[float]] = defaultdict(deque)
+_request_buckets: OrderedDict[str, deque[float]] = OrderedDict()
 _RATE_LIMIT_WINDOW_SECONDS = max(1, int(os.environ.get("BLACKMARKET_RATE_LIMIT_WINDOW_SECONDS", "60")))
 _API_RATE_LIMIT = max(10, int(os.environ.get("BLACKMARKET_API_RATE_LIMIT", "120")))
 _LOGIN_RATE_LIMIT = max(3, int(os.environ.get("BLACKMARKET_LOGIN_RATE_LIMIT", "10")))
+_MAX_REQUEST_BUCKETS = 4096
+_BUCKET_SWEEP_INTERVAL_SECONDS = min(15, _RATE_LIMIT_WINDOW_SECONDS)
+_next_bucket_sweep = 0.0
 
 
 def _rate_limit_exceeded(key: str, limit: int, now: float | None = None) -> bool:
     """Fixed-window sliding counter; process-local protection for a single API worker."""
+    global _next_bucket_sweep
     current = time.monotonic() if now is None else now
-    bucket = _request_buckets[key]
     cutoff = current - _RATE_LIMIT_WINDOW_SECONDS
+    if current >= _next_bucket_sweep:
+        for bucket_key, entries in list(_request_buckets.items()):
+            while entries and entries[0] <= cutoff:
+                entries.popleft()
+            if not entries:
+                _request_buckets.pop(bucket_key, None)
+        _next_bucket_sweep = current + _BUCKET_SWEEP_INTERVAL_SECONDS
+
+    bucket = _request_buckets.get(key)
+    if bucket is None:
+        if len(_request_buckets) >= _MAX_REQUEST_BUCKETS:
+            return True
+        bucket = deque()
+        _request_buckets[key] = bucket
+    else:
+        _request_buckets.move_to_end(key)
     while bucket and bucket[0] <= cutoff:
         bucket.popleft()
     if len(bucket) >= limit:
@@ -233,21 +280,31 @@ async def request_observability(request: Request, call_next):
         status_code = response.status_code
         response.headers["X-Request-ID"] = request_id
         return response
-    except Exception:
+    except Exception as exc:
         log_event(
             logger, logging.ERROR, "api_request_failed",
             request_id=request_id, method=request.method,
             path=safe_path, status_code=500,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            exception_type=type(exc).__name__,
+            recommendation="Inspect the traceback and request ID; the response body intentionally omits internal details.",
         )
         raise
     finally:
         log_event(
-            logger, logging.INFO if status_code < 500 else logging.WARNING,
+            logger, logging.ERROR if status_code >= 500 else logging.WARNING if status_code >= 400 else logging.INFO,
             "api_request",
             request_id=request_id, method=request.method,
             path=safe_path, status_code=status_code,
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            outcome="SUCCESS" if status_code < 400 else "FAILURE",
+            recommendation=(
+                "Inspect the matching backend traceback by request ID."
+                if status_code >= 500
+                else "Check authentication, request validation, and the response detail."
+                if status_code >= 400
+                else None
+            ),
         )
 
 
@@ -284,6 +341,9 @@ async def require_local_api_auth(request: Request, call_next):
                 _api_token,
             ):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+            request.state.authenticated_principal = hashlib.sha256(
+                _api_token.encode("utf-8")
+            ).hexdigest()
     return await call_next(request)
 
 
@@ -305,6 +365,7 @@ for router in (
     share_challenges.router,
     evolution.router,
     autonomous.router,
+    diagnostics.router,
 ):
     app.include_router(router, prefix="/api")
 
@@ -356,7 +417,7 @@ async def event_stream():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     client_host = websocket.client.host if websocket.client else None
-    if not _is_loopback(client_host):
+    if not _is_loopback(client_host) and not _REMOTE_API_ENABLED:
         await websocket.close(code=4403, reason="Loopback clients only")
         return
     if _rate_limit_exceeded(f"ws:{client_host}", 30):
@@ -434,12 +495,7 @@ async def health_check():
         }
     _refresh_runtime_health()
     health = orchestrator.health_monitor.get_status()
-    exchange_ws = getattr(orchestrator, "ws_manager", None)
-    websocket_connected = bool(
-        exchange_ws
-        and callable(getattr(exchange_ws, "status_snapshot", None))
-        and exchange_ws.status_snapshot().get("state") == "LIVE"
-    )
+    websocket_connected = bool(ws_manager and ws_manager.is_running)
     return {
         "status": health.get("status", "unknown"),
         "backend_ready": True,
@@ -447,7 +503,9 @@ async def health_check():
         "database_connected": db is not None,
         "market_data_active": orchestrator.scanner._running,
         "learning_active": orchestrator.intelligence.predictor.is_trained,
-        "paper_trading_active": True,
+        "paper_trading_active": bool(
+            PAPER_TRADING_ENABLED and getattr(orchestrator, "simulator", None) is not None
+        ),
         "uptime_seconds": health.get("metrics", {}).get("uptime_seconds", 0.0),
         "version": "1.0.0",
     }
@@ -460,6 +518,8 @@ async def shutdown_backend(authorization: str | None = Header(default=None)):
         raise HTTPException(status_code=404, detail="Not found")
 
     scheme, separator, supplied_token = (authorization or "").partition(" ")
+    if not supplied_token.isascii():
+        raise HTTPException(status_code=401, detail="Invalid shutdown authorization")
     if (
         scheme.lower() != "bearer"
         or not separator
