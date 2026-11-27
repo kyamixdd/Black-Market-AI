@@ -862,7 +862,7 @@ class Orchestrator:
     async def _on_market_snapshot(self, event) -> None:
         """Mark open positions and check pending limits from the scanner's latest cache."""
         market = event.market or event.payload.get("market", "SPOT")
-        self._recent_snapshots = self.cache.get_all_snapshots(market)[:50]
+        self._recent_snapshots = self.cache.get_market_tickers(market)[:50]
         positions = self.simulator._get_positions(market)
         symbols = {
             position.get("symbol") for position in positions.values()

@@ -129,7 +129,7 @@ class WebSocketManager:
         connection_id = uuid.uuid4().hex[:12]
         self._connections[connection_id] = websocket
         self._connection_channels[connection_id] = set()
-        outbox: asyncio.Queue[BaseModel] = asyncio.Queue(maxsize=128)
+        outbox: asyncio.Queue[BaseModel] = asyncio.Queue(maxsize=512)
         self._outboxes[connection_id] = outbox
         self._send_tasks[connection_id] = asyncio.create_task(
             self._send_loop(connection_id, websocket, outbox)
@@ -259,10 +259,39 @@ class WebSocketManager:
                             WebSocketEventMessage(channel=channel, event=event_data)
                         )
                     except asyncio.QueueFull:
-                        logger.warning(
-                            "Dropping WebSocket event for slow connection %s; outbound queue is full",
-                            connection_id,
-                        )
+                        # For high-frequency market snapshot events, evict the
+                        # oldest stale entry on the same channel so the frontend
+                        # always receives the freshest snapshot rather than
+                        # silently losing the update entirely.
+                        if channel == WebSocketChannel.MARKET_UPDATES:
+                            # Drain one stale MARKET_UPDATES message from the
+                            # internal deque (access is safe – we are on the
+                            # single asyncio event-loop thread).
+                            inner = outbox._queue  # type: ignore[attr-defined]
+                            for i, queued in enumerate(inner):
+                                if (
+                                    isinstance(queued, WebSocketEventMessage)
+                                    and queued.channel == WebSocketChannel.MARKET_UPDATES
+                                ):
+                                    del inner[i]
+                                    outbox._unfinished_tasks -= 1  # type: ignore[attr-defined]
+                                    try:
+                                        outbox.put_nowait(
+                                            WebSocketEventMessage(channel=channel, event=event_data)
+                                        )
+                                    except asyncio.QueueFull:
+                                        pass
+                                    break
+                            else:
+                                logger.warning(
+                                    "Dropping WebSocket event for slow connection %s; outbound queue is full",
+                                    connection_id,
+                                )
+                        else:
+                            logger.warning(
+                                "Dropping WebSocket event for slow connection %s; outbound queue is full",
+                                connection_id,
+                            )
 
     async def _send_loop(
         self,

@@ -290,11 +290,22 @@ impl BackendSupervisor {
 
         let mut command = Command::new(&launcher.executable);
         let shutdown_token = Uuid::new_v4().simple().to_string();
+        let working_dir = if launcher.entry_args.is_empty() {
+            launcher.executable.parent().unwrap_or(&project_root)
+        } else {
+            &project_root
+        };
         command
             .args(&launcher.prefix_args)
             .args(&launcher.entry_args)
-            .current_dir(&project_root)
-            .env("PYTHONPATH", &project_root)
+            .current_dir(working_dir);
+        if launcher.entry_args.is_empty() {
+            // Packaged PyInstaller binary: prevent stale .py files on disk from shadowing frozen modules.
+            command.env_remove("PYTHONPATH");
+        } else {
+            command.env("PYTHONPATH", &project_root);
+        }
+        command
             .env("PYTHONUNBUFFERED", "1")
             .env("BLACKMARKET_API_HOST", "127.0.0.1")
             .env("BLACKMARKET_API_PORT", "8765")
@@ -937,6 +948,19 @@ fn python_version(
 }
 
 fn find_project_root(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    #[cfg(windows)]
+    if !cfg!(debug_assertions) {
+        if let Some(resources) = resource_dir {
+            for candidate in [
+                resources.join("blackmarket_backend").join("backend").join("BlackMarketBackend.exe"),
+                resources.join("backend").join("BlackMarketBackend.exe"),
+            ] {
+                if candidate.is_file() {
+                    return candidate.parent().map(Path::to_path_buf);
+                }
+            }
+        }
+    }
     let current_dir = env::current_dir().ok();
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut candidates = Vec::new();
@@ -952,26 +976,9 @@ fn find_project_root(resource_dir: Option<&Path>) -> Option<PathBuf> {
             candidates.push(root.to_path_buf());
         }
     }
-    if let Some(root) = candidates
+    candidates
         .into_iter()
         .find(|path| path.join("config.py").is_file() && path.join("src_tauri/backend/main.py").is_file())
-    {
-        return Some(root);
-    }
-    #[cfg(windows)]
-    if !cfg!(debug_assertions) {
-        if let Some(resources) = resource_dir {
-            for candidate in [
-                resources.join("blackmarket_backend").join("backend").join("BlackMarketBackend.exe"),
-                resources.join("backend").join("BlackMarketBackend.exe"),
-            ] {
-                if candidate.is_file() {
-                    return candidate.parent().map(Path::to_path_buf);
-                }
-            }
-        }
-    }
-    None
 }
 
 fn read_log_tail(path: &Path) -> String {

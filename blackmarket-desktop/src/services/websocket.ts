@@ -193,7 +193,7 @@ export class WebSocketService {
           this.send({ type: 'authenticate', token })
         }
 
-        socket.onclose = () => {
+        socket.onclose = (event) => {
           if (this.ws !== socket) return
           this.ws = null
           this.stopPing()
@@ -201,9 +201,14 @@ export class WebSocketService {
           this.emit('disconnected')
           if (!settled) {
             settled = true
-            reject(new Error('WebSocket connection closed before opening'))
+            reject(new Error(`WebSocket connection closed before opening (${event?.code ?? 'unknown'})`))
           }
-          if (!this.manuallyDisconnected) this.scheduleReconnect()
+          if (!this.manuallyDisconnected) {
+            if (event?.code === 4429) {
+              this.reconnectAttempts = Math.max(this.reconnectAttempts, 4)
+            }
+            this.scheduleReconnect()
+          }
         }
 
         socket.onerror = (error) => {

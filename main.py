@@ -5,6 +5,7 @@ Paper trading only. No real money execution. No API keys required.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import signal
@@ -21,20 +22,29 @@ from core.config_validator import validate_config_or_exit
 from core.orchestrator import Orchestrator
 from database.connection import Database
 
-# Configure logging
-Path("logs").mkdir(parents=True, exist_ok=True)
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
+
+def _configure_logging(tui: bool) -> None:
+    """Configure root logging for headless or interactive TUI mode."""
+    Path("logs").mkdir(parents=True, exist_ok=True)
+    handlers: list[logging.Handler] = [
         logging.FileHandler(Path("logs") / "blackmarket.log", encoding="utf-8"),
-    ],
-)
+    ]
+    if not tui:
+        handlers.insert(0, logging.StreamHandler(sys.stdout))
+    logging.basicConfig(
+        level=getattr(logging, LOG_LEVEL),
+        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+
+
 logger = logging.getLogger(__name__)
 
 
-async def main() -> int:
+async def main(tui: bool = False) -> int:
+    _configure_logging(tui)
+
     # Validate configuration at startup
     validate_config_or_exit()
 
@@ -60,12 +70,29 @@ async def main() -> int:
             # Windows doesn't support add_signal_handler for SIGTERM
             pass
 
+    orch_task: asyncio.Task | None = None
+    log_handler: logging.Handler | None = None
     try:
-        await orch.run()
+        if tui:
+            from terminal.dashboard import DashboardApp, DashboardLogHandler
+
+            app = DashboardApp(orchestrator=orch)
+            log_handler = DashboardLogHandler(app)
+            log_handler.setLevel(getattr(logging, LOG_LEVEL))
+            logging.getLogger().addHandler(log_handler)
+            orch_task = asyncio.create_task(orch.run(), name="blackmarket-orchestrator")
+            await app.run_async()
+        else:
+            await orch.run()
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     finally:
+        if log_handler is not None:
+            logging.getLogger().removeHandler(log_handler)
         await orch.stop()
+        if orch_task and not orch_task.done():
+            orch_task.cancel()
+            await asyncio.gather(orch_task, return_exceptions=True)
         if not event_task.done():
             event_task.cancel()
             await asyncio.gather(event_task, return_exceptions=True)
@@ -75,5 +102,18 @@ async def main() -> int:
     return 0
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="BlackMarket AI - Local Paper Trading Research System")
+    parser.add_argument(
+        "--tui",
+        "--terminal",
+        action="store_true",
+        dest="tui",
+        help="Launch the interactive real-time terminal dashboard alongside the engine",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    args = parse_args()
+    sys.exit(asyncio.run(main(tui=args.tui)))

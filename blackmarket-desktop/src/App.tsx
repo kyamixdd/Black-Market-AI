@@ -469,7 +469,7 @@ function App() {
       let authenticationFailed = false
       let healthError = `The ${apiContext} API is not responding yet.`
       const controller = new AbortController()
-      const requestTimeout = window.setTimeout(() => controller.abort(), 5000)
+      const requestTimeout = window.setTimeout(() => controller.abort(), 10000)
       try {
         const response = await fetch(isTauri ? `${backendBaseUrl().replace(/\/api$/, '')}/health` : '/api/health', {
           signal: controller.signal,
@@ -485,7 +485,7 @@ function App() {
           if (typeof health === 'object' && health !== null && 'backend_ready' in health
             && health.backend_ready === true && 'database_connected' in health
             && health.database_connected === true) {
-            if (isTauri) {
+            if (isTauri && !getApiAuthorization()?.Authorization) {
               const token = await invoke<string>('backend_api_token')
               if (!token) throw new Error('The desktop supervisor returned an empty API token.')
               setApiToken(token)
@@ -502,7 +502,9 @@ function App() {
             else {
               authenticationFailed = authenticatedResponse.status === 401
               healthError = `The authenticated ${apiContext} API check returned HTTP ${authenticatedResponse.status}.`
-              setApiToken(null)
+              if (authenticationFailed) {
+                setApiToken(null)
+              }
             }
           } else {
             healthError = 'The backend is responding but has not reported database readiness.'
@@ -597,11 +599,18 @@ function App() {
       checking = false
     }
 
-    void checkStartup()
-    const timer = window.setInterval(() => void checkStartup(), 5000)
+    let timer: number | undefined
+    const scheduleNextCheck = () => {
+      if (!active) return
+      timer = window.setTimeout(async () => {
+        await checkStartup()
+        scheduleNextCheck()
+      }, apiReadyRef.current ? 15_000 : 5_000)
+    }
+    void checkStartup().then(() => scheduleNextCheck())
     return () => {
       active = false
-      window.clearInterval(timer)
+      if (timer !== undefined) window.clearTimeout(timer)
     }
   }, [apiContext, isLocalBrowserDev, isTauri, retryToken])
 
@@ -618,14 +627,14 @@ function App() {
 
     const scheduleMarketRefresh = () => {
       if (marketTimer) clearTimeout(marketTimer)
-      marketTimer = setTimeout(() => refreshMarketRef.current(), 350)
+      marketTimer = setTimeout(() => refreshMarketRef.current(), 1500)
     }
     const scheduleAnalyticsRefresh = () => {
       if (analyticsTimer) clearTimeout(analyticsTimer)
       analyticsTimer = setTimeout(() => {
         refreshAnalyticsRef.current()
         refreshScreenDataRef.current()
-      }, 500)
+      }, 2000)
     }
     const removeStateListener = socket.on('stateChange', (state) => {
       if (!active || typeof state !== 'string') return
@@ -642,8 +651,19 @@ function App() {
       }
     })
     const unsubscribe = WEBSOCKET_CHANNELS.map((channel) => socket.subscribe(channel, () => {
-      if (channel === 'price_updates' || channel === 'market_updates') scheduleMarketRefresh()
-      if (channel !== 'price_updates') scheduleAnalyticsRefresh()
+      if (channel === 'price_updates' || channel === 'market_updates') {
+        scheduleMarketRefresh()
+        return
+      }
+      if (
+        channel === 'signal_updates'
+        || channel === 'portfolio_updates'
+        || channel === 'position_updates'
+        || channel === 'risk_updates'
+        || channel === 'learning_updates'
+      ) {
+        scheduleAnalyticsRefresh()
+      }
     }))
     void socket.connect().catch((error: unknown) => {
       if (active) setSocketError(error instanceof Error ? error.message : String(error))
@@ -997,12 +1017,18 @@ function App() {
       }
 
       if (activeScreen === 'Market Analysis') {
-        const results = await Promise.all(TIMEFRAMES.map(async (interval) => {
-          const response = await requestJson<unknown>(
-            `/markets/${encodeURIComponent(symbol)}/candles?market=${marketType}&timeframe=${interval}&limit=500`,
-          )
-          return [interval, parseMarketCandles(response)] as const
-        }))
+        const results: (readonly [string, MarketCandle[]])[] = []
+        for (let index = 0; index < TIMEFRAMES.length; index += 4) {
+          if (!active) return
+          const batch = TIMEFRAMES.slice(index, index + 4)
+          const batchResults = await Promise.all(batch.map(async (interval) => {
+            const response = await requestJson<unknown>(
+              `/markets/${encodeURIComponent(symbol)}/candles?market=${marketType}&timeframe=${interval}&limit=500`,
+            )
+            return [interval, parseMarketCandles(response)] as const
+          }))
+          results.push(...batchResults)
+        }
         if (!active) return
         setData((current) => ({
           ...current,

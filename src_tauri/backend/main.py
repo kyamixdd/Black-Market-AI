@@ -62,7 +62,7 @@ from src_tauri.backend.api.routes.schemas import (
     SystemHealthResponse,
 )
 from src_tauri.backend.api.websocket.manager import WebSocketManager
-from src_tauri.backend.bridge.orchestrator_bridge import get_bridge
+from src_tauri.backend.bridge.orchestrator_bridge import OrchestratorBridge, get_bridge
 from src_tauri.backend.realtime_intelligence import RealtimeIntelligence
 
 logger = logging.getLogger(__name__)
@@ -226,7 +226,7 @@ def _refresh_runtime_health() -> None:
 
 _request_buckets: OrderedDict[str, deque[float]] = OrderedDict()
 _RATE_LIMIT_WINDOW_SECONDS = max(1, int(os.environ.get("BLACKMARKET_RATE_LIMIT_WINDOW_SECONDS", "60")))
-_API_RATE_LIMIT = max(10, int(os.environ.get("BLACKMARKET_API_RATE_LIMIT", "120")))
+_API_RATE_LIMIT = max(10, int(os.environ.get("BLACKMARKET_API_RATE_LIMIT", "1200")))
 _LOGIN_RATE_LIMIT = max(3, int(os.environ.get("BLACKMARKET_LOGIN_RATE_LIMIT", "10")))
 _MAX_REQUEST_BUCKETS = 4096
 _BUCKET_SWEEP_INTERVAL_SECONDS = min(15, _RATE_LIMIT_WINDOW_SECONDS)
@@ -420,7 +420,7 @@ async def websocket_endpoint(websocket: WebSocket):
     if not _is_loopback(client_host) and not _REMOTE_API_ENABLED:
         await websocket.close(code=4403, reason="Loopback clients only")
         return
-    if _rate_limit_exceeded(f"ws:{client_host}", 30):
+    if _rate_limit_exceeded(f"ws:{client_host}", 120):
         await websocket.close(code=4429, reason="WebSocket connection rate limit exceeded")
         return
     if not _api_token:
